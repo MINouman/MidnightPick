@@ -69,119 +69,17 @@ const Star = ({ size = 14, filled = true }) => (
   </svg>
 );
 
-// --- "why" badge icons (flame, leaf, mountain — keep custom, brand-style) ---
-const IconFlame = () => (
-  <svg width="36" height="36" viewBox="0 0 32 32" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M16 3 C 19 8 24 11 23 18 C 23 23 20 28 16 28 C 12 28 9 23 9 18 C 8 11 13 8 16 3 Z" fill="currentColor" opacity="0.14" />
-    <path d="M16 12 C 18 14 19 15 19 18 C 19 21 18 24 16 24 C 14 24 13 21 13 19 C 13 16 15 14 16 12 Z" fill="currentColor" opacity="0.45" />
-  </svg>
-);
-const IconLeaf = () => (
-  <svg width="36" height="36" viewBox="0 0 32 32" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M5 27 C 5 14 14 5 27 5 C 27 18 18 27 5 27 Z" fill="currentColor" opacity="0.14" />
-    <path d="M5 27 L 22 10" />
-    <path d="M16 12 L 13 18 M 19 16 L 16 21 M 13 19 L 9 23" />
-  </svg>
-);
-const IconMountain = () => (
-  <svg width="36" height="36" viewBox="0 0 32 32" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M3 26 L 12 12 L 18 20 L 22 14 L 29 26 Z" fill="currentColor" opacity="0.14" />
-    <path d="M3 26 L 12 12 L 18 20 L 22 14 L 29 26 Z" />
-    <circle cx="22" cy="8" r="2.5" fill="currentColor" opacity="0.55" />
-  </svg>
-);
+// --- "why" section icons (Font Awesome 6 Free) ---
+const IconCoffeeSack  = () => <i className="fa-solid fa-building-wheat" style={{ fontSize: 48 }} aria-hidden="true" />;
+const IconSparkles    = () => <i className="fa-solid fa-bolt"  style={{ fontSize: 48 }} aria-hidden="true" />;
+const IconQualityBadge = () => <i className="fa-solid fa-award" style={{ fontSize: 48 }} aria-hidden="true" />;
 
-// --- "how it works" process icons (custom flat-line, Flaticon-style) ---
-const StepPick = () => (
-  <svg width="56" height="56" viewBox="0 0 64 64" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    {/* branch */}
-    <path d="M8 14 C 22 18 32 28 38 44" />
-    <path d="M18 16 L 14 10 M 24 19 L 22 12 M 30 23 L 30 16 M 35 28 L 38 22" opacity="0.7" />
-    {/* leaves */}
-    <path d="M20 14 C 24 8 32 8 36 14 C 32 20 24 20 20 14 Z" fill="currentColor" opacity="0.15" />
-    {/* cherry */}
-    <circle cx="42" cy="38" r="7" fill="currentColor" opacity="0.2" />
-    <circle cx="42" cy="38" r="7" />
-    <path d="M42 31 C 44 28 47 27 49 28" />
-    {/* hand */}
-    <path d="M50 44 C 56 44 58 48 56 52 C 54 56 48 56 44 52" fill="currentColor" opacity="0.15" />
-    <path d="M50 44 C 56 44 58 48 56 52 C 54 56 48 56 44 52 L 41 47" />
-    <path d="M50 50 L 53 53 M 47 51 L 50 54" opacity="0.6" />
-  </svg>
-);
-
-const StepSundry = () => (
-  <svg width="56" height="56" viewBox="0 0 64 64" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    {/* sun */}
-    <circle cx="20" cy="20" r="6" fill="currentColor" opacity="0.25" />
-    <circle cx="20" cy="20" r="6" />
-    <path d="M20 8 V 4 M 20 32 V 36 M 8 20 H 4 M 32 20 H 36 M 11 11 L 8 8 M 29 11 L 32 8 M 11 29 L 8 32 M 29 29 L 32 32" opacity="0.7" />
-    {/* drying tray */}
-    <path d="M6 50 L 58 50 L 54 56 L 10 56 Z" fill="currentColor" opacity="0.12" />
-    <path d="M6 50 L 58 50 L 54 56 L 10 56 Z" />
-    {/* beans on tray */}
-    <ellipse cx="20" cy="46" rx="3" ry="2" fill="currentColor" />
-    <ellipse cx="30" cy="44" rx="3" ry="2" fill="currentColor" />
-    <ellipse cx="40" cy="46" rx="3" ry="2" fill="currentColor" />
-    <ellipse cx="50" cy="44" rx="3" ry="2" fill="currentColor" />
-    <ellipse cx="25" cy="48" rx="2.5" ry="1.8" fill="currentColor" />
-    <ellipse cx="36" cy="48" rx="2.5" ry="1.8" fill="currentColor" />
-  </svg>
-);
-
-const StepRoast = () => (
-  <svg width="56" height="56" viewBox="0 0 64 64" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    {/* drum roaster body */}
-    <rect x="10" y="22" width="38" height="22" rx="10" fill="currentColor" opacity="0.14" />
-    <rect x="10" y="22" width="38" height="22" rx="10" />
-    {/* viewport */}
-    <circle cx="22" cy="33" r="5" />
-    <path d="M22 30 L 25 36 M 20 31 L 24 35" opacity="0.6" />
-    {/* feet */}
-    <path d="M14 44 V 50 M 44 44 V 50 M 10 50 H 48" />
-    {/* hopper */}
-    <path d="M28 22 L 32 14 L 38 14 L 42 22" />
-    <path d="M30 14 L 40 14" />
-    {/* steam/heat */}
-    <path d="M52 14 C 54 18 50 22 52 26 M 56 18 C 58 22 54 26 56 30" opacity="0.6" />
-  </svg>
-);
-
-const StepGrind = () => (
-  <svg width="56" height="56" viewBox="0 0 64 64" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    {/* beans scattered */}
-    <ellipse cx="16" cy="24" rx="6" ry="9" transform="rotate(-25 16 24)" fill="currentColor" opacity="0.18" />
-    <ellipse cx="16" cy="24" rx="6" ry="9" transform="rotate(-25 16 24)" />
-    <path d="M13 18 C 16 22 18 26 19 30" />
-    <ellipse cx="32" cy="32" rx="6" ry="9" transform="rotate(15 32 32)" fill="currentColor" opacity="0.18" />
-    <ellipse cx="32" cy="32" rx="6" ry="9" transform="rotate(15 32 32)" />
-    <path d="M29 26 C 32 30 34 34 35 38" />
-    <ellipse cx="48" cy="22" rx="6" ry="9" transform="rotate(35 48 22)" fill="currentColor" opacity="0.18" />
-    <ellipse cx="48" cy="22" rx="6" ry="9" transform="rotate(35 48 22)" />
-    <path d="M45 16 C 48 20 50 24 51 28" />
-    {/* extra beans */}
-    <ellipse cx="46" cy="46" rx="4" ry="6" transform="rotate(-15 46 46)" fill="currentColor" opacity="0.18" />
-    <ellipse cx="46" cy="46" rx="4" ry="6" transform="rotate(-15 46 46)" />
-    <ellipse cx="22" cy="48" rx="4" ry="6" transform="rotate(20 22 48)" fill="currentColor" opacity="0.18" />
-    <ellipse cx="22" cy="48" rx="4" ry="6" transform="rotate(20 22 48)" />
-  </svg>
-);
-
-const StepJar = () => (
-  <svg width="56" height="56" viewBox="0 0 64 64" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    {/* lid */}
-    <rect x="20" y="6" width="24" height="8" rx="2" fill="currentColor" opacity="0.3" />
-    <rect x="20" y="6" width="24" height="8" rx="2" />
-    {/* neck */}
-    <path d="M24 14 L 24 18 L 18 22 L 18 52 C 18 56 22 58 26 58 L 38 58 C 42 58 46 56 46 52 L 46 22 L 40 18 L 40 14" fill="currentColor" opacity="0.12" />
-    <path d="M24 14 L 24 18 L 18 22 L 18 52 C 18 56 22 58 26 58 L 38 58 C 42 58 46 56 46 52 L 46 22 L 40 18 L 40 14" />
-    {/* coffee level */}
-    <path d="M18 36 C 26 32 38 40 46 36 L 46 52 C 46 56 42 58 38 58 L 26 58 C 22 58 18 56 18 52 Z" fill="currentColor" opacity="0.3" />
-    {/* label */}
-    <rect x="22" y="38" width="20" height="14" rx="1.5" fill="none" />
-    <path d="M26 44 H 38 M 26 47 H 36" opacity="0.6" />
-  </svg>
-);
+// --- "how it works" process icons (Font Awesome 6 Free) ---
+const StepPick   = () => <i className="fa-solid fa-hand"               style={{ fontSize: 32 }} aria-hidden="true" />;
+const StepSundry = () => <i className="fa-solid fa-sun"                style={{ fontSize: 32 }} aria-hidden="true" />;
+const StepRoast  = () => <i className="fa-solid fa-fire-flame-curved"  style={{ fontSize: 32 }} aria-hidden="true" />;
+const StepGrind  = () => <i className="fa-solid fa-snowflake"          style={{ fontSize: 32 }} aria-hidden="true" />;
+const StepJar    = () => <i className="fa-solid fa-box-open"           style={{ fontSize: 32 }} aria-hidden="true" />;
 
 // social icons
 const SocialIcons = {
@@ -194,7 +92,7 @@ const SocialIcons = {
 Object.assign(window, {
   Logo,
   CartIcon, HeartIcon, UserIcon, ArrowRight, ArrowUpRight, Plus, Chev, Check, Star,
-  IconFlame, IconLeaf, IconMountain,
+  IconCoffeeSack, IconSparkles, IconQualityBadge,
   StepPick, StepSundry, StepRoast, StepGrind, StepJar,
   SocialIcons,
 });

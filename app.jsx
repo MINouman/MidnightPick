@@ -41,9 +41,14 @@ function Nav({ cartCount, onShop }) {
     setActive(name);
     const el = document.getElementById(id);
     if (el) {
-      const navH = document.querySelector(".nav")?.offsetHeight ?? 0;
-      const offset = name === "home" ? 0 : name === "about" ? window.innerHeight * 0.03 : navH + window.innerHeight * 0.005;
-      window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - offset, behavior: "smooth" });
+      if (id === "collection") {
+        const top = el.getBoundingClientRect().top + window.scrollY + (el.offsetHeight - window.innerHeight) / 2 - window.innerHeight * 0.02;
+        window.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+      } else {
+        const navH = document.querySelector(".nav")?.offsetHeight ?? 0;
+        const offset = name === "home" ? 0 : name === "about" ? window.innerHeight * 0.03 : navH + window.innerHeight * 0.005;
+        window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - offset, behavior: "smooth" });
+      }
     }
   };
 
@@ -87,7 +92,7 @@ function Hero({ headline, showMountain }) {
           )}
         </h1>
         <p className="sub">The kettle clicks. The room is quiet. One sachet. One cup. One clear hour ahead — premium freeze-dried coffee from Colombia, fairly priced for Bangladesh.</p>
-        <a className="hero-cta" href="#collection" onClick={(e) => {e.preventDefault();document.getElementById("collection").scrollIntoView({ behavior: "smooth" });}}>
+        <a className="hero-cta" href="#collection" onClick={(e) => { e.preventDefault(); const el = document.getElementById("collection"); if (el) window.scrollTo({ top: Math.max(0, el.getBoundingClientRect().top + window.scrollY + (el.offsetHeight - window.innerHeight) / 2 - window.innerHeight * 0.02), behavior: "smooth" }); }}>
           See Our Menu
           <ArrowUpRight size={16} />
         </a>
@@ -170,7 +175,7 @@ const PRODUCTS = [
 }];
 
 
-function ProductCard({ p, onAdd }) {
+function ProductRow({ p, onAdd }) {
   const [added, setAdded] = useState(false);
   const handle = () => {
     onAdd(p);
@@ -178,56 +183,112 @@ function ProductCard({ p, onAdd }) {
     setTimeout(() => setAdded(false), 1400);
   };
   return (
-    <article className="product-card">
-      {p.badge && <span className="badge">{p.badge}</span>}
-      <div className="pouch">
-        <img src="assets/product-real.png" alt={p.name + " — Midnight Pick freeze-dried instant coffee"} />
-      </div>
-      <div className="product-meta">
-        <div className="name">{p.name}</div>
-        <div className="price">
-          {p.old && <span className="old">{p.old}</span>}
-          {p.price}
+    <div className="prod-row">
+      <div className="prod-row-info">
+        <span className="prod-row-name">{p.name}</span>
+        <div className="prod-row-meta">
+          {p.old && <span className="prod-row-old">{p.old}</span>}
+          <span className="prod-row-price">{p.price}</span>
+          {p.badge && <span className="badge" style={{ fontSize: 9, padding: "2px 7px" }}>{p.badge}</span>}
         </div>
       </div>
-      <div className="product-rating">
-        <span className="stars">
-          <Star size={13} /><Star size={13} /><Star size={13} /><Star size={13} /><Star size={13} filled={false} />
-        </span>
-        <span>{p.rating.toFixed(1)}</span>
-        <span className="count">· {p.reviews} reviews</span>
-      </div>
-      <p className="product-desc">{p.desc}</p>
-      <div className="product-foot">
-        <span className="specs">{p.specs}</span>
-        <button className={"add-btn" + (added ? " added" : "")} onClick={handle}>
-          {added ? <><Check size={14} /> Added</> : <><Plus size={12} /> ADD</>}
-        </button>
-      </div>
-    </article>);
-
+      <button className={"add-btn" + (added ? " added" : "")} onClick={handle}>
+        {added ? <><Check size={14} /> Added</> : <><Plus size={12} /> ADD</>}
+      </button>
+    </div>);
 }
 
 function Collection({ onAdd }) {
   return (
     <section className="collection" id="collection" data-screen-label="03 Collection">
-      <div className="collection-inner">
-        <div className="section-head">
-          <div className="eyebrow">The Collection <span className="arrow">→</span></div>
-          <h2>Explore <em className="italic-accent">Your</em> <span className="italic-accent underline-em">Favorite</span> Flavor</h2>
+      <div className="coll-words" aria-hidden="true">
+        <span className="cw cw-1">MIDNIGHT</span>
+        <span className="cw cw-2">BLEND</span>
+        <span className="cw cw-3">LATTE</span>
+      </div>
+      <div className="coll-layout">
+        <div className="coll-left">
+          <div className="coll-head">
+            <div className="eyebrow">The Collection <span className="arrow">→</span></div>
+            <h2>Explore <em className="italic-accent">Your</em><br /><span className="italic-accent underline-em">Favorite</span> Flavor</h2>
+          </div>
+          <div className="coll-product-list">
+            {PRODUCTS.map((p) => <ProductRow key={p.id} p={p} onAdd={onAdd} />)}
+          </div>
         </div>
-        <div className="product-grid">
-          {PRODUCTS.map((p) => <ProductCard key={p.id} p={p} onAdd={onAdd} />)}
+        <div className="coll-imgs">
+          <div className="coll-img ci-0"><img src="assets/product-real.png" alt="Midnight Blend pouch" /></div>
+          <div className="coll-img ci-1"><img src="assets/product-real.png" alt="Midnight Black sachet" /></div>
+          <div className="coll-img ci-2"><img src="assets/product-real.png" alt="Midnight Latte sachet" /></div>
+        </div>
+        <div className="coll-right">
+          <p>Premium freeze-dried Colombian coffee — roughly ৳7 a cup. No machine needed. One sachet, sixty seconds, one clear hour ahead.</p>
+          <div className="coll-cta-row">
+            <a className="hero-cta" href="#collection" onClick={(e) => { e.preventDefault(); const el = document.getElementById("collection"); if (el) window.scrollTo({ top: Math.max(0, el.getBoundingClientRect().top + window.scrollY + (el.offsetHeight - window.innerHeight) / 2 - window.innerHeight * 0.07), behavior: "smooth" }); }}>
+              Shop Now <ArrowRight size={14} />
+            </a>
+            <span className="coll-tag">3 products · Free shipping over ৳499</span>
+          </div>
         </div>
       </div>
     </section>);
-
 }
 
 // ----------------- promo -----------------
+const PROMO_BEANS = [
+  { s:18, top:'14%', left:'4%',   rot:'20deg',   dur:'6.2s', delay:'0s'   },
+  { s:13, top:'58%', left:'8%',   rot:'-38deg',  dur:'7.6s', delay:'1.2s' },
+  { s:21, top:'30%', left:'14%',  rot:'55deg',   dur:'5.4s', delay:'0.5s' },
+  { s:12, top:'70%', left:'20%',  rot:'-18deg',  dur:'8.1s', delay:'2s'   },
+  { s:16, top:'22%', left:'27%',  rot:'42deg',   dur:'6.6s', delay:'1.8s' },
+  { s:14, top:'62%', left:'31%',  rot:'-60deg',  dur:'7s',   delay:'0.9s' },
+  { s:14, top:'26%', right:'4%',  rot:'-28deg',  dur:'7.1s', delay:'0.8s' },
+  { s:20, top:'62%', right:'9%',  rot:'47deg',   dur:'5.9s', delay:'0.3s' },
+  { s:13, top:'38%', right:'16%', rot:'-52deg',  dur:'6.9s', delay:'1.5s' },
+  { s:17, top:'74%', right:'23%', rot:'32deg',   dur:'7.3s', delay:'2.4s' },
+  { s:11, top:'18%', right:'28%', rot:'-12deg',  dur:'5.3s', delay:'1.1s' },
+  { s:15, top:'50%', right:'33%', rot:'65deg',   dur:'6.4s', delay:'0.6s' },
+];
+
+const PROMO_STEAMS = [
+  { w:10, h:22, top:'15%', left:'2%',  dur:'3.8s', delay:'0s'   },
+  { w:8,  h:18, top:'25%', left:'5%',  dur:'4.5s', delay:'1.4s' },
+  { w:10, h:22, top:'15%', right:'2%', dur:'4.1s', delay:'0.7s' },
+  { w:8,  h:18, top:'28%', right:'5%', dur:'3.6s', delay:'1.9s' },
+];
+
+const BeanSvg = () => (
+  <svg viewBox="0 0 20 30" fill="none" style={{width:'100%',height:'100%'}}>
+    <ellipse cx="10" cy="15" rx="8.5" ry="13" fill="currentColor" opacity="0.28"/>
+    <path d="M10 3.5 C7 9 7 21 10 26.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" opacity="0.75"/>
+  </svg>
+);
+
+const SteamSvg = () => (
+  <svg viewBox="0 0 12 24" fill="none" style={{width:'100%',height:'100%'}}>
+    <path d="M6 22 C3.5 18 8.5 15 6 11 C3.5 7 8 4.5 6 2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" opacity="0.6"/>
+  </svg>
+);
+
 function Promo({ onShop }) {
   return (
     <section className="promo" data-screen-label="04 Promo">
+      {PROMO_BEANS.map((b, i) => (
+        <span key={`b${i}`} className="promo-bean" style={{
+          width: b.s, height: b.s * 1.52,
+          top: b.top, left: b.left, right: b.right,
+          color: 'rgba(30,12,4,0.88)',
+          '--rot': b.rot, '--dur': b.dur, '--delay': b.delay,
+        }}><BeanSvg /></span>
+      ))}
+      {PROMO_STEAMS.map((st, i) => (
+        <span key={`st${i}`} className="promo-steam" style={{
+          width: st.w, height: st.h,
+          top: st.top, left: st.left, right: st.right,
+          color: 'rgba(255,255,255,0.5)',
+          '--dur': st.dur, '--delay': st.delay,
+        }}><SteamSvg /></span>
+      ))}
       <h3>Get 20% off your first order.</h3>
       <button className="shop-btn" onClick={onShop}>Shop Now <ArrowRight size={14} /></button>
     </section>);
@@ -235,24 +296,21 @@ function Promo({ onShop }) {
 }
 
 // ----------------- why -----------------
-const WHY_CARDS = [
+const WHY_ITEMS = [
 {
-  num: "01",
   title: "Midnight Harvest",
   desc: "Coffee cherries on the steepest Colombian slopes are picked before sunrise, when the cool air locks in sugars and aromatic oils. The name nods to that quiet, careful start.",
-  icon: <IconMountain />
+  icon: <IconCoffeeSack />
 },
 {
-  num: "02",
   title: "Fuel for Night Workers",
   desc: "Built for programmers, designers, students, and creators who do their best thinking after the city goes quiet. 70/30 Robusta-Arabica means real body and real caffeine.",
-  icon: <IconFlame />
+  icon: <IconSparkles />
 },
 {
-  num: "03",
   title: "Freeze-Dried, Not Spray-Dried",
   desc: "The same low-temperature vacuum process as Nescafé Gold and Davidoff — preserving aroma and antioxidants — at roughly a third of the per-gram price.",
-  icon: <IconLeaf />
+  icon: <IconQualityBadge />
 }];
 
 
@@ -265,10 +323,9 @@ function Why() {
           <h2>Premium coffee that doesn't ask you to choose between <em className="italic-accent">quality</em> and rent.</h2>
         </div>
         <div className="why-grid">
-          {WHY_CARDS.map((c) =>
-          <div className="why-card" key={c.num}>
-              <span className="num">{c.num}</span>
-              <div className="ico">{c.icon}</div>
+          {WHY_ITEMS.map((c) =>
+          <div className="why-item" key={c.title}>
+              <div className="why-ico">{c.icon}</div>
               <h4>{c.title}</h4>
               <p>{c.desc}</p>
             </div>
@@ -364,37 +421,70 @@ function Pricing() {
 }
 
 // ----------------- faq -----------------
+const FAQ_TOPICS = [
+  { id: "brand",    label: "Our Story" },
+  { id: "quality",  label: "Coffee Quality" },
+  { id: "sourcing", label: "Sourcing & Origin" },
+  { id: "products", label: "Products" },
+  { id: "delivery", label: "Delivery" },
+];
+
 const FAQS = [
-{ q: "What does \"Midnight Pick\" mean?", a: "A nod to coffee that gets you through the quiet hours — the ideas, the projects, the breakthroughs that happen long after the rest of the city has gone to sleep. The name also points to the Colombian harvest tradition of picking ripe cherries in the cool pre-dawn." },
-{ q: "Is Midnight Pick freeze-dried?", a: "Yes — every bag and sachet is freeze-dried, the same low-temperature vacuum process used by Nescafé Gold, Davidoff, and Moccona. Spray-drying (250 °C hot air) cooks off the aromatics; freeze-drying preserves them." },
-{ q: "What makes high-altitude coffee better?", a: "Beans grown above 1,500m mature more slowly, developing denser sugars and more complex aromatics. Cooler nights, mineral-rich soil, and dramatic sun cycles do the work for us — we just don't get in the way." },
-{ q: "Where do your coffee beans come from?", a: "Colombia — one of the world's most respected coffee origins, known for balanced acidity, medium body, and a clean chocolate-caramel character. We blend 70% Robusta and 30% Arabica for body and a clean caffeine lift." },
-{ q: "How do you select your coffee beans?", a: "Our buyers cup every lot blind, scoring on aroma, acidity, body, and finish. We only ship beans that hold their character through freeze-drying. No exceptions, no fillers." },
-{ q: "How does Midnight Pick compare to Nescafé Gold?", a: "Same freeze-drying process. A 100g jar of Nescafé Gold runs roughly ৳780–990 in Bangladesh (about ৳8–10/g). Our 100g Midnight Blend pouch is ৳349 (about ৳3.49/g). A fraction of the price, none of the compromise." },
-{ q: "What types of coffee do you offer?", a: "Three core products: Midnight Black (10g pure freeze-dried sachet, ৳25), Midnight Latte (15g 3-in-1 sachet, ৳20), and Midnight Blend (100g resealable pouch, ৳349). Try all three with the ৳99 Trial Pack." },
-{ q: "Where do you deliver?", a: "Across Bangladesh. Free delivery inside Dhaka over ৳499, cash on delivery and bKash/Nagad/Rocket accepted. Standard delivery: 1–3 days inside Dhaka, 3–5 days outside." }];
+{ topic: "brand",    q: "What does \"Midnight Pick\" mean?",                  a: "A nod to coffee that gets you through the quiet hours — the ideas, the projects, the breakthroughs that happen long after the rest of the city has gone to sleep. The name also points to the Colombian harvest tradition of picking ripe cherries in the cool pre-dawn." },
+{ topic: "quality",  q: "Is Midnight Pick freeze-dried?",                      a: "Yes — every bag and sachet is freeze-dried, the same low-temperature vacuum process used by Nescafé Gold, Davidoff, and Moccona. Spray-drying (250 °C hot air) cooks off the aromatics; freeze-drying preserves them." },
+{ topic: "quality",  q: "What makes high-altitude coffee better?",             a: "Beans grown above 1,500m mature more slowly, developing denser sugars and more complex aromatics. Cooler nights, mineral-rich soil, and dramatic sun cycles do the work for us — we just don't get in the way." },
+{ topic: "sourcing", q: "Where do your coffee beans come from?",               a: "Colombia — one of the world's most respected coffee origins, known for balanced acidity, medium body, and a clean chocolate-caramel character. We blend 70% Robusta and 30% Arabica for body and a clean caffeine lift." },
+{ topic: "sourcing", q: "How do you select your coffee beans?",                a: "Our buyers cup every lot blind, scoring on aroma, acidity, body, and finish. We only ship beans that hold their character through freeze-drying. No exceptions, no fillers." },
+{ topic: "products", q: "How does Midnight Pick compare to Nescafé Gold?",    a: "Same freeze-drying process. A 100g jar of Nescafé Gold runs roughly ৳780–990 in Bangladesh (about ৳8–10/g). Our 100g Midnight Blend pouch is ৳349 (about ৳3.49/g). A fraction of the price, none of the compromise." },
+{ topic: "products", q: "What types of coffee do you offer?",                  a: "Three core products: Midnight Black (10g pure freeze-dried sachet, ৳25), Midnight Latte (15g 3-in-1 sachet, ৳20), and Midnight Blend (100g resealable pouch, ৳349). Try all three with the ৳99 Trial Pack." },
+{ topic: "delivery", q: "Where do you deliver?",                               a: "Across Bangladesh. Free delivery inside Dhaka over ৳499, cash on delivery and bKash/Nagad/Rocket accepted. Standard delivery: 1–3 days inside Dhaka, 3–5 days outside." }];
 
 
 function FAQ() {
+  const [activeTopic, setActiveTopic] = useState("brand");
   const [open, setOpen] = useState(0);
+
+  const filtered = FAQS.filter((f) => f.topic === activeTopic);
+
+  const handleTopic = (id) => { setActiveTopic(id); setOpen(0); };
+
   return (
     <section className="faq" id="faq" data-screen-label="08 FAQ">
       <div className="faq-inner">
-        <h2>FAQ</h2>
-        <div>
-          {FAQS.map((f, i) =>
-          <div className={"faq-item" + (open === i ? " open" : "")} key={i}>
-              <button className="faq-q" onClick={() => setOpen(open === i ? -1 : i)}>
-                <span>{f.q}</span>
-                <Chev size={18} />
-              </button>
-              <div className="faq-a">{f.a}</div>
+        <div className="faq-header">
+          <h2>Frequently<br />Asked Questions</h2>
+          <p className="faq-subtitle">Welcome to our FAQ section, where you'll find answers to all your questions about Midnight Pick.</p>
+        </div>
+        <div className="faq-body">
+          <div className="faq-sidebar">
+            <div className="faq-panel-label">Topic</div>
+            <ul className="faq-topics">
+              {FAQ_TOPICS.map((t) =>
+                <li key={t.id}>
+                  <button className={"faq-topic-btn" + (activeTopic === t.id ? " active" : "")} onClick={() => handleTopic(t.id)}>
+                    {t.label}
+                  </button>
+                </li>
+              )}
+            </ul>
+          </div>
+          <div className="faq-content">
+            <div className="faq-panel-label">Questions and answers</div>
+            <div className="faq-list">
+              {filtered.map((f, i) =>
+                <div className={"faq-item" + (open === i ? " open" : "")} key={i}>
+                  <button className="faq-q" onClick={() => setOpen(open === i ? -1 : i)}>
+                    <span>{f.q}</span>
+                    <Chev size={18} />
+                  </button>
+                  <div className="faq-a">{f.a}</div>
+                </div>
+              )}
             </div>
-          )}
+          </div>
         </div>
       </div>
     </section>);
-
 }
 
 // ----------------- footer -----------------
@@ -492,7 +582,7 @@ function App() {
     setTimeout(() => setToasts((ts) => ts.filter((x) => x.id !== id)), 2200);
   };
 
-  const onShop = () => document.getElementById("collection").scrollIntoView({ behavior: "smooth" });
+  const onShop = () => { const el = document.getElementById("collection"); if (el) window.scrollTo({ top: Math.max(0, el.getBoundingClientRect().top + window.scrollY + (el.offsetHeight - window.innerHeight) / 2 - window.innerHeight * 0.02), behavior: "smooth" }); };
 
   useEffect(() => {
     const els = document.querySelectorAll(".reveal");
