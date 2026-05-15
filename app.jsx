@@ -35,7 +35,7 @@ function CartNavBtn({ count, onClick }) {
 }
 
 // ----------------- nav -----------------
-function Nav({ cartCount, onShop, onSubscribe }) {
+function Nav({ cartCount, onShop, onSubscribe, onSignIn }) {
   const [scrolled, setScrolled] = useState(false);
   const [active, setActive] = useState("home");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -89,12 +89,14 @@ function Nav({ cartCount, onShop, onSubscribe }) {
             <Logo variant="dark" height={174} />
           </a>
           <div className="nav-right">
-            <button className="nav-subscribe-btn" onClick={onSubscribe}>Subscribe & Save</button>
+            <button className="nav-patreon-btn" onClick={onSubscribe} aria-label="Support on Patreon">
+                <i className="fa-brands fa-patreon" aria-hidden="true" />
+              </button>
             <a href="shop.html" className="nav-shop-btn">
               <i className="fa-solid fa-bag-shopping" aria-hidden="true" />
               Shop
             </a>
-            <button className="nav-signin-btn">
+            <button className="nav-signin-btn" onClick={onSignIn}>
               <i className="fa-solid fa-right-to-bracket" aria-hidden="true" />
               Sign In
             </button>
@@ -118,7 +120,7 @@ function Nav({ cartCount, onShop, onSubscribe }) {
           <a href="#faq" className={active === "contact" ? "active" : ""} onClick={jump("faq", "contact")}>Contact</a>
         </nav>
         <div className="mob-menu-footer">
-          <button className="mob-menu-account-btn" aria-label="Account">
+          <button className="mob-menu-account-btn" onClick={onSignIn} aria-label="Account">
             <UserIcon size={18} /> Account
           </button>
         </div>
@@ -346,6 +348,324 @@ function Promo({ onShop }) {
 
 }
 
+// ----------------- the journal (blog) -----------------
+const PILLAR_META = {
+  "Process Education": "#FF9100",
+  "Practical Guides":  "#571F29",
+  "Health & Science":  "#4CAF84",
+  "Buying Guides":     "#C4893A",
+};
+
+const BLOG_POSTS = [
+  {
+    slug: "/blog/what-is-freeze-dried-coffee",
+    pillar: "Process Education",
+    title: "What Is Freeze-Dried Coffee, and Why Does the Process Matter?",
+    excerpt: "Most people stir instant coffee into hot water and never think about how it got there. There are two very different ways to turn brewed coffee into a powder — and they produce noticeably different results in the cup.",
+    readTime: "5 min",
+  },
+  {
+    slug: "/blog/freeze-dried-vs-spray-dried-coffee",
+    pillar: "Process Education",
+    title: "Freeze-Dried vs Spray-Dried Coffee — What Actually Changes in the Cup",
+    excerpt: "Two jars of instant coffee sit on the same shelf. Same category. Same label. The difference is in how they were made, and it changes what ends up in your cup.",
+    readTime: "5 min",
+  },
+  {
+    slug: "/blog/does-freeze-dried-coffee-go-bad",
+    pillar: "Practical Guides",
+    title: "Does Freeze-Dried Coffee Go Bad? Storage, Shelf Life, and What to Watch For",
+    excerpt: "Freeze-dried coffee has a reputation for lasting forever. That's mostly true — but \"safe to eat\" and \"tastes as good as the day you opened it\" are two different things.",
+    readTime: "4 min",
+  },
+  {
+    slug: "/blog/how-to-make-iced-coffee-instant",
+    pillar: "Practical Guides",
+    title: "How to Make Iced Coffee with Instant Coffee at Home",
+    excerpt: "Iced coffee made at home is better than most cafés charge ৳200+ for. The trick is a 30-second step that most people skip — and once you know it, you'll never make watery iced coffee again.",
+    readTime: "4 min",
+  },
+  {
+    slug: "/blog/is-instant-coffee-good-or-bad-for-you",
+    pillar: "Health & Science",
+    title: "Is Instant Coffee Good or Bad for You? An Honest Answer",
+    excerpt: "If you search \"is instant coffee bad for you,\" you'll find confident articles on both sides. Most of them aren't wrong — they're just incomplete. The real answer is more reassuring than either camp suggests.",
+    readTime: "6 min",
+  },
+  {
+    slug: "/blog/coffee-and-sleep",
+    pillar: "Health & Science",
+    title: "Coffee and Sleep — What You Actually Need to Know",
+    excerpt: "Caffeine's half-life is around 5–6 hours, which means half of what you drink at 4pm is still active at 10pm. The useful question is how to time your coffee so you get the focus without paying for it at night.",
+    readTime: "5 min",
+  },
+  {
+    slug: "/blog/how-to-choose-good-instant-coffee",
+    pillar: "Buying Guides",
+    title: "How to Choose a Good Instant Coffee — What to Look for on the Label",
+    excerpt: "Most coffee labels don't tell you much. \"Premium,\" \"rich,\" \"smooth\" — these words are on almost everything, including products that taste like hot pencil shavings. Here's what to actually look at.",
+    readTime: "4 min",
+  },
+  {
+    slug: "/blog/robusta-arabica-blend-instant-coffee",
+    pillar: "Buying Guides",
+    title: "What Is the Robusta-Arabica Blend, and Why Does It Matter in Instant Coffee?",
+    excerpt: "Every bag of blended coffee has a ratio on it — or it should. The ratio tells you more about what the cup will taste like than almost any other number on the packaging.",
+    readTime: "4 min",
+  },
+  {
+    slug: "/blog/how-to-brew-instant-coffee",
+    pillar: "Practical Guides",
+    title: "How to Brew the Best Cup of Instant Coffee at Home",
+    excerpt: "Instant coffee has a reputation for being impossible to get wrong. That's almost true. But a few small things make the real difference between a flat cup and one that tastes the way it should.",
+    readTime: "4 min",
+  },
+  {
+    slug: "/blog/freeze-dried-coffee-bangladesh",
+    pillar: "Buying Guides",
+    title: "Premium Freeze-Dried Instant Coffee in Bangladesh — What's Available and What to Look For",
+    excerpt: "Bangladesh's coffee market reached over 1,700 tonnes by 2022. Most of that growth is in instant coffee. Within instant, freeze-dried is the quality end — here's what's available and what to look for.",
+    readTime: "5 min",
+  },
+];
+
+const BLOG_CONTENT = {
+  "/blog/what-is-freeze-dried-coffee": {
+    sections: [
+      { body: "Most people pick up a jar of instant coffee, stir it into hot water, and never think about how it got there. But there are two very different ways to turn brewed coffee into a powder, and they produce noticeably different results in the cup." },
+      { heading: "What \"instant coffee\" actually means", body: "Coffee is brewed normally first — ground beans, hot water — and the result is a concentrate. That liquid is then dried into a powder or granules that dissolve when water is added again. It's brewed twice: once at origin, once in your mug." },
+      { heading: "Spray-drying — and why heat is a problem", body: "In spray-drying, the brewed coffee liquid is pumped through a nozzle and sprayed as a fine mist into a chamber of very hot air — around 200–250°C. The water evaporates almost instantly, leaving a fine dry powder. It's fast and inexpensive, but that heat burns off the aromatic compounds that give coffee its character." },
+      { heading: "Freeze-drying — how it actually works", body: "In freeze-drying, the brewed coffee is first frozen solid, then placed in a vacuum chamber. The pressure drops so low that the ice converts directly to vapour — bypassing the liquid stage entirely. This is called sublimation. No high heat is involved, which means the coffee's aromatic and antioxidant compounds largely survive the process." },
+      { heading: "What survives that doesn't survive spray-drying", body: "Because freeze-drying avoids the heat that spray-drying uses, more of the coffee's volatile aromatics remain intact. This is why freeze-dried granules have that recognisable, roasty smell when you open the jar — and spray-dried powder typically doesn't. Research also shows higher retention of antioxidant compounds in freeze-dried coffee." },
+      { heading: "What it means in your cup", body: "Freeze-dried coffee dissolves cleanly, tends to have more aroma, and tastes closer to brewed coffee than its spray-dried counterpart. The difference is most noticeable drinking it black. With milk or sugar, the gap narrows — but the starting point is still better." },
+    ],
+    cta: { text: "Try Midnight Pick freeze-dried sachets", href: "shop.html" },
+  },
+  "/blog/freeze-dried-vs-spray-dried-coffee": {
+    sections: [
+      { body: "Two jars of instant coffee sit on the same shelf. Same category. Same \"instant\" label. The difference is in how they were made, and it changes what ends up in your cup." },
+      { heading: "How each method works", body: "Spray-drying uses hot air — sometimes above 200°C — to evaporate moisture from the brewed liquid. Freeze-drying freezes the coffee and removes moisture through sublimation under vacuum. For a deeper look at the process, see our post on what freeze-dried coffee actually is." },
+      { heading: "Flavour: what heat does to aromatics", body: "The high temperature in spray-drying volatilises many of the aromatic compounds that give coffee its complexity. What you're left with is the basic flavour structure — bitter, slightly harsh — without the top notes that make a cup interesting. Freeze-dried coffee retains those top notes." },
+      { heading: "Texture and how each dissolves", body: "Freeze-dried coffee typically comes in larger granules that dissolve evenly and leave no residue. Spray-dried powder can clump and dissolves less consistently. Neither is difficult to use, but the dissolution difference is visible in the cup." },
+      { heading: "How to identify which type you're buying", body: "\"Granules\" on the label almost always means freeze-dried. \"Powder\" or no process mentioned typically means spray-dried. Freeze-drying is a selling point brands usually mention — if it's not on the label, assume spray-dried." },
+      { heading: "When spray-dried is fine", body: "If you're adding a lot of milk, sugar, or flavoured syrup, the gap between the two methods narrows considerably. Spray-dried also works fine in baking. But for a plain black cup — or anything where the coffee itself is the point — freeze-dried tastes noticeably better." },
+    ],
+    cta: { text: "Midnight Pick is freeze-dried — here's where to start", href: "shop.html" },
+  },
+  "/blog/does-freeze-dried-coffee-go-bad": {
+    sections: [
+      { body: "Freeze-dried coffee has a reputation for lasting forever. That's mostly true — but \"safe to eat\" and \"tastes as good as the day you opened it\" are two different things." },
+      { heading: "Sealed vs opened shelf life", body: "Sealed, properly stored freeze-dried coffee typically has a shelf life of 18–24 months from the manufacture date. Once opened, the coffee stays safe well beyond that — but for peak flavour and aroma, aim to use it within 3–6 months of opening." },
+      { heading: "What \"going bad\" actually looks like", body: "Signs to check: clumping (moisture has got in), a flat or papery smell where there should be aroma, or visible discolouration. None of these mean the coffee is unsafe — just that it's past its flavour peak. It won't make you ill; it'll just taste flat." },
+      { heading: "The three enemies: moisture, light, heat", body: "Moisture is the main enemy of freeze-dried coffee. Even small amounts of water vapour will cause granules to clump and begin degrading. Bright light and heat both accelerate this process. A warm, sunny windowsill is exactly where you shouldn't store it." },
+      { heading: "Why not to refrigerate", body: "The fridge introduces condensation — every time you take the jar in and out, the temperature change causes moisture to form on the granules. Freeze-dried coffee does not need refrigeration and is actively harmed by it." },
+      { heading: "Best storage at home", body: "Original resealable pouch if it has one, or an airtight glass jar in a cool, dry cupboard. Away from the kettle. Away from direct sunlight. That's genuinely all it takes to keep freeze-dried coffee at its best." },
+    ],
+    cta: { text: "Midnight Blend comes in a resealable zipper pouch", href: "shop.html" },
+  },
+  "/blog/how-to-make-iced-coffee-instant": {
+    sections: [
+      { body: "Iced coffee made at home is better than most cafés charge ৳200+ for. The trick is a 30-second step that most people skip — and once you know it, you'll never make watery iced coffee again." },
+      { heading: "The one rule: dissolve in hot water first", body: "Instant coffee — including freeze-dried — won't dissolve properly in cold water. The granules need heat. Dissolve your coffee in 50ml of hot water first, then pour it over ice and top up with cold water or milk. Skipping this makes under-dissolved, watery iced coffee." },
+      { heading: "Basic iced coffee — step by step", body: "1 sachet (or 2g from the pouch) dissolved in 50ml hot water. Pour into a glass packed with ice. Add 150ml cold water or cold milk. Adjust to taste. Ready in under 2 minutes. Simple, consistent, better than most ৳200 café versions." },
+      { heading: "Iced milk coffee — doodh style, cold", body: "Use cold milk instead of water when topping up. Add half a teaspoon of sugar if you like it sweet. The result is closer to a cold latte than a black iced coffee — rich, soft, and surprisingly satisfying on a warm Dhaka afternoon." },
+      { heading: "Quick dalgona coffee", body: "2g coffee, 2 teaspoons sugar, 2 tablespoons hot water in a small bowl. Whip vigorously — by hand or hand mixer — for 2–3 minutes until light and foamy. Spoon over cold milk on ice. Looks impressive, takes five minutes." },
+      { heading: "Getting the ratio right for iced drinks", body: "Cold dilutes. For iced coffee, start stronger than you would for a hot cup — use about 1.5× the coffee. The ice melt will bring it back to the right strength. Taste after the ice has settled and adjust from there." },
+    ],
+    cta: { text: "Midnight Black sachets dissolve cleanly — perfect for iced coffee", href: "shop.html" },
+  },
+  "/blog/is-instant-coffee-good-or-bad-for-you": {
+    sections: [
+      { body: "If you search \"is instant coffee bad for you,\" you'll find confident articles on both sides. Most of them aren't wrong — they're just incomplete. The real answer is more boring and more reassuring than either camp suggests." },
+      { heading: "What moderate consumption actually means", body: "Research on coffee health typically defines \"moderate\" as 3–4 cups per day for healthy adults. Within that range, studies consistently find no evidence of harm — and some associations with benefits including reduced risk of certain conditions and improved cognitive performance." },
+      { heading: "Antioxidants in coffee", body: "Coffee is one of the primary dietary sources of antioxidants for many people. Freeze-dried coffee retains more of these compounds than spray-dried, because the lower-temperature process is gentler on heat-sensitive molecules. This doesn't make it medicine — but it's not harmful either." },
+      { heading: "Caffeine: the real conversation", body: "For most people, caffeine timing matters more than quantity. A cup at 2pm hits differently than the same cup at 10pm. The issue isn't usually \"too much caffeine\" — it's caffeine at the wrong time disrupting sleep, which then creates a cycle of fatigue and more coffee." },
+      { heading: "Who should be careful", body: "People with gastritis, peptic ulcers, or acid reflux often find coffee aggravates symptoms — especially on an empty stomach. During pregnancy, most guidelines suggest limiting caffeine to under 200mg/day. If you're on certain medications, a doctor is the right person to ask about interactions." },
+      { heading: "What you add matters more than the coffee itself", body: "Plain black coffee has almost no calories and no additives. Add four teaspoons of sugar and a splash of flavoured syrup and the health calculation changes entirely. Midnight Black is pure coffee — no sugar, no creamers, no additives of any kind." },
+    ],
+    disclaimer: "This is general information, not medical advice. For anything health-specific, your doctor is the right person to ask.",
+    cta: { text: "Midnight Black — just coffee, nothing else", href: "shop.html" },
+  },
+  "/blog/coffee-and-sleep": {
+    sections: [
+      { body: "The question isn't whether coffee affects sleep. It does — caffeine's half-life is around 5–6 hours, which means half of what you drink at 4pm is still active at 10pm. The more useful question is how to time your coffee so you get the focus without paying for it at night." },
+      { heading: "How caffeine actually works", body: "Caffeine works by blocking adenosine receptors in the brain. Adenosine is the compound that builds up throughout the day and creates the feeling of tiredness. Caffeine doesn't remove tiredness — it blocks the signal. When the caffeine clears, the adenosine is still there, which is why the crash can feel sharp." },
+      { heading: "The half-life reality", body: "If you drink a 90mg coffee at 3pm, approximately 45mg is still active at 8–9pm, and 22mg at 1–2am. This doesn't mean everyone feels it — individual metabolism varies significantly — but it's the underlying reason why an afternoon coffee can disrupt sleep even if you don't notice it directly." },
+      { heading: "The cortisol timing window", body: "Cortisol (your primary alertness hormone) peaks naturally around 30–45 minutes after waking. Drinking coffee during that peak means caffeine competes with cortisol rather than supplementing it. Waiting 60–90 minutes after waking before your first coffee means it's working with your biology, not against it." },
+      { heading: "A simple daily framework", body: "First coffee: 90 minutes after waking. Last coffee: no later than 2pm for most people with a 10–11pm bedtime. Between those points: drink coffee when you need it, not out of habit. This framework alone resolves most coffee-related sleep complaints." },
+      { heading: "Signs your timing might be off", body: "You lie awake longer than usual. You wake in the night more than you used to. The coffee feels like it's stopped working and you need more of it. All of these can be caused by caffeine disruption, even when you don't consciously feel \"wired.\"" },
+    ],
+    cta: { text: "Midnight Pick is designed for focus, not for fighting exhaustion", href: "shop.html" },
+  },
+  "/blog/how-to-choose-good-instant-coffee": {
+    sections: [
+      { body: "Most coffee labels don't tell you much. \"Premium,\" \"rich,\" \"smooth\" — these words are on almost everything, including products that taste like hot pencil shavings. Here's what to actually look at." },
+      { heading: "Process first — the single biggest quality indicator", body: "\"Freeze-dried\" or \"granules\" on the label means the vacuum process that preserves aroma. \"Powder\" or no process mentioned typically means spray-dried. This one factor matters more than any other descriptor on the packaging." },
+      { heading: "Bean origin", body: "A stated origin — \"Colombian,\" \"Ethiopian,\" \"Vietnamese blend\" — tells you the brand knows where its beans came from and cares enough to say so. Vague terms like \"selected arabica\" without a country of origin tell you very little about what's actually inside." },
+      { heading: "Robusta vs Arabica ratio", body: "Pure Arabica instants often taste thin — the variety is delicate and freeze-drying removes some of its lighter aromatics. Pure Robusta can taste harsh. A blend that states the ratio (e.g. 65/35 Robusta-Arabica) is more transparent and typically more balanced in the cup." },
+      { heading: "Ingredients list", body: "A pure black instant coffee should have exactly one ingredient: coffee. If the list includes glucose syrup, vegetable fat, or anything else, it's not a pure product. That's fine if you want a 3-in-1 — but know what you're buying before you buy it." },
+      { heading: "A 5-point checklist", body: "Freeze-dried process ✓ · Stated origin ✓ · Transparent blend ratio ✓ · Coffee as the only ingredient ✓ · Resealable packaging ✓. These five things together are a reliable indicator of a product worth trying." },
+    ],
+    cta: { text: "See how Midnight Pick scores on each point", href: "shop.html" },
+  },
+  "/blog/robusta-arabica-blend-instant-coffee": {
+    sections: [
+      { body: "Every bag of blended coffee has a ratio on it — or it should. The ratio tells you more about what the cup will taste like than almost any other number." },
+      { heading: "What Robusta and Arabica actually are", body: "Robusta (Coffea canephora) and Arabica (Coffea arabica) are two different species of the coffee plant. Robusta grows at lower altitudes, is more disease-resistant, and produces beans with higher caffeine and more body. Arabica grows at higher altitudes, is more delicate, and produces beans with more aromatic complexity and a cleaner finish." },
+      { heading: "What Robusta brings to a blend", body: "Higher caffeine, stronger body, earthy and slightly bitter notes. More forgiving through processing — Robusta's flavour compounds are more heat-stable than Arabica's, which is why it performs reliably in instant coffee. It also produces a stronger, more persistent flavour that doesn't disappear in milk." },
+      { heading: "What Arabica brings", body: "Aromatic brightness, a cleaner finish, and more acidity. The top notes in a good cup — slightly floral, fruity, gently sweet — typically come from the Arabica component. Without it, a high-Robusta blend can taste flat and one-dimensional." },
+      { heading: "Why blending works well for instant", body: "Robusta's robustness holds up better through freeze-drying. Arabica adds the aromatic layer that makes the cup interesting. A good blend uses both: the body and caffeine presence from Robusta, the aroma and finish from Arabica. It's complementary, not a compromise." },
+      { heading: "The 65/35 ratio in the cup", body: "Midnight Pick's 65/35 Robusta-Arabica blend produces a strong, clean body with a proper caffeine lift, rounded by enough Arabica to add aromatic complexity. It works equally well as a straight black cup and as a base for milk-based iced drinks." },
+    ],
+    cta: { text: "Try the 65/35 blend — Midnight Black sachets", href: "shop.html" },
+  },
+  "/blog/how-to-brew-instant-coffee": {
+    sections: [
+      { body: "Instant coffee has a reputation for being impossible to get wrong. That's almost true. But there are a few small things that make a real difference between a flat cup and one that tastes the way it should." },
+      { heading: "Water temperature", body: "Boiling water (100°C) makes instant coffee taste slightly more bitter and hollow. 85–90°C is the sweet spot — hot enough to dissolve everything fully, cool enough to preserve aromatic compounds. No thermometer needed: boil the kettle, then wait 30 seconds." },
+      { heading: "The ratio", body: "Standard: 1.5–2g of coffee per 150–180ml of water. The Midnight Black sachet (10g) is pre-measured for one strong cup. From the 100g pouch, that's roughly half a level teaspoon. Start at the lower end of any range and adjust to your taste." },
+      { heading: "Stir properly", body: "Stir in a slow circle for 10–15 seconds until no undissolved granules remain. Instant coffee can clump slightly, especially if there's been any moisture near the container. A proper stir makes a visibly cleaner cup — no gritty residue at the bottom." },
+      { heading: "The 30-second wait", body: "After stirring, wait 30 seconds before drinking. The granules continue to open and release aromatic compounds during that short window. Small, but real — you'll notice the aroma becomes more pronounced if you give it that moment." },
+      { heading: "Common mistakes", body: "Cold mug: ceramic drops water temperature by 5–8°C in the first 30 seconds — warm it with a splash of hot water first. Too much water: overdilution is the most common mistake. Start with less than you think you need, then add more. You can always add; you can't take away." },
+    ],
+    cta: { text: "Midnight Black sachets — pre-measured, ready in 60 seconds", href: "shop.html" },
+  },
+  "/blog/freeze-dried-coffee-bangladesh": {
+    sections: [
+      { body: "Bangladesh's coffee market has been growing steadily — imports that were 264 tonnes in 2012 reached over 1,700 tonnes by 2022. Most of that growth is in instant coffee. And within instant, freeze-dried is the quality end." },
+      { heading: "The freeze-dried market in Bangladesh", body: "Until recently, freeze-dried coffee in Bangladesh meant imported jars from European brands. These are good products, but they carry a significant import premium. A 100g jar typically costs ৳780–990 in local retail — roughly ৳8–10 per gram, which puts it out of daily-use range for most people." },
+      { heading: "What the import segment offers and what it costs", body: "Imported freeze-dried options are available in Shwapno, Meena Bazar, and on Daraz. The quality is generally reliable. The main limitation is price: at that cost, it's a luxury purchase rather than a daily choice — which is a gap the local market is now beginning to fill." },
+      { heading: "What \"premium affordable\" actually means", body: "The same freeze-drying process applied to quality Colombian-origin beans doesn't have to cost ৳800 a jar. Midnight Pick uses the same process as the premium imported brands — at roughly a third of the per-gram price. Not by compromising on quality, but by not importing from Europe." },
+      { heading: "Where to buy freeze-dried coffee online in Bangladesh", body: "Midnight Pick ships nationwide directly from this site. Freeze-dried options are also available on Daraz and at Shwapno. For the best price-per-gram value, buying directly from a local brand skips the import markup entirely and means faster, simpler delivery." },
+      { heading: "Delivery and payment options", body: "Midnight Pick delivers in 1–3 business days inside Dhaka, 3–5 days outside. Cash on delivery, bKash, Nagad, and Rocket are all accepted. Free delivery on orders above ৳499. The ৳99 Trial Pack is the lowest-commitment way to start." },
+    ],
+    cta: { text: "Order directly — free delivery over ৳499, COD accepted", href: "shop.html" },
+  },
+};
+
+const JOURNAL_INITIAL = 6;
+
+function JournalCard({ post, onClick }) {
+  const color = PILLAR_META[post.pillar] || "#FF9100";
+  return (
+    <button className="journal-card" onClick={() => onClick(post)} aria-label={`Read: ${post.title}`}>
+      <div className="journal-card-accent" style={{ background: color }} />
+      <div className="journal-card-body">
+        <div className="journal-card-tag" style={{ color }}>
+          <span className="journal-tag-dot" style={{ background: color }} />
+          {post.pillar}
+        </div>
+        <h3 className="journal-card-title">{post.title}</h3>
+        <p className="journal-card-excerpt">{post.excerpt}</p>
+        <div className="journal-card-footer">
+          <span className="journal-card-meta">{post.readTime} read</span>
+          <span className="journal-card-link" style={{ color }}>
+            Read More <ArrowRight size={13} />
+          </span>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function BlogModal({ post, onClose }) {
+  const color = PILLAR_META[post.pillar] || "#FF9100";
+  const content = BLOG_CONTENT[post.slug];
+
+  useEffect(() => {
+    document.body.style.overflow = "hidden";
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = "";
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+
+  const handleOverlay = (e) => { if (e.target === e.currentTarget) onClose(); };
+
+  return (
+    <div className="blog-overlay" onClick={handleOverlay} role="dialog" aria-modal="true" aria-label={post.title}>
+      <div className="blog-modal">
+        <button className="blog-modal-close" onClick={onClose} aria-label="Close">
+          <CloseIcon size={18} />
+        </button>
+
+        <div className="blog-modal-header" style={{ borderTopColor: color }}>
+          <div className="blog-modal-tag" style={{ color }}>
+            <span className="journal-tag-dot" style={{ background: color }} />
+            {post.pillar}
+          </div>
+          <h2 className="blog-modal-title">{post.title}</h2>
+          <div className="blog-modal-meta">
+            <i className="fa-regular fa-clock" aria-hidden="true" />
+            {post.readTime} read
+          </div>
+        </div>
+
+        <div className="blog-modal-divider" style={{ background: color }} />
+
+        <div className="blog-modal-body">
+          {content && content.sections.map((s, i) => (
+            <React.Fragment key={i}>
+              {s.heading && <h4 className="blog-modal-section-heading">{s.heading}</h4>}
+              <p className="blog-modal-p">{s.body}</p>
+            </React.Fragment>
+          ))}
+
+          {content && content.disclaimer && (
+            <p className="blog-modal-disclaimer">
+              <i className="fa-solid fa-circle-info" aria-hidden="true" />
+              {content.disclaimer}
+            </p>
+          )}
+        </div>
+
+        {content && content.cta && (
+          <div className="blog-modal-cta-wrap">
+            <a className="blog-modal-cta-btn" href={content.cta.href} style={{ background: color, borderColor: color }}>
+              {content.cta.text} <ArrowRight size={14} />
+            </a>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TheJournal() {
+  const [showAll, setShowAll] = useState(false);
+  const [activePost, setActivePost] = useState(null);
+  const visible = showAll ? BLOG_POSTS : BLOG_POSTS.slice(0, JOURNAL_INITIAL);
+
+  return (
+    <section className="journal" id="journal" data-screen-label="05 The Journal">
+      <div className="journal-inner">
+        <div className="journal-header">
+          <div className="eyebrow" style={{ justifyContent: "center", marginBottom: 14, color: "var(--burgundy)" }}>
+            Stories &amp; Guides <span className="arrow">→</span>
+          </div>
+          <h2 className="journal-h2">The <em className="italic-accent">Journal</em></h2>
+          <p className="journal-subtitle">Straight answers about freeze-dried coffee — how it's made, whether it's healthy, how to store it, and how to make the perfect cup.</p>
+        </div>
+        <div className="journal-grid">
+          {visible.map((post) => (
+            <JournalCard key={post.slug} post={post} onClick={setActivePost} />
+          ))}
+        </div>
+        {!showAll && BLOG_POSTS.length > JOURNAL_INITIAL && (
+          <div className="journal-load-more-wrap">
+            <button className="journal-load-more-btn" onClick={() => setShowAll(true)}>
+              Load More <ArrowRight size={14} />
+            </button>
+          </div>
+        )}
+      </div>
+      {activePost && <BlogModal post={activePost} onClose={() => setActivePost(null)} />}
+    </section>
+  );
+}
+
 // ----------------- why -----------------
 const WHY_ITEMS = [
 {
@@ -502,13 +822,14 @@ const FAQS = [
 { topic: "products", q: "Can I make iced coffee with freeze-dried instant coffee?", a: "Yes. Dissolve one sachet (or 2g from the pouch) in 50ml of hot water first, then pour over ice and top up with cold water or cold milk. The hot water step ensures the granules dissolve fully before cooling." },
 { topic: "products", q: "Can I use freeze-dried coffee in baking?",            a: "Yes. It dissolves cleanly and works well in tiramisu, coffee cakes, brownies, and ice cream. Dissolve in a small amount of warm liquid before mixing into batters or creams." },
 
+{ topic: "delivery", q: "Where is my order?",                           trackLink: true },
 { topic: "delivery", q: "Where can I buy Midnight Pick in Bangladesh?",        a: "Directly through this website. Delivery across Bangladesh: 1–3 working days inside Dhaka, 3–5 days outside. Free shipping on orders over ৳499." },
 { topic: "delivery", q: "How can I pay?",                                       a: "Cash on delivery, bKash, Nagad, Rocket, and debit/credit cards." },
 { topic: "delivery", q: "Can I return a product?",                             a: "Yes, for damaged or incorrect orders within 7 days of delivery. Message us on WhatsApp and we'll sort it out directly." },
 { topic: "delivery", q: "Where do you deliver?",                               a: "Across Bangladesh. Free delivery inside Dhaka over ৳499, cash on delivery and bKash/Nagad/Rocket accepted. Standard delivery: 1–3 days inside Dhaka, 3–5 days outside." }];
 
 
-function FAQ() {
+function FAQ({ onTrack }) {
   const [activeTopic, setActiveTopic] = useState("brand");
   const [open, setOpen] = useState(0);
 
@@ -545,7 +866,13 @@ function FAQ() {
                     <span>{f.q}</span>
                     <Chev size={18} />
                   </button>
-                  <div className="faq-a">{f.a}</div>
+                  <div className="faq-a">
+                    {f.trackLink
+                      ? <span>Track your order in real time using your Order ID.{" "}
+                          <button className="faq-text-link" onClick={onTrack}>Open order tracker →</button>
+                        </span>
+                      : f.a}
+                  </div>
                 </div>
               )}
             </div>
@@ -556,7 +883,7 @@ function FAQ() {
 }
 
 // ----------------- footer -----------------
-function Footer() {
+function Footer({ onTrack }) {
   return (
     <footer className="footer" data-screen-label="09 Footer">
       <div className="footer-inner">
@@ -585,7 +912,14 @@ function Footer() {
             <li><a href="#story">Our story</a></li>
             <li><a href="#why">Sourcing</a></li>
             <li><a href="#">Wholesale</a></li>
+          </ul>
+        </div>
+        <div>
+          <h5>Support</h5>
+          <ul>
+            <li><button className="footer-text-btn" onClick={onTrack}>Track your order</button></li>
             <li><a href="#">Return policy</a></li>
+            <li><a href="https://wa.me/8801829531588">WhatsApp support</a></li>
           </ul>
         </div>
         <div>
@@ -641,6 +975,8 @@ function App() {
   const [cart, setCart] = useState([]);
   const [toasts, setToasts] = useState([]);
   const [modalOpen, setModalOpen] = useState(false);
+  const [trackOpen, setTrackOpen] = useState(false);
+  const [authOpen,  setAuthOpen]  = useState(false);
 
   useEffect(() => {applyPalette(t.palette);}, [t.palette]);
 
@@ -664,19 +1000,22 @@ function App() {
 
   return (
     <>
-      <Nav cartCount={cart.length} onShop={onShop} onSubscribe={() => setModalOpen(true)} />
+      <Nav cartCount={cart.length} onShop={onShop} onSubscribe={() => setModalOpen(true)} onSignIn={() => setAuthOpen(true)} />
       <Hero headline={t.headline} showMountain={t.showMountain} />
       <Story />
       <Collection onAdd={addToCart} />
       <Promo onShop={onShop} />
+      <TheJournal />
       <Why />
       <Howto />
       <Pricing onSubscribe={() => setModalOpen(true)} />
-      <FAQ />
-      <Footer />
+      <FAQ onTrack={() => setTrackOpen(true)} />
+      <Footer onTrack={() => setTrackOpen(true)} />
       <StickyCart cartCount={cart.length} onShop={onShop} />
       <ToastStack toasts={toasts} />
       <SubscribeModal open={modalOpen} onClose={() => setModalOpen(false)} />
+      <TrackOrderModal open={trackOpen} onClose={() => setTrackOpen(false)} />
+      <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} />
 
       <TweaksPanel title="Tweaks">
         <TweakSection label="Theme">

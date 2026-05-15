@@ -108,7 +108,9 @@ function ShopNav({ cartCount, onSubscribe }) {
             <Logo variant="dark" height={174} />
           </a>
           <div className="nav-right">
-            <button className="nav-subscribe-btn" onClick={onSubscribe}>Subscribe & Save</button>
+            <button className="nav-patreon-btn" onClick={onSubscribe} aria-label="Support on Patreon">
+              <i className="fa-brands fa-patreon" aria-hidden="true" />
+            </button>
             <a href="shop.html" className="nav-shop-btn nav-shop-btn--active">
               <i className="fa-solid fa-bag-shopping" aria-hidden="true" />
               Shop

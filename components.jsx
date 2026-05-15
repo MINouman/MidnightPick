@@ -165,7 +165,7 @@ function SubScreen1({ plan, setPlan, freq, setFreq, onContinue, onClose }) {
   return (
     <div className="sub-screen">
       <SubStepper step={1} />
-      <div className="sub-eyebrow">SUBSCRIBE & SAVE</div>
+      <div className="sub-eyebrow">SUBSCRIBE</div>
       <h2 className="sub-title">Your Monthly Midnight</h2>
       <p className="sub-subtitle">Choose a plan. Cancel any time.</p>
 
@@ -657,6 +657,408 @@ function SubscribeModal({ open, onClose }) {
   );
 }
 
+// ─────────────────────────────────────────────
+// TRACK ORDER MODAL
+// ─────────────────────────────────────────────
+
+const TRACK_STEPS = [
+  { id: "confirmed", label: "Order Confirmed", detail: "Your order has been received and confirmed." },
+  { id: "packed",    label: "Packed & Ready",  detail: "Your order has been packed and is awaiting courier pickup." },
+  { id: "shipped",   label: "Shipped",         detail: "Your order is on its way with the courier." },
+  { id: "delivered", label: "Delivered",       detail: "Your order has been delivered." },
+];
+const TRACK_STEP_IDX = { confirmed: 0, packed: 1, shipped: 2, delivered: 3 };
+
+// TODO: Replace with real delivery API call.
+// Should return: { orderId, currentStep, steps: { [id]: { timestamp, detail } | null } }
+// On not found: throw { code: "not_found" }
+async function fetchOrderStatus(orderId) {
+  await new Promise(r => setTimeout(r, 900));
+  if (orderId.toUpperCase() === "MP-1024") {
+    return {
+      orderId: "MP-1024",
+      currentStep: "shipped",
+      steps: {
+        confirmed: { timestamp: "15 May 2026, 10:30 AM", detail: "Order placed via midnightpick.com" },
+        packed:    { timestamp: "15 May 2026, 3:15 PM",  detail: "Packed and ready for courier pickup." },
+        shipped:   { timestamp: "16 May 2026, 9:00 AM",  detail: "Picked up by Pathao Courier. Est. delivery: 17 May." },
+        delivered: null,
+      },
+    };
+  }
+  throw { code: "not_found" };
+}
+
+const TRACK_STATUS_LBL = { confirmed: "Confirmed", packed: "Packed", shipped: "In Transit", delivered: "Delivered" };
+const TRACK_STATUS_MOD = { confirmed: "confirmed", packed: "packed", shipped: "transit",    delivered: "delivered" };
+
+function TrackTimeline({ currentStep, stepData }) {
+  const idx = TRACK_STEP_IDX[currentStep] ?? -1;
+  return (
+    <div className="track-timeline">
+      {TRACK_STEPS.map((step, i) => {
+        const s = i < idx ? "done" : i === idx ? "active" : "pending";
+        const data = stepData?.[step.id];
+        const isLast = i === TRACK_STEPS.length - 1;
+        return (
+          <div key={step.id} className="track-step">
+            <div className="track-step-aside">
+              <div className={`track-step-dot track-step-dot--${s}`} />
+              {!isLast && <div className={`track-step-line track-step-line--${s === "done" ? "done" : "pending"}`} />}
+            </div>
+            <div className={"track-step-body" + (!isLast ? " track-step-body--gap" : "")}>
+              <p className={"track-step-label" + (s === "pending" ? " track-step-label--dim" : "")}>{step.label}</p>
+              {data?.timestamp && <p className="track-step-time">{data.timestamp}</p>}
+              <p className={"track-step-detail" + (s === "pending" ? " track-step-detail--dim" : "")}>
+                {data?.detail || (s !== "pending" ? step.detail : "Pending")}
+              </p>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function TrackOrderModal({ open, onClose }) {
+  const [orderId,   setOrderId]   = React.useState("");
+  const [phase,     setPhase]     = React.useState("idle");
+  const [orderData, setOrderData] = React.useState(null);
+  const inputRef = React.useRef(null);
+
+  React.useEffect(() => {
+    if (open) { setOrderId(""); setPhase("idle"); setOrderData(null); }
+  }, [open]);
+
+  React.useEffect(() => {
+    document.body.style.overflow = open ? "hidden" : "";
+    return () => { document.body.style.overflow = ""; };
+  }, [open]);
+
+  if (!open) return null;
+
+  const handleTrack = async () => {
+    const id = orderId.trim();
+    if (!id) { inputRef.current?.focus(); return; }
+    setPhase("loading");
+    try {
+      const data = await fetchOrderStatus(id);
+      setOrderData(data);
+      setPhase("found");
+    } catch { setPhase("not_found"); }
+  };
+
+  const reset = () => { setPhase("idle"); setOrderData(null); };
+  const waUrl = `https://wa.me/8801829531588?text=${encodeURIComponent(`Hi! I need help tracking my order: ${orderId}`)}`;
+
+  return (
+    <div className="track-overlay" onClick={e => e.target === e.currentTarget && onClose()} role="dialog" aria-modal="true" aria-label="Track your order">
+      <div className="track-modal">
+        <button className="track-modal-close" onClick={onClose} aria-label="Close">
+          <CloseIcon size={16} />
+        </button>
+
+        <div className="track-card-head">
+          <h2>Track Your Order</h2>
+          <p>Enter your Order ID from your confirmation message</p>
+        </div>
+
+        {(phase === "idle" || phase === "not_found") && (
+          <div className="track-form">
+            <div className="track-input-wrap">
+              <i className="fa-solid fa-hashtag track-input-icon" aria-hidden="true" />
+              <input
+                ref={inputRef} autoFocus
+                className="track-input" type="text" placeholder="e.g. MP-1024"
+                value={orderId}
+                onChange={e => { setOrderId(e.target.value); if (phase === "not_found") setPhase("idle"); }}
+                onKeyDown={e => e.key === "Enter" && handleTrack()}
+                aria-label="Order ID" autoComplete="off"
+              />
+            </div>
+            <button className="track-btn" onClick={handleTrack}>
+              <i className="fa-solid fa-magnifying-glass" aria-hidden="true" /> Track Order
+            </button>
+          </div>
+        )}
+
+        {phase === "not_found" && (
+          <div className="track-not-found">
+            <div className="track-not-found-icon"><i className="fa-solid fa-box-open" /></div>
+            <h3>Order not found</h3>
+            <p>We couldn't find an order matching <strong>{orderId}</strong>. Check the ID in your confirmation message, or contact us directly.</p>
+            <a href={waUrl} className="track-wa-btn" target="_blank" rel="noopener noreferrer">
+              <i className="fa-brands fa-whatsapp" aria-hidden="true" /> Chat on WhatsApp
+            </a>
+          </div>
+        )}
+
+        {phase === "loading" && (
+          <div className="track-loading">
+            <div className="track-spinner" />
+            <p>Looking up your order…</p>
+          </div>
+        )}
+
+        {phase === "found" && orderData && (
+          <div className="track-result">
+            <div className="track-order-meta">
+              <span className="track-order-id">#{orderData.orderId}</span>
+              <span className={`track-status-badge track-status-badge--${TRACK_STATUS_MOD[orderData.currentStep]}`}>
+                {TRACK_STATUS_LBL[orderData.currentStep]}
+              </span>
+            </div>
+            <TrackTimeline currentStep={orderData.currentStep} stepData={orderData.steps} />
+            <button className="track-reset-btn" onClick={reset}>
+              <i className="fa-solid fa-arrow-left" aria-hidden="true" /> Track another order
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// AUTH MODAL (Login / Sign Up)
+// ─────────────────────────────────────────────
+
+const GoogleIcon = ({ size = 18 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+    <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+    <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/>
+    <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+  </svg>
+);
+
+const EyeIcon = ({ size = 16, open = true }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    {open ? (
+      <>
+        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+        <circle cx="12" cy="12" r="3"/>
+      </>
+    ) : (
+      <>
+        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
+        <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
+        <line x1="1" y1="1" x2="23" y2="23"/>
+      </>
+    )}
+  </svg>
+);
+
+function AuthModal({ open, onClose }) {
+  const [tab,       setTab]       = React.useState("login");
+  const [phase,     setPhase]     = React.useState("splash");
+  const [showPass,  setShowPass]  = React.useState(false);
+  const [showPass2, setShowPass2] = React.useState(false);
+  const [remember,  setRemember]  = React.useState(false);
+  const [submitting, setSubmitting] = React.useState(false);
+  const [form, setForm] = React.useState({ name: "", email: "", password: "", password2: "" });
+  const [errors, setErrors] = React.useState({});
+
+  React.useEffect(() => {
+    if (open) {
+      setTab("login"); setPhase("splash");
+      setForm({ name: "", email: "", password: "", password2: "" });
+      setErrors({}); setSubmitting(false);
+      setShowPass(false); setShowPass2(false); setRemember(false);
+    }
+  }, [open]);
+
+  React.useEffect(() => {
+    document.body.style.overflow = open ? "hidden" : "";
+    return () => { document.body.style.overflow = ""; };
+  }, [open]);
+
+  if (!open) return null;
+
+  const set = (field) => (e) => {
+    setForm((prev) => ({ ...prev, [field]: e.target.value }));
+    if (errors[field]) setErrors((prev) => ({ ...prev, [field]: undefined }));
+  };
+
+  const switchTab = (t) => {
+    setTab(t);
+    setErrors({});
+    setForm({ name: "", email: "", password: "", password2: "" });
+    setShowPass(false); setShowPass2(false);
+  };
+
+  const validate = () => {
+    const e = {};
+    if (tab === "signup" && !form.name.trim()) e.name = "Full name is required.";
+    if (!form.email.trim()) e.email = "Email address is required.";
+    else if (!/\S+@\S+\.\S+/.test(form.email)) e.email = "Enter a valid email address.";
+    if (!form.password) e.password = "Password is required.";
+    else if (form.password.length < 6) e.password = "Must be at least 6 characters.";
+    if (tab === "signup" && form.password !== form.password2) e.password2 = "Passwords don't match.";
+    return e;
+  };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    const errs = validate();
+    if (Object.keys(errs).length) { setErrors(errs); return; }
+    setSubmitting(true);
+    // TODO: wire up real auth
+    setTimeout(() => { setSubmitting(false); onClose(); }, 1200);
+  };
+
+  const formPane = (
+    <div className={`auth-form-pane${phase === "form" ? " auth-form-pane--visible" : ""}`}>
+      <button className="auth-close-btn" onClick={onClose} aria-label="Close">
+        <CloseIcon size={16} />
+      </button>
+      {phase === "form" && (
+        <button className="auth-back-btn" onClick={() => setPhase("splash")} aria-label="Back">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <polyline points="15 18 9 12 15 6"/>
+          </svg>
+        </button>
+      )}
+
+      <div className="auth-tabs">
+        <button className={`auth-tab-btn${tab === "login" ? " active" : ""}`} onClick={() => switchTab("login")}>Login</button>
+        <button className={`auth-tab-btn${tab === "signup" ? " active" : ""}`} onClick={() => switchTab("signup")}>Sign Up</button>
+      </div>
+
+      <button className="auth-google-btn" type="button" onClick={() => { /* TODO: Google OAuth */ }}>
+        <GoogleIcon size={18} />
+        <span>Continue with Google</span>
+      </button>
+
+      <div className="auth-divider"><span>or</span></div>
+
+      <form className="auth-form" onSubmit={handleSubmit} noValidate>
+        {tab === "signup" && (
+          <div className="auth-field">
+            <label className="auth-label">Full Name</label>
+            <div className="auth-input-wrap">
+              <i className="fa-solid fa-user auth-input-icon" aria-hidden="true" />
+              <input className={`auth-input${errors.name ? " error" : ""}`} type="text" placeholder="Your full name" value={form.name} onChange={set("name")} autoComplete="name" />
+            </div>
+            {errors.name && <span className="auth-field-err">{errors.name}</span>}
+          </div>
+        )}
+
+        <div className="auth-field">
+          <label className="auth-label">Email Address</label>
+          <div className="auth-input-wrap">
+            <i className="fa-solid fa-envelope auth-input-icon" aria-hidden="true" />
+            <input className={`auth-input${errors.email ? " error" : ""}`} type="email" placeholder="Enter your email address" value={form.email} onChange={set("email")} autoComplete="email" />
+          </div>
+          {errors.email && <span className="auth-field-err">{errors.email}</span>}
+        </div>
+
+        <div className="auth-field">
+          <label className="auth-label">Password</label>
+          <div className="auth-input-wrap">
+            <i className="fa-solid fa-lock auth-input-icon" aria-hidden="true" />
+            <input
+              className={`auth-input auth-input--pass${errors.password ? " error" : ""}`}
+              type={showPass ? "text" : "password"}
+              placeholder="Enter your password"
+              value={form.password}
+              onChange={set("password")}
+              autoComplete={tab === "login" ? "current-password" : "new-password"}
+            />
+            <button type="button" className="auth-eye-btn" onClick={() => setShowPass((v) => !v)} aria-label={showPass ? "Hide password" : "Show password"}>
+              <EyeIcon size={15} open={showPass} />
+            </button>
+          </div>
+          {errors.password && <span className="auth-field-err">{errors.password}</span>}
+        </div>
+
+        {tab === "signup" && (
+          <div className="auth-field">
+            <label className="auth-label">Confirm Password</label>
+            <div className="auth-input-wrap">
+              <i className="fa-solid fa-lock auth-input-icon" aria-hidden="true" />
+              <input
+                className={`auth-input auth-input--pass${errors.password2 ? " error" : ""}`}
+                type={showPass2 ? "text" : "password"}
+                placeholder="Repeat your password"
+                value={form.password2}
+                onChange={set("password2")}
+                autoComplete="new-password"
+              />
+              <button type="button" className="auth-eye-btn" onClick={() => setShowPass2((v) => !v)} aria-label={showPass2 ? "Hide password" : "Show password"}>
+                <EyeIcon size={15} open={showPass2} />
+              </button>
+            </div>
+            {errors.password2 && <span className="auth-field-err">{errors.password2}</span>}
+          </div>
+        )}
+
+        {tab === "login" && (
+          <div className="auth-meta-row">
+            <label className="auth-remember-label">
+              <button
+                type="button"
+                role="checkbox"
+                aria-checked={remember}
+                className={`auth-checkbox${remember ? " checked" : ""}`}
+                onClick={() => setRemember((v) => !v)}
+              >
+                {remember && <i className="fa-solid fa-check" style={{ fontSize: 8 }} aria-hidden="true" />}
+              </button>
+              Remember Me
+            </label>
+            <a href="#" className="auth-forgot-link">Forgot Password?</a>
+          </div>
+        )}
+
+        <button type="submit" className={`auth-submit-btn${submitting ? " loading" : ""}`} disabled={submitting}>
+          {submitting
+            ? <span className="sub-spinner" aria-hidden="true" />
+            : tab === "login" ? "Login" : "Create Account"}
+        </button>
+      </form>
+
+      <p className="auth-switch-row">
+        {tab === "login" ? "Don't have an account?" : "Already have an account?"}{" "}
+        <button className="auth-switch-link" onClick={() => switchTab(tab === "login" ? "signup" : "login")}>
+          {tab === "login" ? "Sign Up" : "Login"}
+        </button>
+      </p>
+    </div>
+  );
+
+  return (
+    <div
+      className="auth-overlay"
+      onClick={(e) => e.target === e.currentTarget && onClose()}
+      role="dialog"
+      aria-modal="true"
+      aria-label={tab === "login" ? "Sign in to Midnight Pick" : "Create a Midnight Pick account"}
+    >
+      <div className="auth-modal">
+        {/* Mobile splash screen */}
+        <div className={`auth-splash${phase !== "splash" ? " auth-splash--gone" : ""}`}>
+          <div className="auth-splash-hero">
+            <i className="fa-solid fa-mug-hot auth-splash-icon" aria-hidden="true" />
+            <div className="auth-splash-rings" aria-hidden="true">
+              <div /><div /><div />
+            </div>
+          </div>
+          <div className="auth-splash-card">
+            <Logo variant="dark" height={44} />
+            <h2 className="auth-splash-headline">Start your midnight ritual.</h2>
+            <p className="auth-splash-body">Colombia's finest freeze-dried coffee, delivered to your door. Track orders, manage your subscription, and more.</p>
+            <button className="auth-splash-cta" onClick={() => setPhase("form")}>Get Started</button>
+            <button className="auth-splash-skip" onClick={onClose}>Maybe later</button>
+          </div>
+        </div>
+
+        {formPane}
+      </div>
+    </div>
+  );
+}
+
 Object.assign(window, {
   Logo,
   CartIcon, HeartIcon, UserIcon, ArrowRight, ArrowUpRight, Plus, Chev, Check, Star,
@@ -665,4 +1067,6 @@ Object.assign(window, {
   StepPick, StepSundry, StepRoast, StepGrind, StepJar,
   SocialIcons,
   SubscribeModal,
+  TrackOrderModal,
+  AuthModal,
 });
