@@ -75,7 +75,7 @@ const SHOP_PRODUCTS = [
 ];
 
 // ---- nav ----
-function ShopNav({ cartCount }) {
+function ShopNav({ cartCount, onSubscribe }) {
   const [scrolled, setScrolled] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -111,6 +111,7 @@ function ShopNav({ cartCount }) {
             <Logo variant="dark" height={174} />
           </a>
           <div className="nav-right">
+            <button className="nav-subscribe-btn" onClick={onSubscribe}>Subscribe & Save</button>
             <a href="shop.html" className="nav-shop-btn nav-shop-btn--active">
               <i className="fa-solid fa-bag-shopping" aria-hidden="true" />
               Shop
@@ -178,6 +179,83 @@ function ShopToastStack({ toasts }) {
   );
 }
 
+// ---- newsletter banner ----
+function ShopNewsletter() {
+  const [email, setEmail] = useState("");
+  const [status, setStatus] = useState("idle"); // idle | loading | success | error
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setStatus("error");
+      return;
+    }
+    setStatus("loading");
+    // Simulate async submit
+    setTimeout(() => setStatus("success"), 1200);
+  };
+
+  return (
+    <section className="shop-newsletter">
+      {/* decorative orbs */}
+      <span className="snl-orb snl-orb--tl" aria-hidden="true" />
+      <span className="snl-orb snl-orb--br" aria-hidden="true" />
+      <span className="snl-orb snl-orb--ml" aria-hidden="true" />
+      <span className="snl-orb snl-orb--tr-sm" aria-hidden="true" />
+
+      <div className="snl-inner">
+        <div className="snl-eyebrow">EARLY ACCESS</div>
+
+        <h2 className="snl-heading">
+          First to know.
+        </h2>
+        <p className="snl-sub">
+          New batches, limited drops, and quiet updates — straight to your inbox.
+        </p>
+
+        {status === "success" ? (
+          <div className="snl-success">
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <path d="M4 10l4.5 4.5L16 7" stroke="#4CAF84" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+            <span>You're on the list. We'll be in touch.</span>
+          </div>
+        ) : (
+          <form className="snl-form" onSubmit={handleSubmit} noValidate>
+            <div className={"snl-field-wrap" + (status === "error" ? " snl-field-wrap--err" : "")}>
+              <input
+                className="snl-input"
+                type="email"
+                placeholder="Your email address"
+                value={email}
+                onChange={(e) => { setEmail(e.target.value); if (status === "error") setStatus("idle"); }}
+                disabled={status === "loading"}
+                aria-label="Email address"
+              />
+              <button
+                className={"snl-btn" + (status === "loading" ? " snl-btn--loading" : "")}
+                type="submit"
+                disabled={status === "loading"}
+              >
+                {status === "loading" ? (
+                  <span className="snl-spinner" aria-hidden="true" />
+                ) : "Subscribe"}
+              </button>
+            </div>
+            {status === "error" && (
+              <p className="snl-error-msg">Enter a valid email address to continue.</p>
+            )}
+          </form>
+        )}
+
+        <p className="snl-legal">
+          No spam. Unsubscribe any time.
+        </p>
+      </div>
+    </section>
+  );
+}
+
 // ---- main shop page ----
 function ShopPage() {
   const [activeId, setActiveId] = useState("blend");
@@ -187,6 +265,7 @@ function ShopPage() {
   const [toasts, setToasts] = useState([]);
   const [addedAnim, setAddedAnim] = useState(false);
   const [imgKey, setImgKey] = useState(0);
+  const [modalOpen, setModalOpen] = useState(false);
 
   const product = SHOP_PRODUCTS.find((p) => p.id === activeId);
   const pack = product.packs[activePack];
@@ -214,7 +293,7 @@ function ShopPage() {
 
   return (
     <div className="shop-page">
-      <ShopNav cartCount={cart.length} />
+      <ShopNav cartCount={cart.length} onSubscribe={() => setModalOpen(true)} />
 
       {/* main layout */}
       <div className="shop-layout">
@@ -329,7 +408,10 @@ function ShopPage() {
         </div>
       </div>
 
+      <ShopNewsletter />
+
       <ShopToastStack toasts={toasts} />
+      <SubscribeModal open={modalOpen} onClose={() => setModalOpen(false)} />
     </div>
   );
 }

@@ -35,7 +35,7 @@ function CartNavBtn({ count, onClick }) {
 }
 
 // ----------------- nav -----------------
-function Nav({ cartCount, onShop }) {
+function Nav({ cartCount, onShop, onSubscribe }) {
   const [scrolled, setScrolled] = useState(false);
   const [active, setActive] = useState("home");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -89,6 +89,7 @@ function Nav({ cartCount, onShop }) {
             <Logo variant="dark" height={174} />
           </a>
           <div className="nav-right">
+            <button className="nav-subscribe-btn" onClick={onSubscribe}>Subscribe & Save</button>
             <a href="shop.html" className="nav-shop-btn">
               <i className="fa-solid fa-bag-shopping" aria-hidden="true" />
               Shop
@@ -437,7 +438,7 @@ const PLANS = [
 }];
 
 
-function Pricing() {
+function Pricing({ onSubscribe }) {
   return (
     <section className="pricing" id="pricing" data-screen-label="07 Pricing">
       <div className="pricing-inner">
@@ -459,7 +460,7 @@ function Pricing() {
               <li key={f}><Check size={14} color={p.featured ? "var(--burgundy)" : "var(--flame)"} /> {f}</li>
               )}
               </ul>
-              <button className="subscribe">
+              <button className="subscribe" onClick={onSubscribe}>
                 Subscription <ArrowRight size={14} />
               </button>
             </div>
@@ -622,6 +623,7 @@ function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const [cart, setCart] = useState([]);
   const [toasts, setToasts] = useState([]);
+  const [modalOpen, setModalOpen] = useState(false);
 
   useEffect(() => {applyPalette(t.palette);}, [t.palette]);
 
@@ -645,18 +647,19 @@ function App() {
 
   return (
     <>
-      <Nav cartCount={cart.length} onShop={onShop} />
+      <Nav cartCount={cart.length} onShop={onShop} onSubscribe={() => setModalOpen(true)} />
       <Hero headline={t.headline} showMountain={t.showMountain} />
       <Story />
       <Collection onAdd={addToCart} />
       <Promo onShop={onShop} />
       <Why />
       <Howto />
-      <Pricing />
+      <Pricing onSubscribe={() => setModalOpen(true)} />
       <FAQ />
       <Footer />
       <StickyCart cartCount={cart.length} onShop={onShop} />
       <ToastStack toasts={toasts} />
+      <SubscribeModal open={modalOpen} onClose={() => setModalOpen(false)} />
 
       <TweaksPanel title="Tweaks">
         <TweakSection label="Theme">

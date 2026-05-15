@@ -105,6 +105,558 @@ const SocialIcons = {
   wa: <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M.057 24l1.687-6.163a11.867 11.867 0 0 1-1.587-5.946C.16 5.335 5.495 0 12.05 0a11.817 11.817 0 0 1 8.413 3.488 11.824 11.824 0 0 1 3.48 8.414c-.003 6.557-5.338 11.892-11.893 11.892a11.9 11.9 0 0 1-5.688-1.448L.057 24zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884-.001 2.225.651 3.891 1.746 5.634l-.999 3.648 3.742-.981zm11.387-5.464c-.074-.124-.272-.198-.57-.347-.297-.149-1.758-.868-2.031-.967-.272-.099-.47-.149-.669.149-.198.297-.768.967-.941 1.165-.173.198-.347.223-.644.074-.297-.149-1.255-.462-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.297-.347.446-.521.151-.172.2-.296.3-.495.099-.198.05-.372-.025-.521-.075-.148-.669-1.611-.916-2.206-.242-.579-.487-.501-.669-.51l-.57-.01c-.198 0-.52.074-.792.372s-1.04 1.016-1.04 2.479 1.065 2.876 1.213 3.074c.149.198 2.095 3.2 5.076 4.487.709.306 1.263.489 1.694.626.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.695.248-1.29.173-1.414z"/></svg>,
 };
 
+// ─────────────────────────────────────────────
+// SUBSCRIBE MODAL
+// ─────────────────────────────────────────────
+
+const SUBSCRIBE_PLANS = [
+  {
+    id: "nightshift",
+    name: "Night Shift",
+    badge: "POPULAR",
+    contents: "10× Midnight Black sachets",
+    regularPrice: 250,
+    monthlyPrice: 210,
+    bimonthlyPrice: 189,
+    savings: "Save ৳40 · 16% off",
+  },
+  {
+    id: "doubleshot",
+    name: "Double Shot",
+    badge: "BEST VALUE",
+    contents: "10× Midnight Black + 10× Midnight Latte",
+    regularPrice: 450,
+    monthlyPrice: 370,
+    bimonthlyPrice: 333,
+    savings: "Save ৳80 · 18% off",
+  },
+];
+
+function SubStepper({ step }) {
+  return (
+    <div className="sub-stepper" role="progressbar" aria-valuenow={step} aria-valuemin={1} aria-valuemax={3}>
+      {[1, 2, 3].map((n, i) => (
+        <React.Fragment key={n}>
+          {i > 0 && <div className={"sub-step-line" + (step > i ? " done" : "")} />}
+          <div className={"sub-step-dot" + (step === n ? " current" : step > n ? " done" : "")}>
+            {step > n ? (
+              <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                <path d="M2 6l3 3 5-5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            ) : <span>{n}</span>}
+          </div>
+        </React.Fragment>
+      ))}
+    </div>
+  );
+}
+
+function SubScreen1({ plan, setPlan, freq, setFreq, onContinue, onClose }) {
+  const [priceVisible, setPriceVisible] = React.useState(true);
+
+  const switchFreq = (f) => {
+    if (f === freq) return;
+    setPriceVisible(false);
+    setTimeout(() => { setFreq(f); setPriceVisible(true); }, 150);
+  };
+
+  const getPrice = (p) => freq === "monthly" ? p.monthlyPrice : p.bimonthlyPrice;
+
+  return (
+    <div className="sub-screen">
+      <SubStepper step={1} />
+      <div className="sub-eyebrow">SUBSCRIBE & SAVE</div>
+      <h2 className="sub-title">Your Monthly Midnight</h2>
+      <p className="sub-subtitle">Choose a plan. Cancel any time.</p>
+
+      <div className="sub-freq-wrap">
+        <div className="sub-freq-track">
+          <div className={"sub-freq-thumb" + (freq === "bimonthly" ? " right" : "")} aria-hidden="true" />
+          <button className={"sub-freq-opt" + (freq === "monthly" ? " active" : "")} onClick={() => switchFreq("monthly")}>Every month</button>
+          <button className={"sub-freq-opt" + (freq === "bimonthly" ? " active" : "")} onClick={() => switchFreq("bimonthly")}>Every 2 months</button>
+        </div>
+      </div>
+
+      <div className="sub-plans">
+        {SUBSCRIBE_PLANS.map((p) => (
+          <button
+            key={p.id}
+            className={"sub-plan-card" + (plan === p.id ? " selected" : "")}
+            onClick={() => setPlan(p.id)}
+          >
+            <div className="sub-plan-body">
+              <div className="sub-plan-left">
+                <div className="sub-plan-name-row">
+                  <span className="sub-plan-name">{p.name}</span>
+                  <span className="sub-plan-badge">{p.badge}</span>
+                </div>
+                <div className="sub-plan-contents">{p.contents}</div>
+                <div className="sub-plan-savings">{p.savings}</div>
+                {freq === "bimonthly" && <div className="sub-plan-billed-note">Billed every 2 months</div>}
+              </div>
+              <div className="sub-plan-right">
+                <div className={"sub-plan-price-wrap" + (!priceVisible ? " price-fading" : "")}>
+                  <span className="sub-plan-price">৳{getPrice(p)}</span>
+                  <span className="sub-plan-per">/mo</span>
+                </div>
+                <div className={"sub-plan-radio" + (plan === p.id ? " checked" : "")} />
+              </div>
+            </div>
+          </button>
+        ))}
+      </div>
+
+      <div className="sub-perks">
+        {[
+          { icon: "fa-truck-fast", text: "Priority delivery every month" },
+          { icon: "fa-gift",       text: "Occasional free sachet included" },
+          { icon: "fa-xmark",      text: "Cancel any time · no lock-in" },
+        ].map((perk) => (
+          <div className="sub-perk" key={perk.icon}>
+            <div className="sub-perk-icon"><i className={`fa-solid ${perk.icon}`} aria-hidden="true" /></div>
+            <span>{perk.text}</span>
+          </div>
+        ))}
+      </div>
+
+      <button className="sub-cta-btn" onClick={onContinue}>Continue →</button>
+      <button className="sub-ghost-link" onClick={onClose}>One-time purchase instead? ↑ Back to shop</button>
+    </div>
+  );
+}
+
+function SubScreen2({ plan, freq, form, setForm, onContinue, onBack }) {
+  const [errors, setErrors] = React.useState({});
+  const [attempted, setAttempted] = React.useState(false);
+  const [createAccount, setCreateAccount] = React.useState(true);
+  const [returningUser, setReturningUser] = React.useState(false);
+
+  const selectedPlan = SUBSCRIBE_PLANS.find((p) => p.id === plan);
+  const price = freq === "monthly" ? selectedPlan.monthlyPrice : selectedPlan.bimonthlyPrice;
+
+  const validate = (f) => {
+    const e = {};
+    if (!f.name?.trim())    e.name    = "Full name is required.";
+    if (!f.phone?.trim())   e.phone   = "Phone number is required.";
+    if (!f.address?.trim()) e.address = "Delivery address is required.";
+    if (!f.area?.trim())    e.area    = "Area is required.";
+    if (!f.city?.trim())    e.city    = "City is required.";
+    return e;
+  };
+
+  const handleContinue = () => {
+    setAttempted(true);
+    const e = validate(form);
+    if (Object.keys(e).length) { setErrors(e); return; }
+    onContinue();
+  };
+
+  const handleBlur = (field) => {
+    if (!attempted) return;
+    const e = validate(form);
+    setErrors((prev) => ({ ...prev, [field]: e[field] }));
+  };
+
+  const handlePhoneBlur = () => {
+    handleBlur("phone");
+    if (form.phone?.startsWith("01711") && !returningUser) {
+      setReturningUser(true);
+      setForm((prev) => ({ ...prev, name: "Muzahidul Islam", address: "House 12, Road 4, Aftabnagar", area: "Badda", city: "Dhaka" }));
+    }
+  };
+
+  const set = (field) => (e) => {
+    setForm((prev) => ({ ...prev, [field]: e.target.value }));
+    if (errors[field]) setErrors((prev) => ({ ...prev, [field]: undefined }));
+  };
+
+  return (
+    <div className="sub-screen">
+      <SubStepper step={2} />
+      <h2 className="sub-title">Delivery Details</h2>
+      <p className="sub-subtitle">Where should we send your monthly coffee?</p>
+
+      <div className="sub-recap-bar">
+        <div>
+          <div className="sub-recap-plan">{selectedPlan.name.toUpperCase()} PLAN</div>
+          <div className="sub-recap-detail">{selectedPlan.contents} · ৳{price}/mo</div>
+        </div>
+        <button className="sub-recap-edit" onClick={onBack} aria-label="Edit plan">
+          <i className="fa-solid fa-pencil" aria-hidden="true" />
+        </button>
+      </div>
+
+      {returningUser && (
+        <div className="sub-returning-banner">
+          <i className="fa-solid fa-circle-check" aria-hidden="true" />
+          <span>Welcome back. We've filled in your details.</span>
+        </div>
+      )}
+
+      <div className="sub-form">
+        <div className="sub-field">
+          <label className="sub-label">FULL NAME</label>
+          <input className={"sub-input" + (errors.name ? " error" : "")} placeholder="Your full name" value={form.name || ""} onChange={set("name")} onBlur={() => handleBlur("name")} />
+          {errors.name && <span className="sub-field-err">{errors.name}</span>}
+        </div>
+        <div className="sub-field">
+          <label className="sub-label">PHONE NUMBER</label>
+          <input className={"sub-input" + (errors.phone ? " error" : "")} type="tel" placeholder="01X XXXX XXXX" value={form.phone || ""} onChange={set("phone")} onBlur={handlePhoneBlur} />
+          {errors.phone && <span className="sub-field-err">{errors.phone}</span>}
+        </div>
+        <div className="sub-field">
+          <label className="sub-label">EMAIL ADDRESS <span className="sub-label-opt">(OPTIONAL)</span></label>
+          <input className="sub-input" type="email" placeholder="For order updates (optional)" value={form.email || ""} onChange={set("email")} />
+        </div>
+        <div className="sub-field">
+          <label className="sub-label">DELIVERY ADDRESS</label>
+          <input className={"sub-input" + (errors.address ? " error" : "")} placeholder="House number, road, area" value={form.address || ""} onChange={set("address")} onBlur={() => handleBlur("address")} />
+          {errors.address && <span className="sub-field-err">{errors.address}</span>}
+        </div>
+        <div className="sub-field-row">
+          <div className="sub-field sub-field--half">
+            <label className="sub-label">AREA / THANA</label>
+            <input className={"sub-input" + (errors.area ? " error" : "")} placeholder="e.g. Badda, Mirpur" value={form.area || ""} onChange={set("area")} onBlur={() => handleBlur("area")} />
+            {errors.area && <span className="sub-field-err">{errors.area}</span>}
+          </div>
+          <div className="sub-field sub-field--half">
+            <label className="sub-label">CITY</label>
+            <input className={"sub-input" + (errors.city ? " error" : "")} placeholder="Dhaka" value={form.city || ""} onChange={set("city")} onBlur={() => handleBlur("city")} />
+            {errors.city && <span className="sub-field-err">{errors.city}</span>}
+          </div>
+        </div>
+
+        <div className="sub-info-notice">
+          <i className="fa-solid fa-circle-info" aria-hidden="true" />
+          <span>Your address is saved to your account. You can update it before each month's delivery from your account page.</span>
+        </div>
+
+        <label className="sub-checkbox-label">
+          <button
+            role="checkbox"
+            aria-checked={createAccount}
+            className={"sub-checkbox" + (createAccount ? " checked" : "")}
+            onClick={() => setCreateAccount((v) => !v)}
+            type="button"
+          >
+            {createAccount && <i className="fa-solid fa-check" style={{ fontSize: 8 }} aria-hidden="true" />}
+          </button>
+          <span>Create an account to manage deliveries, pause, or cancel from your dashboard.</span>
+        </label>
+        {!createAccount && (
+          <p className="sub-no-account">You'll manage everything via WhatsApp. No dashboard access.</p>
+        )}
+      </div>
+
+      <button className="sub-cta-btn" onClick={handleContinue}>Continue to Payment →</button>
+      <button className="sub-back-btn" onClick={onBack}>← Back</button>
+    </div>
+  );
+}
+
+function SubScreen3({ plan, freq, form, onConfirm, onBack }) {
+  const [method, setMethod]       = React.useState("bkash");
+  const [bkashNum, setBkashNum]   = React.useState(form.phone || "");
+  const [nagadNum, setNagadNum]   = React.useState(form.phone || "");
+  const [card, setCard]           = React.useState({ number: "", expiry: "", cvv: "" });
+  const [promoOpen, setPromoOpen] = React.useState(false);
+  const [promoCode, setPromoCode] = React.useState("");
+  const [promoStatus, setPromoStatus] = React.useState("idle");
+  const [discount, setDiscount]   = React.useState(0);
+  const [confirmStatus, setConfirmStatus] = React.useState("idle");
+
+  const selectedPlan    = SUBSCRIBE_PLANS.find((p) => p.id === plan);
+  const basePrice       = freq === "monthly" ? selectedPlan.monthlyPrice : selectedPlan.bimonthlyPrice;
+  const isOutsideDhaka  = form.city && form.city.trim().toLowerCase() !== "dhaka";
+  const deliveryCharge  = isOutsideDhaka ? 60 : 0;
+  const total           = basePrice + deliveryCharge - discount;
+
+  const applyPromo = () => {
+    if (!promoCode.trim()) return;
+    setPromoStatus("loading");
+    setTimeout(() => {
+      if (promoCode.trim().toUpperCase() === "MIDNIGHT10") {
+        setDiscount(Math.round(basePrice * 0.1));
+        setPromoStatus("success");
+      } else {
+        setPromoStatus("error");
+      }
+    }, 900);
+  };
+
+  const handleConfirm = () => {
+    setConfirmStatus("loading");
+    setTimeout(() => onConfirm({ method, total }), 1400);
+  };
+
+  const TABS = [
+    { id: "bkash", label: "bKash", icon: "fa-mobile-screen-button" },
+    { id: "nagad", label: "Nagad", icon: "fa-mobile-screen-button" },
+    { id: "card",  label: "Card",  icon: "fa-credit-card" },
+  ];
+
+  return (
+    <div className="sub-screen">
+      <SubStepper step={3} />
+      <h2 className="sub-title">Payment</h2>
+      <p className="sub-subtitle">First charge today. Then monthly.</p>
+
+      <div className="sub-pay-tabs">
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            className={"sub-pay-tab" + (method === t.id ? " active" : "")}
+            onClick={() => setMethod(t.id)}
+          >
+            <i className={`fa-solid ${t.icon}`} aria-hidden="true" />
+            <span>{t.label}</span>
+          </button>
+        ))}
+      </div>
+
+      {(method === "bkash" || method === "nagad") && (
+        <div className="sub-field sub-field--mt">
+          <label className="sub-label">{method === "bkash" ? "BKASH" : "NAGAD"} NUMBER</label>
+          <input
+            className="sub-input"
+            type="tel"
+            value={method === "bkash" ? bkashNum : nagadNum}
+            onChange={(e) => method === "bkash" ? setBkashNum(e.target.value) : setNagadNum(e.target.value)}
+          />
+          <p className="sub-redirect-note">You'll be redirected to {method === "bkash" ? "bKash" : "Nagad"} to authorise the payment.</p>
+        </div>
+      )}
+
+      {method === "card" && (
+        <div className="sub-card-section">
+          <div className="sub-card-brands">
+            <span className="sub-card-brand-tag">VISA</span>
+            <span className="sub-card-brand-tag">MC</span>
+          </div>
+          <div className="sub-field">
+            <label className="sub-label">CARD NUMBER</label>
+            <input className="sub-input" placeholder="•••• •••• •••• ••••" value={card.number} onChange={(e) => setCard((c) => ({ ...c, number: e.target.value }))} />
+          </div>
+          <div className="sub-field-row">
+            <div className="sub-field sub-field--half">
+              <label className="sub-label">EXPIRY</label>
+              <input className="sub-input" placeholder="MM/YY" value={card.expiry} onChange={(e) => setCard((c) => ({ ...c, expiry: e.target.value }))} />
+            </div>
+            <div className="sub-field sub-field--half">
+              <label className="sub-label">CVV</label>
+              <input className="sub-input" placeholder="•••" value={card.cvv} onChange={(e) => setCard((c) => ({ ...c, cvv: e.target.value }))} />
+            </div>
+          </div>
+          <div className="sub-card-security">
+            <i className="fa-solid fa-lock" style={{ fontSize: 10 }} aria-hidden="true" />
+            <span>Your card details are encrypted and never stored.</span>
+          </div>
+        </div>
+      )}
+
+      <div className="sub-promo-wrap">
+        {!promoOpen ? (
+          <button className="sub-promo-trigger" onClick={() => setPromoOpen(true)}>Have a promo code?</button>
+        ) : (
+          <div className="sub-promo-panel">
+            <label className="sub-label">PROMO CODE</label>
+            <div className="sub-promo-row">
+              <input
+                className={"sub-input" + (promoStatus === "success" ? " promo-ok" : promoStatus === "error" ? " promo-err" : "")}
+                placeholder="Enter code (optional)"
+                value={promoCode}
+                onChange={(e) => { setPromoCode(e.target.value); if (promoStatus !== "idle") setPromoStatus("idle"); }}
+                disabled={promoStatus === "loading" || promoStatus === "success"}
+              />
+              {promoStatus !== "success" && (
+                <button className="sub-promo-apply" onClick={applyPromo} disabled={promoStatus === "loading" || !promoCode.trim()}>
+                  {promoStatus === "loading" ? <span className="sub-spinner" aria-hidden="true" /> : "Apply"}
+                </button>
+              )}
+              {promoStatus === "success" && <i className="fa-solid fa-circle-check" style={{ color: "#4CAF84", fontSize: 16, marginLeft: 8, flexShrink: 0 }} aria-hidden="true" />}
+              {promoStatus === "error"   && <i className="fa-solid fa-circle-xmark" style={{ color: "#e57373", fontSize: 16, marginLeft: 8, flexShrink: 0 }} aria-hidden="true" />}
+            </div>
+            {promoStatus === "error" && <p className="sub-field-err">Invalid code. Please check and try again.</p>}
+          </div>
+        )}
+      </div>
+
+      <div className="sub-order-summary">
+        <div className="sub-summary-row">
+          <span>{selectedPlan.name} Plan</span>
+          <span>৳{basePrice}</span>
+        </div>
+        <div className="sub-summary-divider" />
+        <div className="sub-summary-row">
+          <span>Delivery ({form.city || "Dhaka"})</span>
+          <span className={isOutsideDhaka ? "" : "sub-free-label"}>{isOutsideDhaka ? `৳${deliveryCharge}` : "Free"}</span>
+        </div>
+        {discount > 0 && (
+          <>
+            <div className="sub-summary-divider" />
+            <div className="sub-summary-row sub-summary-discount">
+              <span>Promo discount</span>
+              <span>−৳{discount}</span>
+            </div>
+          </>
+        )}
+        <div className="sub-summary-divider" />
+        <div className="sub-summary-row sub-summary-total">
+          <span>Total today</span>
+          <span>৳{total}</span>
+        </div>
+        <p className="sub-billing-note">Billed monthly. Cancel before the 25th of each month to skip your next delivery.</p>
+      </div>
+
+      <button
+        className={"sub-cta-btn" + (confirmStatus === "loading" ? " loading" : "")}
+        onClick={handleConfirm}
+        disabled={confirmStatus === "loading"}
+      >
+        {confirmStatus === "loading"
+          ? <span className="sub-spinner" aria-hidden="true" />
+          : "Confirm Subscription"}
+      </button>
+      <button className="sub-back-btn" onClick={onBack}>← Back</button>
+      <div className="sub-secured-row">
+        <i className="fa-solid fa-lock" aria-hidden="true" />
+        <span>Secured payment</span>
+      </div>
+    </div>
+  );
+}
+
+function SubConfirmation({ plan, freq, form, onBackToShop }) {
+  const selectedPlan = SUBSCRIBE_PLANS.find((p) => p.id === plan);
+  const price = freq === "monthly" ? selectedPlan.monthlyPrice : selectedPlan.bimonthlyPrice;
+
+  const now = new Date();
+  const isAfter25 = now.getDate() >= 25;
+  const rawMonth  = now.getMonth() + (isAfter25 ? 2 : 1);
+  const delivYear = now.getFullYear() + Math.floor(rawMonth / 12);
+  const delivMon  = rawMonth % 12;
+  const months    = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  const isOutsideDhaka = form.city && form.city.trim().toLowerCase() !== "dhaka";
+  const endDay    = isOutsideDhaka ? 5 : 3;
+
+  const nextCharge  = new Date(delivYear, delivMon, 1);
+  const cancelMon   = isAfter25 ? (now.getMonth() + 1) % 12 : now.getMonth();
+  const cancelYear  = isAfter25 && now.getMonth() === 11 ? now.getFullYear() + 1 : now.getFullYear();
+  const cancelBy    = new Date(cancelYear, cancelMon, 25);
+
+  const fmt = (d) => `${months[d.getMonth()].slice(0, 3)} ${d.getDate()}, ${d.getFullYear()}`;
+
+  return (
+    <div className="sub-screen sub-screen--confirm">
+      <div className="sub-confirm-icon-wrap">
+        <div className="sub-confirm-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M5 12l4.5 4.5L19 7" stroke="#FF9100" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
+      </div>
+      <h2 className="sub-confirm-heading">You're subscribed.</h2>
+      <p className="sub-confirm-sub">Your first Midnight Pick box is on its way. We'll message you on WhatsApp when it ships.</p>
+
+      <div className="sub-delivery-card">
+        <div className="sub-delivery-label">FIRST DELIVERY</div>
+        <div className="sub-delivery-dates">{months[delivMon].slice(0, 3)} 1 – {months[delivMon].slice(0, 3)} {endDay}, {delivYear}</div>
+        <div className="sub-delivery-detail">{isOutsideDhaka ? "Outside Dhaka · 3–5 business days" : "Inside Dhaka · 1–2 business days"}</div>
+      </div>
+
+      <div className="sub-order-summary sub-order-summary--confirm">
+        <div className="sub-summary-label">YOUR SUBSCRIPTION</div>
+        {[
+          ["Plan",        selectedPlan.name],
+          ["Billed",      `৳${price}/month`],
+          ["Next charge", fmt(nextCharge)],
+          ["Cancel by",   fmt(cancelBy)],
+        ].map(([label, value], i, arr) => (
+          <React.Fragment key={label}>
+            <div className="sub-summary-row">
+              <span>{label}</span>
+              <span className="sub-confirm-val">{value}</span>
+            </div>
+            {i < arr.length - 1 && <div className="sub-summary-divider" />}
+          </React.Fragment>
+        ))}
+      </div>
+
+      <div className="sub-whatsapp-strip">
+        <i className="fa-brands fa-whatsapp" aria-hidden="true" />
+        <span>We've sent your confirmation to <strong style={{ color: "#F7E3C9" }}>{form.phone}</strong> on WhatsApp.</span>
+      </div>
+
+      <button className="sub-cta-btn" onClick={onBackToShop}>Back to Shop</button>
+      <button className="sub-back-btn">Manage Subscription</button>
+    </div>
+  );
+}
+
+function SubCloseConfirm({ onLeave, onStay }) {
+  return (
+    <div className="sub-close-confirm">
+      <p className="sub-close-msg">Leave subscription setup? Your progress will be lost.</p>
+      <div className="sub-close-actions">
+        <button className="sub-back-btn" onClick={onLeave}>Yes, leave</button>
+        <button className="sub-cta-btn" onClick={onStay}>Stay</button>
+      </div>
+    </div>
+  );
+}
+
+function SubscribeModal({ open, onClose }) {
+  const [step,             setStep]             = React.useState(1);
+  const [plan,             setPlan]             = React.useState("nightshift");
+  const [freq,             setFreq]             = React.useState("monthly");
+  const [form,             setForm]             = React.useState({ city: "Dhaka" });
+  const [confirmed,        setConfirmed]        = React.useState(false);
+  const [showCloseConfirm, setShowCloseConfirm] = React.useState(false);
+
+  React.useEffect(() => {
+    if (open) {
+      setStep(1); setPlan("nightshift"); setFreq("monthly");
+      setForm({ city: "Dhaka" }); setConfirmed(false); setShowCloseConfirm(false);
+    }
+  }, [open]);
+
+  React.useEffect(() => {
+    document.body.style.overflow = open ? "hidden" : "";
+    return () => { document.body.style.overflow = ""; };
+  }, [open]);
+
+  if (!open) return null;
+
+  const requestClose = () => {
+    if (step === 1 && !confirmed) { onClose(); return; }
+    setShowCloseConfirm(true);
+  };
+
+  const handleBackToShop = () => { onClose(); window.location.href = "shop.html"; };
+
+  return (
+    <div className="sub-overlay" role="dialog" aria-modal="true" aria-label="Subscription setup">
+      <div className="sub-modal">
+        {!confirmed && !showCloseConfirm && (
+          <button className="sub-close-btn" onClick={requestClose} aria-label="Close">×</button>
+        )}
+
+        {showCloseConfirm ? (
+          <SubCloseConfirm onLeave={onClose} onStay={() => setShowCloseConfirm(false)} />
+        ) : confirmed ? (
+          <SubConfirmation plan={plan} freq={freq} form={form} onBackToShop={handleBackToShop} />
+        ) : step === 1 ? (
+          <SubScreen1 plan={plan} setPlan={setPlan} freq={freq} setFreq={setFreq} onContinue={() => setStep(2)} onClose={onClose} />
+        ) : step === 2 ? (
+          <SubScreen2 plan={plan} freq={freq} form={form} setForm={setForm} onContinue={() => setStep(3)} onBack={() => setStep(1)} />
+        ) : (
+          <SubScreen3 plan={plan} freq={freq} form={form} onConfirm={() => setConfirmed(true)} onBack={() => setStep(2)} />
+        )}
+      </div>
+    </div>
+  );
+}
+
 Object.assign(window, {
   Logo,
   CartIcon, HeartIcon, UserIcon, ArrowRight, ArrowUpRight, Plus, Chev, Check, Star,
@@ -112,4 +664,5 @@ Object.assign(window, {
   IconCoffeeSack, IconSparkles, IconQualityBadge,
   StepPick, StepSundry, StepRoast, StepGrind, StepJar,
   SocialIcons,
+  SubscribeModal,
 });
