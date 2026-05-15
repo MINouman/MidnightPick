@@ -63,6 +63,22 @@ const Check = ({ size = 16, color = "currentColor" }) => (
   </svg>
 );
 
+const MenuGridIcon = ({ size = 22 }) => (
+  <svg width={size} height={size} viewBox="0 0 22 22" fill="currentColor" aria-hidden="true">
+    <rect x="1" y="1" width="9" height="9" rx="2.5"/>
+    <rect x="12" y="1" width="9" height="9" rx="2.5"/>
+    <rect x="1" y="12" width="9" height="9" rx="2.5"/>
+    <rect x="12" y="12" width="9" height="9" rx="2.5"/>
+  </svg>
+);
+
+const CloseIcon = ({ size = 20 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">
+    <line x1="18" y1="6" x2="6" y2="18"/>
+    <line x1="6" y1="6" x2="18" y2="18"/>
+  </svg>
+);
+
 const Star = ({ size = 14, filled = true }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
     <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
@@ -92,6 +108,7 @@ const SocialIcons = {
 Object.assign(window, {
   Logo,
   CartIcon, HeartIcon, UserIcon, ArrowRight, ArrowUpRight, Plus, Chev, Check, Star,
+  MenuGridIcon, CloseIcon,
   IconCoffeeSack, IconSparkles, IconQualityBadge,
   StepPick, StepSundry, StepRoast, StepGrind, StepJar,
   SocialIcons,

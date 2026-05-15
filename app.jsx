@@ -24,10 +24,21 @@ function applyPalette(name) {
   r.setProperty("--paper", p.paper);
 }
 
+// ----------------- cart nav button -----------------
+function CartNavBtn({ count, onClick }) {
+  return (
+    <button className="nav-cart-btn" onClick={onClick} aria-label={`Cart — ${count} item${count !== 1 ? "s" : ""}`}>
+      <CartIcon size={19} />
+      <span className="nav-cart-badge">{count}</span>
+    </button>
+  );
+}
+
 // ----------------- nav -----------------
 function Nav({ cartCount, onShop }) {
   const [scrolled, setScrolled] = useState(false);
   const [active, setActive] = useState("home");
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 30);
@@ -36,9 +47,21 @@ function Nav({ cartCount, onShop }) {
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
+  useEffect(() => {
+    const onResize = () => { if (window.innerWidth > 900) setMenuOpen(false); };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  useEffect(() => {
+    document.body.style.overflow = menuOpen ? "hidden" : "";
+    return () => { document.body.style.overflow = ""; };
+  }, [menuOpen]);
+
   const jump = (id, name) => (e) => {
     e.preventDefault();
     setActive(name);
+    setMenuOpen(false);
     const el = document.getElementById(id);
     if (el) {
       if (id === "collection") {
@@ -53,33 +76,60 @@ function Nav({ cartCount, onShop }) {
   };
 
   return (
-    <nav className={"nav" + (scrolled ? " scrolled" : "")}>
-      <div className="nav-inner">
-        <div className="nav-links">
-          <a href="#home" className={active === "home" ? "active" : ""} onClick={jump("home", "home")}>Home</a>
-          <a href="#collection" className={active === "product" ? "active" : ""} onClick={jump("collection", "product")}>Product</a>
-          <a href="#collection" className={active === "shop" ? "active" : ""} onClick={jump("collection", "shop")}>Shop</a>
-        </div>
-        <a href="#home" onClick={jump("home", "home")} aria-label="Midnight Pick — home" style={{ display: "inline-flex" }}>
-          <Logo variant="light" height={90} />
-        </a>
-        <div className="nav-right">
-          <div className="nav-links" style={{ marginRight: 8 }}>
+    <>
+      <nav className={"nav" + (scrolled ? " scrolled" : "")}>
+        <div className="nav-inner">
+          <div className="nav-links">
+            <a href="#home" className={active === "home" ? "active" : ""} onClick={jump("home", "home")}>Home</a>
+            <a href="#collection" className={active === "product" ? "active" : ""} onClick={jump("collection", "product")}>Product</a>
             <a href="#story" className={active === "about" ? "active" : ""} onClick={jump("story", "about")}>About</a>
             <a href="#faq" className={active === "contact" ? "active" : ""} onClick={jump("faq", "contact")}>Contact</a>
           </div>
-          <button className="icon-btn" style={{ marginLeft: "auto" }} aria-label="Account"><UserIcon size={16} /></button>
+          <a href="#home" onClick={jump("home", "home")} aria-label="Midnight Pick — home" className="nav-logo-link">
+            <Logo variant="dark" height={174} />
+          </a>
+          <div className="nav-right">
+            <a href="shop.html" className="nav-shop-btn">
+              <i className="fa-solid fa-bag-shopping" aria-hidden="true" />
+              Shop
+            </a>
+            <button className="nav-signin-btn">
+              <i className="fa-solid fa-right-to-bracket" aria-hidden="true" />
+              Sign In
+            </button>
+            <CartNavBtn count={cartCount} onClick={onShop} />
+            <button
+              className={"mob-menu-btn" + (menuOpen ? " is-open" : "")}
+              onClick={() => setMenuOpen(!menuOpen)}
+              aria-label={menuOpen ? "Close menu" : "Open menu"}
+              aria-expanded={menuOpen}
+            >
+              {menuOpen ? <CloseIcon size={20} /> : <MenuGridIcon size={18} />}
+            </button>
+          </div>
+        </div>
+      </nav>
+      <div className={"mob-menu" + (menuOpen ? " open" : "")} aria-hidden={!menuOpen}>
+        <nav className="mob-menu-nav">
+          <a href="#home" className={active === "home" ? "active" : ""} onClick={jump("home", "home")}>Home</a>
+          <a href="#collection" className={active === "product" ? "active" : ""} onClick={jump("collection", "product")}>Product</a>
+          <a href="#story" className={active === "about" ? "active" : ""} onClick={jump("story", "about")}>About</a>
+          <a href="#faq" className={active === "contact" ? "active" : ""} onClick={jump("faq", "contact")}>Contact</a>
+        </nav>
+        <div className="mob-menu-footer">
+          <button className="mob-menu-account-btn" aria-label="Account">
+            <UserIcon size={18} /> Account
+          </button>
         </div>
       </div>
-    </nav>);
-
+    </>
+  );
 }
 
 // ----------------- hero -----------------
 function Hero({ headline, showMountain }) {
   return (
     <section className="hero" id="home" data-screen-label="01 Hero">
-      <div className="hero-shade" />
       <div className="hero-stars" />
       <div className="hero-vignette" />
       <div className="hero-content">
@@ -92,7 +142,7 @@ function Hero({ headline, showMountain }) {
           )}
         </h1>
         <p className="sub">The kettle clicks. The room is quiet. One sachet. One cup. One clear hour ahead — premium freeze-dried coffee from Colombia, fairly priced for Bangladesh.</p>
-        <a className="hero-cta" href="#collection" onClick={(e) => { e.preventDefault(); const el = document.getElementById("collection"); if (el) window.scrollTo({ top: Math.max(0, el.getBoundingClientRect().top + window.scrollY + (el.offsetHeight - window.innerHeight) / 2 - window.innerHeight * 0.02), behavior: "smooth" }); }}>
+        <a className="hero-cta" href="shop.html">
           See Our Menu
           <ArrowUpRight size={16} />
         </a>
@@ -224,7 +274,7 @@ function Collection({ onAdd }) {
         <div className="coll-right">
           <p>Premium freeze-dried Colombian coffee — roughly ৳7 a cup. No machine needed. One sachet, sixty seconds, one clear hour ahead.</p>
           <div className="coll-cta-row">
-            <a className="hero-cta" href="#collection" onClick={(e) => { e.preventDefault(); const el = document.getElementById("collection"); if (el) window.scrollTo({ top: Math.max(0, el.getBoundingClientRect().top + window.scrollY + (el.offsetHeight - window.innerHeight) / 2 - window.innerHeight * 0.07), behavior: "smooth" }); }}>
+            <a className="hero-cta" href="shop.html">
               Shop Now <ArrowRight size={14} />
             </a>
             <span className="coll-tag">3 products · Free shipping over ৳499</span>
@@ -538,8 +588,8 @@ function Footer() {
           <a href="#">Accessibility</a>
         </div>
       </div>
-    </footer>);
-
+    </footer>
+  );
 }
 
 // ----------------- toast stack -----------------
@@ -582,7 +632,7 @@ function App() {
     setTimeout(() => setToasts((ts) => ts.filter((x) => x.id !== id)), 2200);
   };
 
-  const onShop = () => { const el = document.getElementById("collection"); if (el) window.scrollTo({ top: Math.max(0, el.getBoundingClientRect().top + window.scrollY + (el.offsetHeight - window.innerHeight) / 2 - window.innerHeight * 0.02), behavior: "smooth" }); };
+  const onShop = () => { window.location.href = "shop.html"; };
 
   useEffect(() => {
     const els = document.querySelectorAll(".reveal");

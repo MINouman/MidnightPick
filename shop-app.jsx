@@ -1,0 +1,337 @@
+// midnight pick — shop page
+const { useState, useEffect } = React;
+
+// ---- product data ----
+const SHOP_PRODUCTS = [
+  {
+    id: "blend",
+    category: "Premium Coffee",
+    name: "Midnight Blend",
+    subtitle: "100g Resealable Pouch",
+    inStock: true,
+    rating: 4.8,
+    reviews: 640,
+    badge: "BEST VALUE",
+    desc: "Our signature freeze-dried Colombian coffee — around 50 cups per pouch. Medium roast with caramel-nut finish. The best value in the Midnight Pick lineup.",
+    roast: "Medium Roast",
+    origin: "Colombia",
+    blend: "Robusta 65% · Arabica 35%",
+    process: "Freeze-Dried",
+    packs: [
+      { label: "50g",  price: 199, old: null },
+      { label: "100g", price: 349, old: 449 },
+      { label: "200g", price: 649, old: 799 },
+      { label: "500g", price: 1499, old: 1899 },
+    ],
+    defaultPack: 1,
+    img: "assets/product-real.png",
+  },
+  {
+    id: "black",
+    category: "Single Sachet",
+    name: "Midnight Black",
+    subtitle: "Pure Black Coffee",
+    inStock: true,
+    rating: 4.7,
+    reviews: 412,
+    badge: null,
+    desc: "Pure black freeze-dried coffee. No sugar, no creamer. 70% Robusta + 30% Arabica for maximum caffeine and a clean finish — exactly what the late shift demands.",
+    roast: "Medium Roast",
+    origin: "Colombia",
+    blend: "Robusta 70% · Arabica 30%",
+    process: "Freeze-Dried",
+    packs: [
+      { label: "1 Sachet",  price: 25,  old: null },
+      { label: "5 Pack",    price: 115, old: null },
+      { label: "10 Pack",   price: 210, old: null },
+      { label: "30 Pack",   price: 575, old: 700 },
+    ],
+    defaultPack: 0,
+    img: "assets/product-real.png",
+  },
+  {
+    id: "latte",
+    category: "3-in-1 Sachet",
+    name: "Midnight Latte",
+    subtitle: "Smooth & Sweet",
+    inStock: true,
+    rating: 4.6,
+    reviews: 287,
+    badge: "3-IN-1",
+    desc: "Coffee, creamer, and sugar pre-measured and perfectly balanced. Café-style smoothness in under 60 seconds — no machine, no fuss.",
+    roast: "Medium Roast",
+    origin: "Colombia",
+    blend: "Robusta 65% · Arabica 35%",
+    process: "Freeze-Dried",
+    packs: [
+      { label: "1 Sachet",  price: 20,  old: null },
+      { label: "5 Pack",    price: 90,  old: null },
+      { label: "10 Pack",   price: 170, old: null },
+      { label: "30 Pack",   price: 460, old: 560 },
+    ],
+    defaultPack: 0,
+    img: "assets/product-real.png",
+  },
+];
+
+// ---- nav ----
+function ShopNav({ cartCount }) {
+  const [scrolled, setScrolled] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 30);
+    onScroll();
+    window.addEventListener("scroll", onScroll);
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  useEffect(() => {
+    const onResize = () => { if (window.innerWidth > 900) setMenuOpen(false); };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  useEffect(() => {
+    document.body.style.overflow = menuOpen ? "hidden" : "";
+    return () => { document.body.style.overflow = ""; };
+  }, [menuOpen]);
+
+  return (
+    <>
+      <nav className={"nav" + (scrolled ? " scrolled" : "")}>
+        <div className="nav-inner">
+          <div className="nav-links">
+            <a href="index.html">Home</a>
+            <a href="index.html#collection">Product</a>
+            <a href="index.html#story">About</a>
+            <a href="index.html#faq">Contact</a>
+          </div>
+          <a href="index.html" aria-label="Midnight Pick — home" className="nav-logo-link">
+            <Logo variant="dark" height={174} />
+          </a>
+          <div className="nav-right">
+            <a href="shop.html" className="nav-shop-btn nav-shop-btn--active">
+              <i className="fa-solid fa-bag-shopping" aria-hidden="true" />
+              Shop
+            </a>
+            <button className="nav-signin-btn">
+              <i className="fa-solid fa-right-to-bracket" aria-hidden="true" />
+              Sign In
+            </button>
+            <button className="nav-cart-btn" aria-label={`Cart — ${cartCount} item${cartCount !== 1 ? "s" : ""}`}>
+              <CartIcon size={19} />
+              <span className="nav-cart-badge">{cartCount}</span>
+            </button>
+            <button
+              className={"mob-menu-btn" + (menuOpen ? " is-open" : "")}
+              onClick={() => setMenuOpen(!menuOpen)}
+              aria-label={menuOpen ? "Close menu" : "Open menu"}
+              aria-expanded={menuOpen}
+            >
+              {menuOpen ? <CloseIcon size={20} /> : <MenuGridIcon size={18} />}
+            </button>
+          </div>
+        </div>
+      </nav>
+      <div className={"mob-menu" + (menuOpen ? " open" : "")} aria-hidden={!menuOpen}>
+        <nav className="mob-menu-nav">
+          <a href="index.html">Home</a>
+          <a href="index.html#collection">Product</a>
+          <a href="index.html#story">About</a>
+          <a href="index.html#faq">Contact</a>
+        </nav>
+        <div className="mob-menu-footer">
+          <button className="mob-menu-account-btn" aria-label="Account">
+            <UserIcon size={18} /> Account
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ---- star rating ----
+function ShopStarRating({ rating, reviews }) {
+  return (
+    <div className="shop-rating">
+      {[1, 2, 3, 4, 5].map((i) => (
+        <Star key={i} size={15} filled={i <= Math.round(rating)} />
+      ))}
+      <span className="shop-rating-num">{rating}</span>
+      <span className="shop-rating-reviews">({reviews} reviews)</span>
+    </div>
+  );
+}
+
+// ---- toast ----
+function ShopToastStack({ toasts }) {
+  return (
+    <div className="toast-stack">
+      {toasts.map((t) => (
+        <div className="toast" key={t.id}>
+          <span className="dot" />
+          <span>Added <strong>{t.name}</strong> to cart</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---- main shop page ----
+function ShopPage() {
+  const [activeId, setActiveId] = useState("blend");
+  const [activePack, setActivePack] = useState(SHOP_PRODUCTS[0].defaultPack);
+  const [qty, setQty] = useState(1);
+  const [cart, setCart] = useState([]);
+  const [toasts, setToasts] = useState([]);
+  const [addedAnim, setAddedAnim] = useState(false);
+  const [imgKey, setImgKey] = useState(0);
+
+  const product = SHOP_PRODUCTS.find((p) => p.id === activeId);
+  const pack = product.packs[activePack];
+
+  const switchProduct = (id) => {
+    const p = SHOP_PRODUCTS.find((x) => x.id === id);
+    setActiveId(id);
+    setActivePack(p.defaultPack);
+    setQty(1);
+    setImgKey((k) => k + 1);
+  };
+
+  const addToCart = () => {
+    const item = { id: product.id, name: product.name, pack: pack.label, price: pack.price, qty };
+    setCart((c) => [...c, item]);
+    const id = Math.random().toString(36).slice(2);
+    setToasts((ts) => [...ts, { id, name: `${product.name} (${pack.label})` }]);
+    setTimeout(() => setToasts((ts) => ts.filter((x) => x.id !== id)), 2200);
+    setAddedAnim(true);
+    setTimeout(() => setAddedAnim(false), 1400);
+  };
+
+  const totalPrice = pack.price * qty;
+  const totalOld = pack.old ? pack.old * qty : null;
+
+  return (
+    <div className="shop-page">
+      <ShopNav cartCount={cart.length} />
+
+      {/* main layout */}
+      <div className="shop-layout">
+
+        {/* ── left: info ── */}
+        <div className="shop-info">
+          <div className="shop-category">{product.category}</div>
+
+          <div className="shop-name-row">
+            <h1 className="shop-name">{product.name}</h1>
+            {product.inStock && <span className="shop-stock-badge">In Stock</span>}
+          </div>
+
+          <ShopStarRating rating={product.rating} reviews={product.reviews} />
+
+          <div className="shop-price-row">
+            <span className="shop-price">৳{totalPrice.toLocaleString()}</span>
+            {totalOld && <span className="shop-old-price">৳{totalOld.toLocaleString()}</span>}
+            {totalOld && (
+              <span className="shop-save-badge">
+                Save {Math.round((1 - pack.price / pack.old) * 100)}%
+              </span>
+            )}
+          </div>
+
+          <p className="shop-desc">{product.desc}</p>
+
+          {/* size / pack selector */}
+          <div className="shop-size-section">
+            <div className="shop-size-label">{product.id === "blend" ? "Size" : "Pack"}</div>
+            <div className="shop-size-opts">
+              {product.packs.map((p, i) => (
+                <button
+                  key={p.label}
+                  className={"shop-size-btn" + (activePack === i ? " active" : "")}
+                  onClick={() => { setActivePack(i); setQty(1); }}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* quantity + add to cart */}
+          <div className="shop-qty-row">
+            <div className="shop-qty">
+              <button className="shop-qty-btn" onClick={() => setQty((q) => Math.max(1, q - 1))} aria-label="Decrease quantity">−</button>
+              <span className="shop-qty-val">{qty}</span>
+              <button className="shop-qty-btn" onClick={() => setQty((q) => q + 1)} aria-label="Increase quantity">+</button>
+            </div>
+            <button
+              className={"shop-add-btn" + (addedAnim ? " added" : "")}
+              onClick={addToCart}
+            >
+              <CartIcon size={17} />
+              {addedAnim ? "Added!" : "Add to Cart"}
+            </button>
+          </div>
+
+          {/* buy now */}
+          <button className="shop-buy-btn">Buy Now</button>
+
+          {/* specs grid */}
+          <div className="shop-specs">
+            <div className="shop-spec">
+              <span>Roast</span>
+              <strong>{product.roast}</strong>
+            </div>
+            <div className="shop-spec">
+              <span>Origin</span>
+              <strong>{product.origin}</strong>
+            </div>
+            <div className="shop-spec">
+              <span>Blend</span>
+              <strong>{product.blend}</strong>
+            </div>
+            <div className="shop-spec">
+              <span>Process</span>
+              <strong>{product.process}</strong>
+            </div>
+          </div>
+        </div>
+
+        {/* ── right: image ── */}
+        <div className="shop-visual">
+          <div className="shop-img-card">
+            {product.badge && (
+              <span className="shop-img-badge">{product.badge}</span>
+            )}
+            <div className="shop-img-wrapper">
+              <img
+                key={imgKey}
+                src={product.img}
+                alt={product.name}
+                className="shop-main-img"
+              />
+            </div>
+            <div className="shop-thumbs">
+              {SHOP_PRODUCTS.map((p) => (
+                <button
+                  key={p.id}
+                  className={"shop-thumb" + (activeId === p.id ? " active" : "")}
+                  onClick={() => switchProduct(p.id)}
+                  aria-label={`View ${p.name}`}
+                >
+                  <img src={p.img} alt={p.name} />
+                  <span className="shop-thumb-label">{p.name.replace("Midnight ", "")}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <ShopToastStack toasts={toasts} />
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<ShopPage />);
