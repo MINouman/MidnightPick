@@ -3,7 +3,7 @@ const { useState, useEffect, useRef } = React;
 
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "palette": "burgundy",
-  "headline": "We serve the richest coffee in the city!",
+  "headline": "From stillness, something stronger.",
   "showMountain": true
 } /*EDITMODE-END*/;
 
@@ -136,15 +136,15 @@ function Hero({ headline, showMountain }) {
       <div className="hero-content">
         <div className="hero-eyebrow">Welcome</div>
         <h1>
-          {headline.split(/(richest)/i).map((part, i) =>
-            /^richest$/i.test(part)
+          {headline.split(/(stronger)/i).map((part, i) =>
+            /^stronger$/i.test(part)
               ? <span key={i} style={{ color: "#FF9100" }}>{part}</span>
               : part
           )}
         </h1>
-        <p className="sub">The kettle clicks. The room is quiet. One sachet. One cup. One clear hour ahead — premium freeze-dried coffee from Colombia, fairly priced for Bangladesh.</p>
+        <p className="sub">Freeze-dried instant coffee from Colombian highlands. Carefully preserved aroma and character in every sip. The same gentle low-temperature process that premium imported jars use — at a fraction of the per-gram price. Sachets from ৳25. Free delivery above ৳499.</p>
         <a className="hero-cta" href="shop.html">
-          See Our Menu
+          Try the ৳99 Trial Pack
           <ArrowUpRight size={16} />
         </a>
       </div>
@@ -176,8 +176,8 @@ function Story() {
       <div className="story-inner">
         <div className="story-text">
           <div className="eyebrow">The Story <span className="arrow">→</span></div>
-          <h2>When the city falls asleep,<br /><em>Midnight Pick</em> wakes up.</h2>
-          <p>A small coffee brand glowing softly in the quiet night — serving warm cups to dreamers, creators, and late-night thinkers across Dhaka. Because the best ideas come after midnight.</p>
+          <h2>A quieter kind of<br /><em>coffee company.</em></h2>
+          <p>High-altitude Colombian coffee, harvested before sunrise and freeze-dried to lock in aroma and character. Built for students, designers, developers, and freelancers who treat a good cup as part of how they work — not a reward for working. Quietly, from Dhaka.</p>
           <div className="signature">
             <span className="line" />
             EST. 2026 · DHAKA, BANGLADESH
@@ -211,18 +211,18 @@ const PRODUCTS = [
   price: "৳25",
   old: null,
   rating: 4.7, reviews: 412,
-  desc: "Single-sachet, pure black coffee. 70% Robusta + 30% Arabica. No sugar, no creamer.",
+  desc: "Single-sachet, pure black coffee. 65% Robusta, 35% Arabica. No sugar, no creamer.",
   specs: "SINGLE SACHET · 10g"
 },
 {
-  id: "latte",
-  name: "Midnight Latte — 15g",
-  badge: "3-IN-1",
-  price: "৳20",
+  id: "trial",
+  name: "Trial Pack — 3 Sachets",
+  badge: "START HERE",
+  price: "৳99",
   old: null,
-  rating: 4.6, reviews: 287,
-  desc: "Coffee, creamer, and sugar — pre-measured. Smooth, slightly sweet, café-style.",
-  specs: "3-IN-1 SACHET · 15g"
+  rating: 4.9, reviews: 203,
+  desc: "Three Midnight Black sachets. The simplest way to try freeze-dried before committing to a pouch.",
+  specs: "3 × 10g SACHETS"
 }];
 
 
@@ -255,7 +255,7 @@ function Collection({ onAdd }) {
       <div className="coll-words" aria-hidden="true">
         <span className="cw cw-1">MIDNIGHT</span>
         <span className="cw cw-2">BLEND</span>
-        <span className="cw cw-3">LATTE</span>
+        <span className="cw cw-3">TRIAL</span>
       </div>
       <div className="coll-layout">
         <div className="coll-left">
@@ -270,10 +270,10 @@ function Collection({ onAdd }) {
         <div className="coll-imgs">
           <div className="coll-img ci-0"><img src="assets/product-real.png" alt="Midnight Blend pouch" /></div>
           <div className="coll-img ci-1"><img src="assets/product-real.png" alt="Midnight Black sachet" /></div>
-          <div className="coll-img ci-2"><img src="assets/product-real.png" alt="Midnight Latte sachet" /></div>
+          <div className="coll-img ci-2"><img src="assets/product-real.png" alt="Midnight Pick Trial Pack" /></div>
         </div>
         <div className="coll-right">
-          <p>Premium freeze-dried Colombian coffee — roughly ৳7 a cup. No machine needed. One sachet, sixty seconds, one clear hour ahead.</p>
+          <p>Premium freeze-dried Colombian coffee — roughly ৳7 a cup from the 100g pouch. No machine needed. Tear, pour, stir. One clear hour ahead.</p>
           <div className="coll-cta-row">
             <a className="hero-cta" href="shop.html">
               Shop Now <ArrowRight size={14} />
@@ -349,18 +349,18 @@ function Promo({ onShop }) {
 // ----------------- why -----------------
 const WHY_ITEMS = [
 {
-  title: "Midnight Harvest",
-  desc: "Coffee cherries on the steepest Colombian slopes are picked before sunrise, when the cool air locks in sugars and aromatic oils. The name nods to that quiet, careful start.",
+  title: "Colombian Highland Origin",
+  desc: "Coffee cherries on the steepest Colombian slopes are picked before sunrise, when the cool air locks in sugars and aromatic oils. High altitude means slower ripening, denser beans, and more complex flavour.",
   icon: <IconCoffeeSack />
 },
 {
-  title: "Fuel for Night Workers",
-  desc: "Built for programmers, designers, students, and creators who do their best thinking after the city goes quiet. 70/30 Robusta-Arabica means real body and real caffeine.",
+  title: "Fuel for Focused Hours",
+  desc: "Built for students, designers, developers, and creators who do their best work in a clear, undistracted hour. 65% Robusta, 35% Arabica means real body and a clean caffeine lift.",
   icon: <IconSparkles />
 },
 {
   title: "Freeze-Dried, Not Spray-Dried",
-  desc: "The same low-temperature vacuum process as Nescafé Gold and Davidoff — preserving aroma and antioxidants — at roughly a third of the per-gram price.",
+  desc: "The same low-temperature vacuum process as Nescafé Gold and Davidoff — preserving aroma and antioxidants — at roughly a third of the per-gram price. No burnt taste. No flat finish.",
   icon: <IconQualityBadge />
 }];
 
@@ -429,7 +429,7 @@ const PLANS = [
 {
   id: "regular", name: "Deep Work", desc: "A pouch + sachets — the default for daily focus.",
   price: "৳549", per: "/mo", old: "৳699", save: "Save 20%", featured: true,
-  features: ["1 × 100g Midnight Blend pouch", "6 × Midnight Latte sachets", "Free express shipping", "First access to limited drops", "10% off all add-ons"]
+  features: ["1 × 100g Midnight Blend pouch", "6 × Midnight Black sachets", "Free express shipping", "First access to limited drops", "10% off all add-ons"]
 },
 {
   id: "pro", name: "All Nighter", desc: "Two pouches a month — for shared kitchens & studios.",
@@ -475,19 +475,36 @@ function Pricing({ onSubscribe }) {
 const FAQ_TOPICS = [
   { id: "brand",    label: "Our Story" },
   { id: "quality",  label: "Coffee Quality" },
-  { id: "sourcing", label: "Sourcing & Origin" },
+  { id: "health",   label: "Health & Safety" },
   { id: "products", label: "Products" },
   { id: "delivery", label: "Delivery" },
 ];
 
 const FAQS = [
 { topic: "brand",    q: "What does \"Midnight Pick\" mean?",                  a: "A nod to coffee that gets you through the quiet hours — the ideas, the projects, the breakthroughs that happen long after the rest of the city has gone to sleep. The name also points to the Colombian harvest tradition of picking ripe cherries in the cool pre-dawn." },
-{ topic: "quality",  q: "Is Midnight Pick freeze-dried?",                      a: "Yes — every bag and sachet is freeze-dried, the same low-temperature vacuum process used by Nescafé Gold, Davidoff, and Moccona. Spray-drying (250 °C hot air) cooks off the aromatics; freeze-drying preserves them." },
+{ topic: "brand",    q: "Is Midnight Pick freeze-dried?",                      a: "Yes — every bag and sachet is freeze-dried, the same low-temperature vacuum process used by Nescafé Gold, Davidoff, and Moccona. Spray-drying (250°C hot air) cooks off the aromatics; freeze-drying preserves them." },
+
+{ topic: "quality",  q: "What is freeze-dried coffee?",                        a: "Freeze-dried coffee is instant coffee made by freezing brewed coffee and removing the water under vacuum through sublimation. The ice converts directly to vapour without passing through liquid. Because no high heat is involved, more of the coffee's natural aroma and flavour compounds survive. The result dissolves cleanly in hot or cold water." },
+{ topic: "quality",  q: "How is freeze-dried coffee different from regular instant coffee?", a: "Most instant coffee is spray-dried: the brewed liquid is sprayed as a mist through very hot air — sometimes around 250°C — until it dries. It's fast and cheap. Freeze-drying takes longer and costs more, but avoids the heat that flattens delicate aromatics. Freeze-dried granules taste cleaner, dissolve more evenly, and retain more antioxidants." },
+{ topic: "quality",  q: "Does freeze-dried coffee have caffeine?",             a: "Yes. Freeze-drying removes water, not caffeine. A 10g sachet of Midnight Black delivers roughly 65–90mg of caffeine — on the stronger end for instant coffee, partly because of the Robusta-heavy blend." },
+{ topic: "quality",  q: "Does freeze-dried coffee go bad?",                    a: "Sealed, the shelf life is typically 18–24 months from manufacture. Once opened, the coffee stays safe well beyond that — but the aroma gradually fades with exposure to air, heat, and moisture. Keep it sealed in a cool dry place, away from direct light. No refrigeration needed." },
 { topic: "quality",  q: "What makes high-altitude coffee better?",             a: "Beans grown above 1,500m mature more slowly, developing denser sugars and more complex aromatics. Cooler nights, mineral-rich soil, and dramatic sun cycles do the work for us — we just don't get in the way." },
-{ topic: "sourcing", q: "Where do your coffee beans come from?",               a: "Colombia — one of the world's most respected coffee origins, known for balanced acidity, medium body, and a clean chocolate-caramel character. We blend 70% Robusta and 30% Arabica for body and a clean caffeine lift." },
-{ topic: "sourcing", q: "How do you select your coffee beans?",                a: "Our buyers cup every lot blind, scoring on aroma, acidity, body, and finish. We only ship beans that hold their character through freeze-drying. No exceptions, no fillers." },
+
+{ topic: "health",   q: "Is freeze-dried coffee healthy?",                     a: "Coffee in moderate amounts has been associated in research with benefits including antioxidant activity and improved alertness. Freeze-dried coffee retains more of the antioxidant compounds found in brewed coffee than spray-dried does, because the lower-temperature process is gentler. For most healthy adults, moderate daily consumption is generally considered fine." },
+{ topic: "health",   q: "Is instant coffee bad for you?",                      a: "Research on moderate coffee consumption — typically cited as 3–4 cups per day for healthy adults — does not support the idea that it causes harm for most people. The main concerns are excess caffeine disrupting sleep, adding large amounts of sugar or flavoured syrups, and sensitivity in people with specific conditions. Plain black freeze-dried coffee has no additives and no sugar." },
+{ topic: "health",   q: "Can I drink coffee if I have gastritis?",             a: "Coffee stimulates gastric acid, which can aggravate symptoms in people with gastritis or peptic ulcers. If this applies to you: avoid coffee on an empty stomach, keep portions small, and consider whether milk softens the acidity. Always check with a doctor for anything medically specific." },
+{ topic: "health",   q: "What does the 65/35 Robusta-Arabica blend mean?",     a: "65% Robusta and 35% Arabica. Robusta beans have more body, higher caffeine, and a stronger, earthier profile. Arabica beans are more aromatic, with a cleaner, slightly sweeter finish. The blend gives the cup real weight and caffeine presence from the Robusta, with aromatic brightness from the Arabica rounding it out." },
+{ topic: "health",   q: "Where do your beans come from?",                      a: "Colombian highlands. Colombia is one of the most established coffee origins — high altitude, distinct seasons, and mineral-rich soil that develops well-structured, balanced beans." },
+
 { topic: "products", q: "How does Midnight Pick compare to Nescafé Gold?",    a: "Same freeze-drying process. A 100g jar of Nescafé Gold runs roughly ৳780–990 in Bangladesh (about ৳8–10/g). Our 100g Midnight Blend pouch is ৳349 (about ৳3.49/g). A fraction of the price, none of the compromise." },
-{ topic: "products", q: "What types of coffee do you offer?",                  a: "Three core products: Midnight Black (10g pure freeze-dried sachet, ৳25), Midnight Latte (15g 3-in-1 sachet, ৳20), and Midnight Blend (100g resealable pouch, ৳349). Try all three with the ৳99 Trial Pack." },
+{ topic: "products", q: "How much freeze-dried coffee per cup?",               a: "1.5–2 grams per 150–180ml of water. From the 100g pouch, that's roughly half a level teaspoon. The 10g sachet is pre-measured for a single strong cup. Adjust to your taste." },
+{ topic: "products", q: "How do I store freeze-dried coffee once opened?",     a: "Seal the pouch or transfer to an airtight jar. Store at room temperature in a cool, dry cupboard. Keep away from steam, sunlight, and anything that introduces moisture. Do not refrigerate — cold environments introduce condensation, which is worse for freeze-dried coffee than warmth." },
+{ topic: "products", q: "Can I make iced coffee with freeze-dried instant coffee?", a: "Yes. Dissolve one sachet (or 2g from the pouch) in 50ml of hot water first, then pour over ice and top up with cold water or cold milk. The hot water step ensures the granules dissolve fully before cooling." },
+{ topic: "products", q: "Can I use freeze-dried coffee in baking?",            a: "Yes. It dissolves cleanly and works well in tiramisu, coffee cakes, brownies, and ice cream. Dissolve in a small amount of warm liquid before mixing into batters or creams." },
+
+{ topic: "delivery", q: "Where can I buy Midnight Pick in Bangladesh?",        a: "Directly through this website. Delivery across Bangladesh: 1–3 working days inside Dhaka, 3–5 days outside. Free shipping on orders over ৳499." },
+{ topic: "delivery", q: "How can I pay?",                                       a: "Cash on delivery, bKash, Nagad, Rocket, and debit/credit cards." },
+{ topic: "delivery", q: "Can I return a product?",                             a: "Yes, for damaged or incorrect orders within 7 days of delivery. Message us on WhatsApp and we'll sort it out directly." },
 { topic: "delivery", q: "Where do you deliver?",                               a: "Across Bangladesh. Free delivery inside Dhaka over ৳499, cash on delivery and bKash/Nagad/Rocket accepted. Standard delivery: 1–3 days inside Dhaka, 3–5 days outside." }];
 
 
@@ -504,7 +521,7 @@ function FAQ() {
       <div className="faq-inner">
         <div className="faq-header">
           <h2>Frequently<br />Asked Questions</h2>
-          <p className="faq-subtitle">Welcome to our FAQ section, where you'll find answers to all your questions about Midnight Pick.</p>
+          <p className="faq-subtitle">Straight answers about freeze-dried coffee, how it's made, whether it's healthy, how to store it, and how to order in Bangladesh.</p>
         </div>
         <div className="faq-body">
           <div className="faq-sidebar">
@@ -557,7 +574,7 @@ function Footer() {
           <h5>Product</h5>
           <ul>
             <li><a href="#collection">Midnight Black</a></li>
-            <li><a href="#collection">Midnight Latte</a></li>
+            <li><a href="#collection">Midnight Blend 50g</a></li>
             <li><a href="#collection">Midnight Blend</a></li>
             <li><a href="#collection">Trial Pack — ৳99</a></li>
           </ul>
