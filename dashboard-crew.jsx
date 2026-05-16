@@ -233,7 +233,7 @@ function PointsTab() {
           <span className="text-muted">pts</span>
         </div>
         <div className="text-xs text-muted">
-          Lifetime earned: <strong style={{ color: "var(--cream)" }}>{USER.lifetimeEarned.toLocaleString()}</strong>&nbsp;&nbsp;·&nbsp;&nbsp;Redeemed: <strong style={{ color: "var(--cream)" }}>{USER.lifetimeRedeemed.toLocaleString()}</strong>
+          Lifetime earned: <strong style={{ color: "var(--text)" }}>{USER.lifetimeEarned.toLocaleString()}</strong>&nbsp;&nbsp;·&nbsp;&nbsp;Redeemed: <strong style={{ color: "var(--text)" }}>{USER.lifetimeRedeemed.toLocaleString()}</strong>
         </div>
       </div>
       <div className="eyebrow mb12">Redeem Points</div>
@@ -338,7 +338,7 @@ function AccountTab({ setTab }) {
           <button className="btn-link" style={{ color: "var(--red)", fontSize: 12 }} onClick={() => setSheet("delete")}>Delete Account</button>
         </div>
       </div>
-      {sheet === "logout" && <Sheet title="Log out?" body="You'll be signed out of your account on this device." confirmLabel="Log Out" onConfirm={() => setSheet(null)} onClose={() => setSheet(null)} />}
+      {sheet === "logout" && <Sheet title="Log out?" body="You'll be signed out of your account on this device." confirmLabel="Log Out" onConfirm={() => { window.location.href = "index.html"; }} onClose={() => setSheet(null)} />}
       {sheet === "delete" && <Sheet title="Delete account?" body="This is permanent and cannot be undone." confirmLabel="Yes, Delete My Account" onConfirm={() => setSheet(null)} onClose={() => setSheet(null)} />}
     </div>
   );
@@ -637,7 +637,7 @@ function CrewTab() {
 }
 
 // ── Sidebar ────────────────────────────────────────────
-function Sidebar({ tab, setTab }) {
+function Sidebar({ tab, setTab, onLogout }) {
   const links = [
     { id: "home",         icon: "fa-home",          label: "Home" },
     { id: "orders",       icon: "fa-box",            label: "Orders" },
@@ -660,13 +660,16 @@ function Sidebar({ tab, setTab }) {
         </div>
       </nav>
       <div className="sidebar-footer">
-        <div className="sidebar-user">
+        <div className="sidebar-user" style={{ marginBottom: 10 }}>
           <div className="sidebar-avatar">{USER.name[0]}</div>
           <div>
             <div className="sidebar-user-name">{USER.name}</div>
             <div className="sidebar-user-role">Midnight Crew</div>
           </div>
         </div>
+        <button className="sidebar-link" style={{ width: "100%", borderLeft: "3px solid transparent", color: "var(--cream-65)" }} onClick={onLogout}>
+          <i className="fa fa-sign-out-alt s-icon" /><span>Log Out</span>
+        </button>
       </div>
     </aside>
   );
@@ -675,6 +678,7 @@ function Sidebar({ tab, setTab }) {
 // ── App ────────────────────────────────────────────────
 function CrewDashboard() {
   const [tab, setTab] = useState("crew");
+  const [logoutOpen, setLogoutOpen] = useState(false);
 
   const tabs = [
     { id: "home",   icon: "fa-home",  label: "Home" },
@@ -701,30 +705,22 @@ function CrewDashboard() {
   return (
     <>
       <div className="dash-layout">
-        <Sidebar tab={tab} setTab={setTab} />
+        <Sidebar tab={tab} setTab={setTab} onLogout={() => setLogoutOpen(true)} />
         <div className="dash-main">
-          <header className="topbar">
-            <img src="assets/logo.png" alt="Midnight Pick" className="topbar-logo" />
-            <span className="topbar-title">{titles[tab]}</span>
-            <div className="topbar-right">
-              <button className="icon-btn"><i className="fa fa-bell" /><span className="notif-dot" /></button>
-            </div>
-          </header>
           <main className="dash-content">
             <div className="dash-inner">{render()}</div>
           </main>
         </div>
       </div>
-      <nav className="tabbar">
-        <div className="tabbar-inner">
-          {tabs.map(t => (
-            <button key={t.id} className={`tab-item ${tab === t.id ? "active" : ""}`} onClick={() => setTab(t.id)}>
-              <span className="tab-icon"><i className={`fa ${t.icon}`} /></span>
-              <span>{t.label}</span>
-            </button>
-          ))}
-        </div>
-      </nav>
+      {logoutOpen && (
+        <Sheet
+          title="Log out?"
+          body="You'll be signed out of your Midnight Pick account on this device."
+          confirmLabel="Log Out"
+          onConfirm={() => { window.location.href = "index.html"; }}
+          onClose={() => setLogoutOpen(false)}
+        />
+      )}
     </>
   );
 }

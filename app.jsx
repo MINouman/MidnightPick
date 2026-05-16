@@ -83,6 +83,7 @@ function Nav({ cartCount, onShop, onSubscribe, onSignIn }) {
             <a href="#home" className={active === "home" ? "active" : ""} onClick={jump("home", "home")}>Home</a>
             <a href="#collection" className={active === "product" ? "active" : ""} onClick={jump("collection", "product")}>Product</a>
             <a href="#story" className={active === "about" ? "active" : ""} onClick={jump("story", "about")}>About</a>
+            <a href="#journal" className={active === "blog" ? "active" : ""} onClick={jump("journal", "blog")}>Blog</a>
             <a href="#faq" className={active === "contact" ? "active" : ""} onClick={jump("faq", "contact")}>Contact</a>
           </div>
           <a href="#home" onClick={jump("home", "home")} aria-label="Midnight Pick — home" className="nav-logo-link">
@@ -117,6 +118,7 @@ function Nav({ cartCount, onShop, onSubscribe, onSignIn }) {
           <a href="#home" className={active === "home" ? "active" : ""} onClick={jump("home", "home")}>Home</a>
           <a href="#collection" className={active === "product" ? "active" : ""} onClick={jump("collection", "product")}>Product</a>
           <a href="#story" className={active === "about" ? "active" : ""} onClick={jump("story", "about")}>About</a>
+          <a href="#journal" className={active === "blog" ? "active" : ""} onClick={jump("journal", "blog")}>Blog</a>
           <a href="#faq" className={active === "contact" ? "active" : ""} onClick={jump("faq", "contact")}>Contact</a>
         </nav>
         <div className="mob-menu-footer">

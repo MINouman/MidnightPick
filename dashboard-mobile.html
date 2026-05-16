@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500;700&display=swap" rel="stylesheet"/>
+<script>if(!sessionStorage.getItem('mp_role')){window.location.replace('index.html');}</script>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
@@ -1050,8 +1051,8 @@ function AdminOverviewTab({setTab}){
       <div onClick={()=>setTab('crew')} style={{background:'rgba(255,145,0,0.08)',borderLeft:`3px solid ${C.orange}`,borderRadius:12,
         padding:'12px 16px',marginBottom:16,cursor:'pointer',display:'flex',alignItems:'center',gap:10}}>
         <Ic n="bell" size={16} color={C.orange}/>
-        <span style={{...sans,fontSize:13,color:C.textCard,flex:1}}>3 pending Crew applications</span>
-        <Ic n="chevright" size={14} color={C.mutedCard}/>
+        <span style={{...sans,fontSize:13,color:C.text,flex:1}}>3 pending Crew applications</span>
+        <Ic n="chevright" size={14} color={C.muted}/>
       </div>
 
       {/* 2×3 stat grid */}
@@ -1435,45 +1436,211 @@ function AdminCouponsTab(){
   );
 }
 
+function AdminCustomersTab({setTab}){
+  const customers=[
+    {name:'Rafi Islam',orders:3,total:696,status:'Active'},
+    {name:'Nadia Rahman',orders:1,total:249,status:'Active'},
+    {name:'Arif Hossain',orders:2,total:447,status:'Active'},
+    {name:'Tanha Islam',orders:1,total:349,status:'Active'},
+    {name:'Shanto Ahmed',orders:1,total:249,status:'Inactive'},
+  ];
+  return(
+    <div style={{padding:'24px 16px 0'}}>
+      <Row style={{gap:8,marginBottom:16}}>
+        <button onClick={()=>setTab('more')} style={{background:'none',border:'none',cursor:'pointer',padding:0,display:'flex',alignItems:'center'}}>
+          <Ic n="chevright" size={20} color={C.muted} style={{transform:'rotate(180deg)'}}/>
+        </button>
+        <div style={{...sans,fontSize:20,fontWeight:700,color:C.text}}>Customers</div>
+      </Row>
+      <div style={{...sans,fontSize:13,color:C.muted,marginBottom:16}}>{customers.length} registered customers</div>
+      {customers.map((c,i)=>(
+        <div key={i} style={{background:C.card,borderRadius:12,padding:'14px 16px',marginBottom:10,border:`1px solid ${C.borderCard}`}}>
+          <RowBetween>
+            <div>
+              <div style={{...sans,fontSize:14,fontWeight:600,color:C.textCard,marginBottom:2}}>{c.name}</div>
+              <div style={{...mono,fontSize:12,color:C.mutedCard}}>{c.orders} orders · ৳{c.total.toLocaleString()}</div>
+            </div>
+            <Badge status={c.status}/>
+          </RowBetween>
+        </div>
+      ))}
+      <div style={{height:100}}/>
+    </div>
+  );
+}
+
+function AdminSubscriptionsTab({setTab}){
+  const subs=[
+    {name:'Rafi Islam',plan:'Night Shift Plan',price:210,status:'Active',next:'Jun 1'},
+    {name:'Nadia Rahman',plan:'Night Shift Plan',price:210,status:'Active',next:'Jun 3'},
+    {name:'Arif Hossain',plan:'Night Shift Plan',price:210,status:'Paused',next:'—'},
+    {name:'Tanha Islam',plan:'Night Shift Plan',price:210,status:'Active',next:'Jun 5'},
+  ];
+  return(
+    <div style={{padding:'24px 16px 0'}}>
+      <Row style={{gap:8,marginBottom:16}}>
+        <button onClick={()=>setTab('more')} style={{background:'none',border:'none',cursor:'pointer',padding:0,display:'flex',alignItems:'center'}}>
+          <Ic n="chevright" size={20} color={C.muted} style={{transform:'rotate(180deg)'}}/>
+        </button>
+        <div style={{...sans,fontSize:20,fontWeight:700,color:C.text}}>Subscriptions</div>
+      </Row>
+      <div style={{background:C.orangeFaint,borderRadius:12,padding:'12px 16px',marginBottom:16,display:'flex',gap:24}}>
+        <div><div style={{...mono,fontSize:9,color:C.orange,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:4}}>Active</div><div style={{...mono,fontSize:24,fontWeight:700,color:C.text}}>34</div></div>
+        <div><div style={{...mono,fontSize:9,color:C.muted,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:4}}>Paused</div><div style={{...mono,fontSize:24,fontWeight:700,color:C.text}}>3</div></div>
+      </div>
+      {subs.map((s,i)=>(
+        <div key={i} style={{background:C.card,borderRadius:12,padding:'14px 16px',marginBottom:10,border:`1px solid ${C.borderCard}`}}>
+          <RowBetween>
+            <div>
+              <div style={{...sans,fontSize:14,fontWeight:600,color:C.textCard,marginBottom:2}}>{s.name}</div>
+              <div style={{...mono,fontSize:11,color:C.mutedCard}}>৳{s.price}/mo · Next: {s.next}</div>
+            </div>
+            <Badge status={s.status}/>
+          </RowBetween>
+        </div>
+      ))}
+      <div style={{height:100}}/>
+    </div>
+  );
+}
+
+function AdminRedemptionsTab({setTab}){
+  const redemptions=[
+    {name:'Rafi Islam',points:500,value:'৳50',date:'May 15',status:'Pending'},
+    {name:'Nadia Rahman',points:200,value:'৳20',date:'May 14',status:'Pending'},
+    {name:'Arif Hossain',points:750,value:'৳75',date:'May 12',status:'Approved'},
+    {name:'Shanto Ahmed',points:300,value:'৳30',date:'May 10',status:'Approved'},
+  ];
+  return(
+    <div style={{padding:'24px 16px 0'}}>
+      <Row style={{gap:8,marginBottom:16}}>
+        <button onClick={()=>setTab('more')} style={{background:'none',border:'none',cursor:'pointer',padding:0,display:'flex',alignItems:'center'}}>
+          <Ic n="chevright" size={20} color={C.muted} style={{transform:'rotate(180deg)'}}/>
+        </button>
+        <div style={{...sans,fontSize:20,fontWeight:700,color:C.text}}>Redemptions</div>
+      </Row>
+      <div style={{background:'rgba(229,115,115,0.1)',borderLeft:`3px solid ${C.red}`,borderRadius:12,padding:'12px 16px',marginBottom:16}}>
+        <div style={{...sans,fontSize:13,color:C.text}}>2 redemptions pending approval</div>
+      </div>
+      {redemptions.map((r,i)=>(
+        <div key={i} style={{background:C.card,borderRadius:12,padding:'14px 16px',marginBottom:10,border:`1px solid ${C.borderCard}`}}>
+          <RowBetween>
+            <div>
+              <div style={{...sans,fontSize:14,fontWeight:600,color:C.textCard,marginBottom:2}}>{r.name}</div>
+              <div style={{...mono,fontSize:11,color:C.mutedCard}}>{r.points.toLocaleString()} pts → {r.value} · {r.date}</div>
+            </div>
+            <Badge status={r.status}/>
+          </RowBetween>
+        </div>
+      ))}
+      <div style={{height:100}}/>
+    </div>
+  );
+}
+
+function AdminFinancialsTab({setTab}){
+  const months=[
+    {month:'May 2026',orders:12,orderRev:4200,subRev:7140},
+    {month:'Apr 2026',orders:48,orderRev:15800,subRev:6930},
+    {month:'Mar 2026',orders:40,orderRev:13200,subRev:6720},
+    {month:'Feb 2026',orders:35,orderRev:11500,subRev:6510},
+  ];
+  return(
+    <div style={{padding:'24px 16px 0'}}>
+      <Row style={{gap:8,marginBottom:16}}>
+        <button onClick={()=>setTab('more')} style={{background:'none',border:'none',cursor:'pointer',padding:0,display:'flex',alignItems:'center'}}>
+          <Ic n="chevright" size={20} color={C.muted} style={{transform:'rotate(180deg)'}}/>
+        </button>
+        <div style={{...sans,fontSize:20,fontWeight:700,color:C.text}}>Financials</div>
+      </Row>
+      <div style={{display:'flex',gap:8,marginBottom:16}}>
+        {[{label:'MTD Orders',val:'৳4,200',color:C.orange},{label:'MTD Subs',val:'৳7,140',color:C.text}].map((s,i)=>(
+          <div key={i} style={{flex:1,background:C.card,borderRadius:12,padding:12,border:`1px solid ${C.borderCard}`}}>
+            <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>{s.label}</div>
+            <div style={{...mono,fontSize:20,fontWeight:700,color:s.color}}>{s.val}</div>
+          </div>
+        ))}
+      </div>
+      {months.map((m,i)=>(
+        <div key={i} style={{background:C.card,borderRadius:12,padding:'14px 16px',marginBottom:10,border:`1px solid ${C.borderCard}`}}>
+          <div style={{...sans,fontSize:13,fontWeight:600,color:C.textCard,marginBottom:8}}>{m.month}</div>
+          <div style={{display:'flex',gap:16}}>
+            <div><div style={{...mono,fontSize:9,color:C.mutedCard}}>ORDERS</div><div style={{...mono,fontSize:14,color:C.textCard}}>{m.orders}</div></div>
+            <div><div style={{...mono,fontSize:9,color:C.mutedCard}}>ORDER REV</div><div style={{...mono,fontSize:14,color:C.orange}}>৳{m.orderRev.toLocaleString()}</div></div>
+            <div><div style={{...mono,fontSize:9,color:C.mutedCard}}>SUB REV</div><div style={{...mono,fontSize:14,color:C.textCard}}>৳{m.subRev.toLocaleString()}</div></div>
+          </div>
+        </div>
+      ))}
+      <div style={{height:100}}/>
+    </div>
+  );
+}
+
+function AdminSettingsTab({setTab}){
+  const settings=[
+    {label:'Store Name',value:'Midnight Pick'},
+    {label:'Support Email',value:'support@midnightpick.com'},
+    {label:'Currency',value:'BDT (৳)'},
+    {label:'Points Rate',value:'1 pt = ৳0.10'},
+    {label:'Min Redemption',value:'100 pts'},
+    {label:'Referral Bonus',value:'50 pts'},
+  ];
+  return(
+    <div style={{padding:'24px 16px 0'}}>
+      <Row style={{gap:8,marginBottom:16}}>
+        <button onClick={()=>setTab('more')} style={{background:'none',border:'none',cursor:'pointer',padding:0,display:'flex',alignItems:'center'}}>
+          <Ic n="chevright" size={20} color={C.muted} style={{transform:'rotate(180deg)'}}/>
+        </button>
+        <div style={{...sans,fontSize:20,fontWeight:700,color:C.text}}>Settings</div>
+      </Row>
+      <div style={{background:C.card,borderRadius:12,overflow:'hidden',border:`1px solid ${C.borderCard}`,marginBottom:16}}>
+        {settings.map((s,i)=>(
+          <div key={i} style={{padding:'14px 16px',borderBottom:i<settings.length-1?`1px solid ${C.borderCard}`:'none'}}>
+            <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:4}}>{s.label}</div>
+            <div style={{...sans,fontSize:14,color:C.textCard}}>{s.value}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{height:100}}/>
+    </div>
+  );
+}
+
 function AdminMoreTab({setTab,onLogout}){
-  const [sheet,setSheet]=useState(true);
   const [logoutSheet,setLogoutSheet]=useState(false);
   const items=[
-    {label:'Customers',icon:'customers',tab:'overview'},
-    {label:'Subscriptions',icon:'repeat',tab:'overview'},
-    {label:'Redemptions',icon:'star',tab:'overview'},
-    {label:'Financials',icon:'wallet',tab:'overview'},
-    {label:'Settings',icon:'settings',tab:'overview'},
+    {label:'Customers',icon:'customers',tab:'customers'},
+    {label:'Subscriptions',icon:'repeat',tab:'subscriptions'},
+    {label:'Redemptions',icon:'star',tab:'redemptions'},
+    {label:'Financials',icon:'wallet',tab:'financials'},
+    {label:'Settings',icon:'settings',tab:'settings'},
   ];
   return(
     <div style={{position:'relative',height:'100%'}}>
-      <div style={{padding:'24px 16px'}}>
+      <div style={{padding:'24px 16px 8px'}}>
         <div style={{...sans,fontSize:16,fontWeight:700,color:C.text}}>More</div>
       </div>
-      {sheet&&(
-        <BottomSheet onClose={()=>setSheet(false)}>
-          {items.map((item,i)=>(
-            <div key={i} onClick={()=>{setSheet(false);setTab(item.tab);}}
-              style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'16px 0',
-                borderBottom:`1px solid ${C.borderCard}`,cursor:'pointer'}}>
-              <Row>
-                <Ic n={item.icon} size={20} color={C.mutedCard}/>
-                <span style={{...sans,fontSize:15,color:C.textCard}}>{item.label}</span>
-              </Row>
-              <Ic n="chevright" size={16} color={C.mutedCard}/>
-            </div>
-          ))}
-          {/* Log out */}
-          <div onClick={()=>{setSheet(false);setLogoutSheet(true);}}
-            style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'16px 0',cursor:'pointer'}}>
+      <div style={{padding:'0 16px'}}>
+        {items.map((item,i)=>(
+          <div key={i} onClick={()=>setTab(item.tab)}
+            style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'16px 0',
+              borderBottom:`1px solid ${C.borderBg}`,cursor:'pointer'}}>
             <Row>
-              <Ic n="x" size={20} color={C.red}/>
-              <span style={{...sans,fontSize:15,color:C.red}}>Log Out</span>
+              <Ic n={item.icon} size={20} color={C.muted}/>
+              <span style={{...sans,fontSize:15,color:C.text}}>{item.label}</span>
             </Row>
-            <Ic n="chevright" size={16} color={C.mutedCard}/>
+            <Ic n="chevright" size={16} color={C.muted}/>
           </div>
-        </BottomSheet>
-      )}
+        ))}
+        <div onClick={()=>setLogoutSheet(true)}
+          style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'16px 0',cursor:'pointer'}}>
+          <Row>
+            <Ic n="x" size={20} color={C.red}/>
+            <span style={{...sans,fontSize:15,color:C.red}}>Log Out</span>
+          </Row>
+          <Ic n="chevright" size={16} color={C.muted}/>
+        </div>
+      </div>
       {logoutSheet&&(
         <BottomSheet onClose={()=>setLogoutSheet(false)} title="Log out?">
           <div style={{...sans,fontSize:14,color:C.mutedCard,lineHeight:1.6,marginBottom:20}}>You'll be signed out of the admin panel.</div>
@@ -1537,6 +1704,11 @@ function AdminDashboard({onLogout}){
     crew:<AdminCrewTab/>,
     coupons:<AdminCouponsTab/>,
     more:<AdminMoreTab setTab={setTab} onLogout={onLogout}/>,
+    customers:<AdminCustomersTab setTab={setTab}/>,
+    subscriptions:<AdminSubscriptionsTab setTab={setTab}/>,
+    redemptions:<AdminRedemptionsTab setTab={setTab}/>,
+    financials:<AdminFinancialsTab setTab={setTab}/>,
+    settings:<AdminSettingsTab setTab={setTab}/>,
   };
   return{tab,setTab,content,role:'admin'};
 }
@@ -1675,10 +1847,10 @@ function LoginScreen({onLogin,isMobile}){
 }
 
 function App(){
-  const [role,setRole]=useState(null);
+  const [role,setRole]=useState(()=>sessionStorage.getItem('mp_role')||null);
   const isMobile=useIsMobile();
 
-  function handleLogout(){setRole(null);}
+  function handleLogout(){sessionStorage.removeItem('mp_role');window.location.replace('index.html');}
 
   // All four dashboard hooks called unconditionally — order never changes
   const userD=UserDashboard({onLogout:handleLogout});
@@ -1688,10 +1860,10 @@ function App(){
   const dashMap={user:userD,crew:crewD,influencer:inflD,admin:adminD};
   const dash=role?dashMap[role]:null;
 
-  // Active tab content (or login screen)
+  // Active tab content
   const tabContent=role
     ? <div key={dash.tab} style={{animation:'fadeIn 150ms ease',minHeight:'100%'}}>{dash.content[dash.tab]}</div>
-    : <LoginScreen onLogin={setRole}/>;
+    : null;
 
   /* ── MOBILE: fill entire screen ── */
   if(isMobile){
@@ -1702,14 +1874,14 @@ function App(){
         background:C.bg,overflow:'hidden',
         paddingTop:'env(safe-area-inset-top,0px)',
       }}>
-        {role?(
+        {role&&(
           <>
             <div style={{flex:1,overflowY:'auto',overflowX:'hidden',minHeight:0,WebkitOverflowScrolling:'touch'}}>
               {tabContent}
             </div>
             <BottomNav role={dash.role} tab={dash.tab} setTab={dash.setTab} mobile/>
           </>
-        ):tabContent}
+        )}
       </div>
     );
   }
@@ -1724,7 +1896,7 @@ function App(){
       }}>
         {role&&<StatusBar/>}
         <div style={{flex:1,overflowY:'auto',overflowX:'hidden',background:C.bg,minHeight:0}}>
-          {tabContent}
+          {role&&tabContent}
         </div>
         {role&&<BottomNav role={dash.role} tab={dash.tab} setTab={dash.setTab}/>}
       </div>

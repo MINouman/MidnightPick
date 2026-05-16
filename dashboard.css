@@ -458,38 +458,13 @@ body {
 .avail-ok  { color: var(--green); }
 .avail-err { color: var(--red); }
 
-/* ── Responsive ─────────────────────────── */
-@media (max-width: 768px) {
-  .sidebar   { display: none !important; }
-  .topbar    { display: flex !important; }
-  .tabbar    { display: flex !important; }
-  .dash-main { margin-left: 0; overflow-x: hidden; }
-  .dash-content {
-    padding: 16px 14px 20px;
-    margin-top: var(--topbar-h);
-    margin-bottom: calc(var(--tabbar-h) + 8px);
-    overflow-x: hidden; width: 100%;
-  }
-  .dash-inner, .dash-inner-wide { max-width: 100%; width: 100%; }
-  .stat-row  { grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
-  .grid-3    { grid-template-columns: repeat(2, minmax(0,1fr)); }
-  .card { border-radius: 10px; }
-  .accordion { border-radius: 10px; }
-  .slide-panel { width: 100vw; }
-  .data-table { font-size: 12px; min-width: unset; width: 100%; }
-  .data-table th, .data-table td { padding: 8px 8px; white-space: normal; word-break: break-word; }
-  .page-title { font-size: 19px; }
-  .btn { font-size: 13px; padding: 10px 16px; }
-  .row-between { flex-wrap: wrap; gap: 6px; }
-  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+/* ── Sheet dark-surface button overrides ── */
+.sheet .btn-ghost {
+  color: var(--cream-65);
+  border-color: var(--cream-30);
 }
-@media (max-width: 400px) {
-  .stat-row  { grid-template-columns: repeat(2, minmax(0,1fr)); gap: 7px; }
-  .stat-value { font-size: 20px; }
-  .stat-label { font-size: 9px; }
-  .code-display { font-size: 22px; }
-  .dash-content { padding: 12px 12px 18px; }
-  .filter-row { gap: 5px; }
-  .pill { padding: 6px 10px; font-size: 11px; }
-  .btn { padding: 9px 14px; font-size: 12.5px; }
+.sheet .btn-ghost:hover {
+  color: var(--cream);
+  border-color: var(--cream-65);
+  background: var(--cream-10);
 }

@@ -849,6 +849,20 @@ const EyeIcon = ({ size = 16, open = true }) => (
   </svg>
 );
 
+const DEMO_ACCOUNTS = [
+  { email: "rafi@midnightpick.com",  password: "coffee123", role: "user" },
+  { email: "crew@midnightpick.com",  password: "crew123",   role: "crew" },
+  { email: "tanha@midnightpick.com", password: "tanha123",  role: "influencer" },
+  { email: "admin@midnightpick.com", password: "admin123",  role: "admin" },
+];
+
+const ROLE_ROUTES = {
+  user:       "dashboard-user.html",
+  crew:       "dashboard-crew.html",
+  influencer: "dashboard-influencer.html",
+  admin:      "dashboard-admin.html",
+};
+
 function AuthModal({ open, onClose }) {
   const [tab,       setTab]       = React.useState("login");
   const [phase,     setPhase]     = React.useState("splash");
@@ -877,7 +891,7 @@ function AuthModal({ open, onClose }) {
 
   const set = (field) => (e) => {
     setForm((prev) => ({ ...prev, [field]: e.target.value }));
-    if (errors[field]) setErrors((prev) => ({ ...prev, [field]: undefined }));
+    setErrors((prev) => ({ ...prev, [field]: undefined, server: undefined }));
   };
 
   const switchTab = (t) => {
@@ -903,8 +917,27 @@ function AuthModal({ open, onClose }) {
     const errs = validate();
     if (Object.keys(errs).length) { setErrors(errs); return; }
     setSubmitting(true);
-    // TODO: wire up real auth
-    setTimeout(() => { setSubmitting(false); onClose(); }, 1200);
+    setTimeout(() => {
+      if (tab === "login") {
+        const account = DEMO_ACCOUNTS.find(
+          (a) => a.email === form.email.trim().toLowerCase() && a.password === form.password
+        );
+        if (account) {
+          sessionStorage.setItem("mp_role", account.role);
+          window.location.href = window.innerWidth < 768
+            ? "dashboard-mobile.html"
+            : ROLE_ROUTES[account.role];
+        } else {
+          setSubmitting(false);
+          setErrors({ server: "Invalid email or password." });
+        }
+      } else {
+        sessionStorage.setItem("mp_role", "user");
+        window.location.href = window.innerWidth < 768
+          ? "dashboard-mobile.html"
+          : ROLE_ROUTES["user"];
+      }
+    }, 800);
   };
 
   const formPane = (
@@ -1008,6 +1041,13 @@ function AuthModal({ open, onClose }) {
               Remember Me
             </label>
             <a href="#" className="auth-forgot-link">Forgot Password?</a>
+          </div>
+        )}
+
+        {errors.server && (
+          <div className="auth-server-err">
+            <i className="fa-solid fa-circle-exclamation" aria-hidden="true" style={{ marginRight: 6 }} />
+            {errors.server}
           </div>
         )}
 

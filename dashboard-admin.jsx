@@ -82,6 +82,22 @@ function SectionCard({ children, style }) {
   return <div className="card" style={{ marginBottom: 14, ...style }}>{children}</div>;
 }
 
+function Sheet({ title, body, onConfirm, confirmLabel = "Confirm", onClose }) {
+  return (
+    <div className="overlay" onClick={onClose}>
+      <div className="sheet" onClick={e => e.stopPropagation()}>
+        <div className="sheet-handle" />
+        <div className="sheet-title">{title}</div>
+        <div className="sheet-body">{body}</div>
+        <div className="col-gap">
+          <button className="btn btn-primary btn-full" onClick={onConfirm}>{confirmLabel}</button>
+          <button className="btn btn-ghost btn-full" onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Revenue Mini Chart ─────────────────────────────────
 function RevenueChart() {
   const days = Array.from({ length: 30 }, (_, i) => {
@@ -823,7 +839,7 @@ function Settings() {
 }
 
 // ── Sidebar ────────────────────────────────────────────
-function Sidebar({ section, setSection }) {
+function Sidebar({ section, setSection, onLogout }) {
   const links = [
     { id: "overview",  icon: "fa-chart-pie",      label: "Overview" },
     { id: "orders",    icon: "fa-box",             label: "Orders",     badge: "12" },
@@ -850,10 +866,13 @@ function Sidebar({ section, setSection }) {
         ))}
       </nav>
       <div className="sidebar-footer">
-        <div className="sidebar-user">
+        <div className="sidebar-user" style={{ marginBottom: 10 }}>
           <div className="sidebar-avatar" style={{ background: "rgba(229,92,92,.2)", color: "var(--red)" }}>A</div>
           <div><div className="sidebar-user-name">Admin</div><div className="sidebar-user-role">Midnight Pick</div></div>
         </div>
+        <button className="sidebar-link" style={{ width: "100%", borderLeft: "3px solid transparent", color: "var(--cream-65)" }} onClick={onLogout}>
+          <i className="fa fa-sign-out-alt s-icon" /><span>Log Out</span>
+        </button>
       </div>
     </aside>
   );
@@ -862,6 +881,7 @@ function Sidebar({ section, setSection }) {
 // ── App ────────────────────────────────────────────────
 function AdminDashboard() {
   const [section, setSection] = useState("overview");
+  const [logoutOpen, setLogoutOpen] = useState(false);
 
   const titles = {
     overview: "Overview", orders: "Orders", customers: "Customers",
@@ -897,27 +917,22 @@ function AdminDashboard() {
   return (
     <>
       <div className="dash-layout">
-        <Sidebar section={section} setSection={setSection} />
+        <Sidebar section={section} setSection={setSection} onLogout={() => setLogoutOpen(true)} />
         <div className="dash-main">
-          <header className="topbar">
-            <img src="assets/logo.png" alt="Midnight Pick" className="topbar-logo" />
-            <span className="topbar-title">{titles[section]}</span>
-          </header>
           <main className="dash-content">
             {render()}
           </main>
         </div>
       </div>
-      <nav className="tabbar">
-        <div className="tabbar-inner">
-          {adminTabs.map(t => (
-            <button key={t.id} className={`tab-item ${section === t.id ? "active" : ""}`} onClick={() => setSection(t.id)}>
-              <span className="tab-icon"><i className={`fa ${t.icon}`} /></span>
-              <span>{t.label}</span>
-            </button>
-          ))}
-        </div>
-      </nav>
+      {logoutOpen && (
+        <Sheet
+          title="Log out?"
+          body="You'll be signed out of the admin dashboard."
+          confirmLabel="Log Out"
+          onConfirm={() => { window.location.href = "index.html"; }}
+          onClose={() => setLogoutOpen(false)}
+        />
+      )}
     </>
   );
 }
