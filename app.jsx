@@ -896,7 +896,7 @@ function Footer({ onTrack }) {
             <a href="#" aria-label="X/Twitter">{SocialIcons.x}</a>
             <a href="#" aria-label="Instagram">{SocialIcons.ig}</a>
             <a href="#" aria-label="Facebook">{SocialIcons.fb}</a>
-            <a href="https://wa.me/" aria-label="WhatsApp">{SocialIcons.wa}</a>
+            <a href="https://wa.me/8801829531588" aria-label="WhatsApp">{SocialIcons.wa}</a>
           </div>
         </div>
         <div>
@@ -974,13 +974,16 @@ function StickyCart({ cartCount, onShop }) {
 // ----------------- app -----------------
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
-  const [cart, setCart] = useState([]);
+  const [cart, setCart] = useState(() => {
+    try { return JSON.parse(sessionStorage.getItem("mp_cart") || "[]"); } catch { return []; }
+  });
   const [toasts, setToasts] = useState([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [trackOpen, setTrackOpen] = useState(false);
   const [authOpen,  setAuthOpen]  = useState(false);
 
   useEffect(() => {applyPalette(t.palette);}, [t.palette]);
+  useEffect(() => { sessionStorage.setItem("mp_cart", JSON.stringify(cart)); }, [cart]);
 
   const addToCart = (p) => {
     setCart((c) => [...c, p]);

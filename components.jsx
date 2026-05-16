@@ -588,7 +588,7 @@ function SubConfirmation({ plan, freq, form, onBackToShop }) {
       </div>
 
       <button className="sub-cta-btn" onClick={onBackToShop}>Back to Shop</button>
-      <button className="sub-back-btn">Manage Subscription</button>
+      <button className="sub-back-btn" onClick={() => { window.location.href = "dashboard-user.html"; }}>Manage Subscription</button>
     </div>
   );
 }
@@ -872,13 +872,18 @@ function AuthModal({ open, onClose }) {
   const [submitting, setSubmitting] = React.useState(false);
   const [form, setForm] = React.useState({ name: "", email: "", password: "", password2: "" });
   const [errors, setErrors] = React.useState({});
+  const [googleMsg,    setGoogleMsg]    = React.useState(false);
+  const [forgotEmail,  setForgotEmail]  = React.useState("");
+  const [forgotStatus, setForgotStatus] = React.useState("idle");
 
   React.useEffect(() => {
     if (open) {
+      const remembered = localStorage.getItem("mp_remembered_email");
       setTab("login"); setPhase("splash");
-      setForm({ name: "", email: "", password: "", password2: "" });
+      setForm({ name: "", email: remembered || "", password: "", password2: "" });
       setErrors({}); setSubmitting(false);
-      setShowPass(false); setShowPass2(false); setRemember(false);
+      setShowPass(false); setShowPass2(false); setRemember(!!remembered);
+      setGoogleMsg(false); setForgotEmail(""); setForgotStatus("idle");
     }
   }, [open]);
 
@@ -899,6 +904,7 @@ function AuthModal({ open, onClose }) {
     setErrors({});
     setForm({ name: "", email: "", password: "", password2: "" });
     setShowPass(false); setShowPass2(false);
+    setGoogleMsg(false);
   };
 
   const validate = () => {
@@ -923,6 +929,11 @@ function AuthModal({ open, onClose }) {
           (a) => a.email === form.email.trim().toLowerCase() && a.password === form.password
         );
         if (account) {
+          if (remember) {
+            localStorage.setItem("mp_remembered_email", form.email.trim().toLowerCase());
+          } else {
+            localStorage.removeItem("mp_remembered_email");
+          }
           sessionStorage.setItem("mp_role", account.role);
           window.location.href = window.innerWidth < 768
             ? "dashboard-mobile.html"
@@ -941,129 +952,188 @@ function AuthModal({ open, onClose }) {
   };
 
   const formPane = (
-    <div className={`auth-form-pane${phase === "form" ? " auth-form-pane--visible" : ""}`}>
+    <div className={`auth-form-pane${(phase === "form" || phase === "forgot") ? " auth-form-pane--visible" : ""}`}>
       <button className="auth-close-btn" onClick={onClose} aria-label="Close">
         <CloseIcon size={16} />
       </button>
-      {phase === "form" && (
-        <button className="auth-back-btn" onClick={() => setPhase("splash")} aria-label="Back">
+      {(phase === "form" || phase === "forgot") && (
+        <button className="auth-back-btn" onClick={() => setPhase(phase === "forgot" ? "form" : "splash")} aria-label="Back">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <polyline points="15 18 9 12 15 6"/>
           </svg>
         </button>
       )}
 
-      <div className="auth-tabs">
-        <button className={`auth-tab-btn${tab === "login" ? " active" : ""}`} onClick={() => switchTab("login")}>Login</button>
-        <button className={`auth-tab-btn${tab === "signup" ? " active" : ""}`} onClick={() => switchTab("signup")}>Sign Up</button>
-      </div>
-
-      <button className="auth-google-btn" type="button" onClick={() => { /* TODO: Google OAuth */ }}>
-        <GoogleIcon size={18} />
-        <span>Continue with Google</span>
-      </button>
-
-      <div className="auth-divider"><span>or</span></div>
-
-      <form className="auth-form" onSubmit={handleSubmit} noValidate>
-        {tab === "signup" && (
-          <div className="auth-field">
-            <label className="auth-label">Full Name</label>
-            <div className="auth-input-wrap">
-              <i className="fa-solid fa-user auth-input-icon" aria-hidden="true" />
-              <input className={`auth-input${errors.name ? " error" : ""}`} type="text" placeholder="Your full name" value={form.name} onChange={set("name")} autoComplete="name" />
-            </div>
-            {errors.name && <span className="auth-field-err">{errors.name}</span>}
-          </div>
-        )}
-
-        <div className="auth-field">
-          <label className="auth-label">Email Address</label>
-          <div className="auth-input-wrap">
-            <i className="fa-solid fa-envelope auth-input-icon" aria-hidden="true" />
-            <input className={`auth-input${errors.email ? " error" : ""}`} type="email" placeholder="Enter your email address" value={form.email} onChange={set("email")} autoComplete="email" />
-          </div>
-          {errors.email && <span className="auth-field-err">{errors.email}</span>}
-        </div>
-
-        <div className="auth-field">
-          <label className="auth-label">Password</label>
-          <div className="auth-input-wrap">
-            <i className="fa-solid fa-lock auth-input-icon" aria-hidden="true" />
-            <input
-              className={`auth-input auth-input--pass${errors.password ? " error" : ""}`}
-              type={showPass ? "text" : "password"}
-              placeholder="Enter your password"
-              value={form.password}
-              onChange={set("password")}
-              autoComplete={tab === "login" ? "current-password" : "new-password"}
-            />
-            <button type="button" className="auth-eye-btn" onClick={() => setShowPass((v) => !v)} aria-label={showPass ? "Hide password" : "Show password"}>
-              <EyeIcon size={15} open={showPass} />
+      {phase === "forgot" ? (
+        forgotStatus === "sent" ? (
+          <div style={{ textAlign: "center", padding: "16px 0" }}>
+            <i className="fa-solid fa-circle-check" style={{ fontSize: 32, color: "#4CAF84", marginBottom: 12, display: "block" }} aria-hidden="true" />
+            <h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 8 }}>Check your inbox</h3>
+            <p style={{ fontSize: 13, color: "rgba(87,31,41,.65)", lineHeight: 1.5 }}>
+              If <strong>{forgotEmail}</strong> is registered, a reset link is on its way.
+            </p>
+            <button className="auth-submit-btn" style={{ marginTop: 20 }} onClick={() => setPhase("form")}>
+              Back to Login
             </button>
           </div>
-          {errors.password && <span className="auth-field-err">{errors.password}</span>}
-        </div>
-
-        {tab === "signup" && (
-          <div className="auth-field">
-            <label className="auth-label">Confirm Password</label>
-            <div className="auth-input-wrap">
-              <i className="fa-solid fa-lock auth-input-icon" aria-hidden="true" />
-              <input
-                className={`auth-input auth-input--pass${errors.password2 ? " error" : ""}`}
-                type={showPass2 ? "text" : "password"}
-                placeholder="Repeat your password"
-                value={form.password2}
-                onChange={set("password2")}
-                autoComplete="new-password"
-              />
-              <button type="button" className="auth-eye-btn" onClick={() => setShowPass2((v) => !v)} aria-label={showPass2 ? "Hide password" : "Show password"}>
-                <EyeIcon size={15} open={showPass2} />
-              </button>
+        ) : (
+          <>
+            <div className="auth-tabs" style={{ marginBottom: 4 }}>
+              <span style={{ fontWeight: 700, fontSize: 15 }}>Reset Password</span>
             </div>
-            {errors.password2 && <span className="auth-field-err">{errors.password2}</span>}
+            <p style={{ fontSize: 13, color: "rgba(87,31,41,.65)", margin: "0 0 20px", lineHeight: 1.5 }}>
+              Enter your email and we'll send a reset link.
+            </p>
+            <div className="auth-field">
+              <label className="auth-label">Email Address</label>
+              <div className="auth-input-wrap">
+                <i className="fa-solid fa-envelope auth-input-icon" aria-hidden="true" />
+                <input
+                  className="auth-input"
+                  type="email"
+                  placeholder="Enter your email address"
+                  value={forgotEmail}
+                  onChange={(e) => setForgotEmail(e.target.value)}
+                  autoComplete="email"
+                  autoFocus
+                />
+              </div>
+            </div>
+            <button
+              className={`auth-submit-btn${forgotStatus === "loading" ? " loading" : ""}`}
+              disabled={forgotStatus === "loading" || !forgotEmail.trim()}
+              onClick={() => { setForgotStatus("loading"); setTimeout(() => setForgotStatus("sent"), 1000); }}
+            >
+              {forgotStatus === "loading" ? <span className="sub-spinner" aria-hidden="true" /> : "Send Reset Link"}
+            </button>
+          </>
+        )
+      ) : (
+        <>
+          <div className="auth-tabs">
+            <button className={`auth-tab-btn${tab === "login" ? " active" : ""}`} onClick={() => switchTab("login")}>Login</button>
+            <button className={`auth-tab-btn${tab === "signup" ? " active" : ""}`} onClick={() => switchTab("signup")}>Sign Up</button>
           </div>
-        )}
 
-        {tab === "login" && (
-          <div className="auth-meta-row">
-            <label className="auth-remember-label">
-              <button
-                type="button"
-                role="checkbox"
-                aria-checked={remember}
-                className={`auth-checkbox${remember ? " checked" : ""}`}
-                onClick={() => setRemember((v) => !v)}
-              >
-                {remember && <i className="fa-solid fa-check" style={{ fontSize: 8 }} aria-hidden="true" />}
-              </button>
-              Remember Me
-            </label>
-            <a href="#" className="auth-forgot-link">Forgot Password?</a>
-          </div>
-        )}
+          <button className="auth-google-btn" type="button" onClick={() => setGoogleMsg(true)}>
+            <GoogleIcon size={18} />
+            <span>Continue with Google</span>
+          </button>
+          {googleMsg && (
+            <p style={{ fontSize: 12, color: "rgba(87,31,41,.6)", margin: "-4px 0 8px", textAlign: "center" }}>
+              Google sign-in coming soon.
+            </p>
+          )}
 
-        {errors.server && (
-          <div className="auth-server-err">
-            <i className="fa-solid fa-circle-exclamation" aria-hidden="true" style={{ marginRight: 6 }} />
-            {errors.server}
-          </div>
-        )}
+          <div className="auth-divider"><span>or</span></div>
 
-        <button type="submit" className={`auth-submit-btn${submitting ? " loading" : ""}`} disabled={submitting}>
-          {submitting
-            ? <span className="sub-spinner" aria-hidden="true" />
-            : tab === "login" ? "Login" : "Create Account"}
-        </button>
-      </form>
+          <form className="auth-form" onSubmit={handleSubmit} noValidate>
+            {tab === "signup" && (
+              <div className="auth-field">
+                <label className="auth-label">Full Name</label>
+                <div className="auth-input-wrap">
+                  <i className="fa-solid fa-user auth-input-icon" aria-hidden="true" />
+                  <input className={`auth-input${errors.name ? " error" : ""}`} type="text" placeholder="Your full name" value={form.name} onChange={set("name")} autoComplete="name" />
+                </div>
+                {errors.name && <span className="auth-field-err">{errors.name}</span>}
+              </div>
+            )}
 
-      <p className="auth-switch-row">
-        {tab === "login" ? "Don't have an account?" : "Already have an account?"}{" "}
-        <button className="auth-switch-link" onClick={() => switchTab(tab === "login" ? "signup" : "login")}>
-          {tab === "login" ? "Sign Up" : "Login"}
-        </button>
-      </p>
+            <div className="auth-field">
+              <label className="auth-label">Email Address</label>
+              <div className="auth-input-wrap">
+                <i className="fa-solid fa-envelope auth-input-icon" aria-hidden="true" />
+                <input className={`auth-input${errors.email ? " error" : ""}`} type="email" placeholder="Enter your email address" value={form.email} onChange={set("email")} autoComplete="email" />
+              </div>
+              {errors.email && <span className="auth-field-err">{errors.email}</span>}
+            </div>
+
+            <div className="auth-field">
+              <label className="auth-label">Password</label>
+              <div className="auth-input-wrap">
+                <i className="fa-solid fa-lock auth-input-icon" aria-hidden="true" />
+                <input
+                  className={`auth-input auth-input--pass${errors.password ? " error" : ""}`}
+                  type={showPass ? "text" : "password"}
+                  placeholder="Enter your password"
+                  value={form.password}
+                  onChange={set("password")}
+                  autoComplete={tab === "login" ? "current-password" : "new-password"}
+                />
+                <button type="button" className="auth-eye-btn" onClick={() => setShowPass((v) => !v)} aria-label={showPass ? "Hide password" : "Show password"}>
+                  <EyeIcon size={15} open={showPass} />
+                </button>
+              </div>
+              {errors.password && <span className="auth-field-err">{errors.password}</span>}
+            </div>
+
+            {tab === "signup" && (
+              <div className="auth-field">
+                <label className="auth-label">Confirm Password</label>
+                <div className="auth-input-wrap">
+                  <i className="fa-solid fa-lock auth-input-icon" aria-hidden="true" />
+                  <input
+                    className={`auth-input auth-input--pass${errors.password2 ? " error" : ""}`}
+                    type={showPass2 ? "text" : "password"}
+                    placeholder="Repeat your password"
+                    value={form.password2}
+                    onChange={set("password2")}
+                    autoComplete="new-password"
+                  />
+                  <button type="button" className="auth-eye-btn" onClick={() => setShowPass2((v) => !v)} aria-label={showPass2 ? "Hide password" : "Show password"}>
+                    <EyeIcon size={15} open={showPass2} />
+                  </button>
+                </div>
+                {errors.password2 && <span className="auth-field-err">{errors.password2}</span>}
+              </div>
+            )}
+
+            {tab === "login" && (
+              <div className="auth-meta-row">
+                <label className="auth-remember-label">
+                  <button
+                    type="button"
+                    role="checkbox"
+                    aria-checked={remember}
+                    className={`auth-checkbox${remember ? " checked" : ""}`}
+                    onClick={() => setRemember((v) => !v)}
+                  >
+                    {remember && <i className="fa-solid fa-check" style={{ fontSize: 8 }} aria-hidden="true" />}
+                  </button>
+                  Remember Me
+                </label>
+                <a
+                  href="#"
+                  className="auth-forgot-link"
+                  onClick={(e) => { e.preventDefault(); setPhase("forgot"); setForgotEmail(form.email || ""); setForgotStatus("idle"); }}
+                >
+                  Forgot Password?
+                </a>
+              </div>
+            )}
+
+            {errors.server && (
+              <div className="auth-server-err">
+                <i className="fa-solid fa-circle-exclamation" aria-hidden="true" style={{ marginRight: 6 }} />
+                {errors.server}
+              </div>
+            )}
+
+            <button type="submit" className={`auth-submit-btn${submitting ? " loading" : ""}`} disabled={submitting}>
+              {submitting
+                ? <span className="sub-spinner" aria-hidden="true" />
+                : tab === "login" ? "Login" : "Create Account"}
+            </button>
+          </form>
+
+          <p className="auth-switch-row">
+            {tab === "login" ? "Don't have an account?" : "Already have an account?"}{" "}
+            <button className="auth-switch-link" onClick={() => switchTab(tab === "login" ? "signup" : "login")}>
+              {tab === "login" ? "Sign Up" : "Login"}
+            </button>
+          </p>
+        </>
+      )}
     </div>
   );
 

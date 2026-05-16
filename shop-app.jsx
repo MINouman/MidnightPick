@@ -72,7 +72,7 @@ const SHOP_PRODUCTS = [
 ];
 
 // ---- nav ----
-function ShopNav({ cartCount, onSubscribe }) {
+function ShopNav({ cartCount, onSubscribe, onSignIn, onCart }) {
   const [scrolled, setScrolled] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -115,11 +115,11 @@ function ShopNav({ cartCount, onSubscribe }) {
               <i className="fa-solid fa-bag-shopping" aria-hidden="true" />
               Shop
             </a>
-            <button className="nav-signin-btn">
+            <button className="nav-signin-btn" onClick={onSignIn}>
               <i className="fa-solid fa-right-to-bracket" aria-hidden="true" />
               Sign In
             </button>
-            <button className="nav-cart-btn" aria-label={`Cart — ${cartCount} item${cartCount !== 1 ? "s" : ""}`}>
+            <button className="nav-cart-btn" onClick={onCart} aria-label={`Cart — ${cartCount} item${cartCount !== 1 ? "s" : ""}`}>
               <CartIcon size={19} />
               <span className="nav-cart-badge">{cartCount}</span>
             </button>
@@ -255,16 +255,90 @@ function ShopNewsletter() {
   );
 }
 
+// ---- cart panel ----
+function CartPanel({ cart, onClose }) {
+  const grouped = Object.values(
+    cart.reduce((acc, item) => {
+      const key = `${item.id}__${item.pack}`;
+      if (!acc[key]) acc[key] = { ...item, qty: 0 };
+      acc[key].qty += item.qty;
+      return acc;
+    }, {})
+  );
+  const total = grouped.reduce((s, i) => s + i.price * i.qty, 0);
+  const waMsg = grouped.map(i => `${i.name} (${i.pack}) ×${i.qty}`).join(", ");
+  const waUrl = `https://wa.me/8801829531588?text=${encodeURIComponent(`Hi! I'd like to order: ${waMsg}. Total: ৳${total.toLocaleString()}`)}`;
+
+  return (
+    <div
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", zIndex: 1000, display: "flex", justifyContent: "flex-end" }}
+      onClick={(e) => e.target === e.currentTarget && onClose()}
+    >
+      <div style={{ width: "min(380px, 100vw)", background: "#FFFDF7", height: "100%", display: "flex", flexDirection: "column", boxShadow: "-4px 0 24px rgba(0,0,0,.18)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "18px 20px", borderBottom: "1px solid rgba(87,31,41,.12)" }}>
+          <span style={{ fontWeight: 700, fontSize: 16, color: "#571F29" }}>
+            Cart ({grouped.length} item{grouped.length !== 1 ? "s" : ""})
+          </span>
+          <button onClick={onClose} aria-label="Close cart" style={{ background: "none", border: "none", cursor: "pointer", color: "#571F29", padding: 4 }}>
+            <CloseIcon size={18} />
+          </button>
+        </div>
+
+        <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
+          {grouped.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "48px 0", color: "rgba(87,31,41,.5)" }}>
+              <i className="fa-solid fa-bag-shopping" style={{ fontSize: 36, marginBottom: 12, display: "block" }} aria-hidden="true" />
+              <p style={{ margin: 0, fontSize: 14 }}>Your cart is empty.</p>
+            </div>
+          ) : grouped.map((item, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "12px 0", borderBottom: "1px solid rgba(87,31,41,.08)" }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: "#571F29" }}>{item.name}</div>
+                <div style={{ fontSize: 12, color: "rgba(87,31,41,.6)", marginTop: 2 }}>{item.pack} × {item.qty}</div>
+              </div>
+              <span style={{ fontWeight: 700, color: "#FF9100", fontSize: 15 }}>৳{(item.price * item.qty).toLocaleString()}</span>
+            </div>
+          ))}
+        </div>
+
+        {grouped.length > 0 && (
+          <div style={{ padding: 20, borderTop: "1px solid rgba(87,31,41,.12)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 16, color: "#571F29", marginBottom: 16 }}>
+              <span>Total</span>
+              <span style={{ color: "#FF9100" }}>৳{total.toLocaleString()}</span>
+            </div>
+            <a
+              href={waUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%", padding: "13px 0", background: "#25D366", color: "#fff", borderRadius: 8, fontWeight: 700, fontSize: 14, textDecoration: "none" }}
+            >
+              <i className="fa-brands fa-whatsapp" style={{ fontSize: 16 }} aria-hidden="true" />
+              Order via WhatsApp
+            </a>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ---- main shop page ----
 function ShopPage() {
   const [activeId, setActiveId] = useState("blend");
   const [activePack, setActivePack] = useState(SHOP_PRODUCTS[0].defaultPack);
   const [qty, setQty] = useState(1);
-  const [cart, setCart] = useState([]);
+  const [cart, setCart] = useState(() => {
+    try { return JSON.parse(sessionStorage.getItem("mp_cart") || "[]"); } catch { return []; }
+  });
   const [toasts, setToasts] = useState([]);
   const [addedAnim, setAddedAnim] = useState(false);
   const [imgKey, setImgKey] = useState(0);
   const [modalOpen, setModalOpen] = useState(false);
+  const [authOpen,  setAuthOpen]  = useState(false);
+  const [cartOpen,  setCartOpen]  = useState(false);
+
+  useEffect(() => { sessionStorage.setItem("mp_cart", JSON.stringify(cart)); }, [cart]);
 
   const product = SHOP_PRODUCTS.find((p) => p.id === activeId);
   const pack = product.packs[activePack];
@@ -287,12 +361,17 @@ function ShopPage() {
     setTimeout(() => setAddedAnim(false), 1400);
   };
 
+  const buyNow = () => {
+    const msg = `Hi! I'd like to buy: ${product.name} (${pack.label}) ×${qty}. Total: ৳${(pack.price * qty).toLocaleString()}`;
+    window.open(`https://wa.me/8801829531588?text=${encodeURIComponent(msg)}`, "_blank", "noopener,noreferrer");
+  };
+
   const totalPrice = pack.price * qty;
   const totalOld = pack.old ? pack.old * qty : null;
 
   return (
     <div className="shop-page">
-      <ShopNav cartCount={cart.length} onSubscribe={() => setModalOpen(true)} />
+      <ShopNav cartCount={cart.length} onSubscribe={() => setModalOpen(true)} onSignIn={() => setAuthOpen(true)} onCart={() => setCartOpen(true)} />
 
       {/* main layout */}
       <div className="shop-layout">
@@ -353,7 +432,7 @@ function ShopPage() {
           </div>
 
           {/* buy now */}
-          <button className="shop-buy-btn">Buy Now</button>
+          <button className="shop-buy-btn" onClick={buyNow}>Buy Now</button>
 
           {/* specs grid */}
           <div className="shop-specs">
@@ -410,6 +489,8 @@ function ShopPage() {
       <ShopNewsletter />
 
       <ShopToastStack toasts={toasts} />
+      {cartOpen && <CartPanel cart={cart} onClose={() => setCartOpen(false)} />}
+      <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} />
       <SubscribeModal open={modalOpen} onClose={() => setModalOpen(false)} />
     </div>
   );
