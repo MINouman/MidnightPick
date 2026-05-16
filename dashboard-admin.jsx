@@ -96,7 +96,7 @@ function RevenueChart() {
       {days.map((d, i) => (
         <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "flex-end", gap: 0, height: "100%" }}>
           <div style={{ borderRadius: "2px 2px 0 0", background: "var(--orange)", height: `${Math.round((d.sub / maxVal) * 100)}%`, opacity: .85 }} />
-          <div style={{ borderRadius: 0, background: "var(--cream-15)", height: `${Math.round(((d.total - d.sub) / maxVal) * 100)}%` }} />
+          <div style={{ borderRadius: 0, background: "rgba(44,24,16,.14)", height: `${Math.round(((d.total - d.sub) / maxVal) * 100)}%` }} />
         </div>
       ))}
     </div>
@@ -120,7 +120,7 @@ function Overview({ setSection }) {
       <div className="page-sub" style={{ marginBottom: 20 }}>Friday, 16 May 2026</div>
 
       {/* Stat row */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 16 }}>
+      <div className="stat-row" style={{ marginBottom: 16 }}>
         {stats.map((s, i) => (
           <div key={i} className="stat-card" style={{ cursor: s.badge ? "pointer" : "default" }} onClick={() => s.badge && setSection(i >= 4 ? (i === 4 ? "crew" : "points") : "overview")}>
             <div className="stat-label" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -137,7 +137,7 @@ function Overview({ setSection }) {
         <div className="eyebrow mb12">Revenue — Last 30 Days</div>
         <RevenueChart />
         <div className="row mt12" style={{ gap: 16 }}>
-          <div className="row" style={{ gap: 6 }}><div style={{ width: 10, height: 10, borderRadius: 2, background: "var(--cream-15)" }} /><span className="text-xs text-muted">Total revenue</span></div>
+          <div className="row" style={{ gap: 6 }}><div style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(44,24,16,.14)" }} /><span className="text-xs text-muted">Total revenue</span></div>
           <div className="row" style={{ gap: 6 }}><div style={{ width: 10, height: 10, borderRadius: 2, background: "var(--orange)", opacity: .85 }} /><span className="text-xs text-muted">Subscription revenue</span></div>
         </div>
       </SectionCard>
@@ -390,7 +390,7 @@ function Subscriptions() {
             </thead>
             <tbody>
               {filtered.length === 0 ? (
-                <tr><td colSpan={6} style={{ textAlign: "center", padding: 32, color: "var(--cream-65)" }}>No {subTab.toLowerCase()} subscriptions.</td></tr>
+                <tr><td colSpan={6} style={{ textAlign: "center", padding: 32, color: "var(--text-65)" }}>No {subTab.toLowerCase()} subscriptions.</td></tr>
               ) : filtered.map((s, i) => (
                 <tr key={i}>
                   <td style={{ fontWeight: 600 }}>{s.customer}</td>
@@ -584,9 +584,9 @@ function CrewManagement() {
                 </div>
                 <div className="text-xs text-muted">{a.date}</div>
               </div>
-              <div className="card mb12" style={{ background: "rgba(247,227,201,.04)", borderColor: "var(--cream-15)" }}>
+              <div className="card mb12" style={{ background: "var(--orange-faint)", borderColor: "rgba(255,145,0,.25)" }}>
                 <div className="eyebrow mb6">Why do you drink Midnight Pick?</div>
-                <div className="text-sm" style={{ lineHeight: 1.6, color: "var(--cream-65)" }}>{a.why}</div>
+                <div className="text-sm" style={{ lineHeight: 1.6, color: "var(--text-65)" }}>{a.why}</div>
               </div>
               <div className="row" style={{ gap: 10 }}>
                 <button className="btn btn-primary" onClick={() => setApproved(prev => [...prev, a.name])}>
@@ -739,7 +739,7 @@ function Financials() {
       </div>
 
       {/* Summary cards */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 16 }}>
+      <div className="stat-row" style={{ marginBottom: 16 }}>
         <div className="stat-card"><div className="stat-label">Gross Revenue</div><div className="stat-value">৳{fin.gross.toLocaleString()}</div></div>
         <div className="stat-card"><div className="stat-label">Total Discounts</div><div className="stat-value" style={{ color: "var(--red)" }}>−৳{fin.discounts.toLocaleString()}</div></div>
         <div className="stat-card"><div className="stat-label">Net Revenue</div><div className="stat-value">৳{fin.net.toLocaleString()}</div></div>
@@ -886,23 +886,39 @@ function AdminDashboard() {
     }
   }
 
+  const adminTabs = [
+    { id: "overview",   icon: "fa-chart-pie",  label: "Overview" },
+    { id: "orders",     icon: "fa-box",        label: "Orders" },
+    { id: "customers",  icon: "fa-users",      label: "Customers" },
+    { id: "crew",       icon: "fa-fire",       label: "Crew" },
+    { id: "settings",   icon: "fa-cog",        label: "Settings" },
+  ];
+
   return (
-    <div className="dash-layout">
-      <Sidebar section={section} setSection={setSection} />
-      <div className="dash-main">
-        {/* Mobile simplified top bar */}
-        <header className="topbar">
-          <img src="assets/logo.png" alt="Midnight Pick" className="topbar-logo" />
-          <span className="topbar-title">Admin — {titles[section]}</span>
-          <div className="topbar-right">
-            <button className="icon-btn"><i className="fa fa-bars" /></button>
-          </div>
-        </header>
-        <main className="dash-content">
-          {render()}
-        </main>
+    <>
+      <div className="dash-layout">
+        <Sidebar section={section} setSection={setSection} />
+        <div className="dash-main">
+          <header className="topbar">
+            <img src="assets/logo.png" alt="Midnight Pick" className="topbar-logo" />
+            <span className="topbar-title">{titles[section]}</span>
+          </header>
+          <main className="dash-content">
+            {render()}
+          </main>
+        </div>
       </div>
-    </div>
+      <nav className="tabbar">
+        <div className="tabbar-inner">
+          {adminTabs.map(t => (
+            <button key={t.id} className={`tab-item ${section === t.id ? "active" : ""}`} onClick={() => setSection(t.id)}>
+              <span className="tab-icon"><i className={`fa ${t.icon}`} /></span>
+              <span>{t.label}</span>
+            </button>
+          ))}
+        </div>
+      </nav>
+    </>
   );
 }
 

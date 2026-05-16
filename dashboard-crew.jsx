@@ -409,7 +409,7 @@ function CrewOverview({ setCrewTab }) {
       {/* Quick stats strip */}
       <div className="card">
         <div className="eyebrow mb10">Quick Stats</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, textAlign: "center" }}>
+        <div className="grid-3" style={{ textAlign: "center" }}>
           <div>
             <div style={{ fontSize: 18, fontWeight: 700, color: "var(--orange)" }}>{ordersGenerated}</div>
             <div className="text-xs text-muted mt4">Orders generated</div>
@@ -527,7 +527,7 @@ function CrewStatus() {
           </div>
           {m.status === "done" && <i className="fa fa-check-circle" style={{ color: "var(--green)", fontSize: 18, flexShrink: 0 }} />}
           {m.status === "inprogress" && <i className="fa fa-spinner fa-spin" style={{ color: "var(--orange)", fontSize: 16, flexShrink: 0 }} />}
-          {m.status === "locked" && <i className="fa fa-lock" style={{ color: "var(--cream-30)", fontSize: 16, flexShrink: 0 }} />}
+          {m.status === "locked" && <i className="fa fa-lock" style={{ color: "var(--text-35)", fontSize: 16, flexShrink: 0 }} />}
         </div>
       ))}
     </div>
@@ -699,30 +699,33 @@ function CrewDashboard() {
   }
 
   return (
-    <div className="dash-layout">
-      <Sidebar tab={tab} setTab={setTab} />
-      <div className="dash-main">
-        <header className="topbar">
-          <img src="assets/logo.png" alt="Midnight Pick" className="topbar-logo" />
-          <span className="topbar-title">{titles[tab]}</span>
-          <div className="topbar-right">
-            <button className="icon-btn"><i className="fa fa-bell" /><span className="notif-dot" /></button>
-          </div>
-        </header>
-        <main className="dash-content">
-          <div className="dash-inner">{render()}</div>
-        </main>
-        <nav className="tabbar">
-          <div className="tabbar-inner">
-            {tabs.map(t => (
-              <button key={t.id} className={`tab-item ${tab === t.id ? "active" : ""}`} onClick={() => setTab(t.id)}>
-                <i className={`fa ${t.icon} tab-icon`} /><span>{t.label}</span>
-              </button>
-            ))}
-          </div>
-        </nav>
+    <>
+      <div className="dash-layout">
+        <Sidebar tab={tab} setTab={setTab} />
+        <div className="dash-main">
+          <header className="topbar">
+            <img src="assets/logo.png" alt="Midnight Pick" className="topbar-logo" />
+            <span className="topbar-title">{titles[tab]}</span>
+            <div className="topbar-right">
+              <button className="icon-btn"><i className="fa fa-bell" /><span className="notif-dot" /></button>
+            </div>
+          </header>
+          <main className="dash-content">
+            <div className="dash-inner">{render()}</div>
+          </main>
+        </div>
       </div>
-    </div>
+      <nav className="tabbar">
+        <div className="tabbar-inner">
+          {tabs.map(t => (
+            <button key={t.id} className={`tab-item ${tab === t.id ? "active" : ""}`} onClick={() => setTab(t.id)}>
+              <span className="tab-icon"><i className={`fa ${t.icon}`} /></span>
+              <span>{t.label}</span>
+            </button>
+          ))}
+        </div>
+      </nav>
+    </>
   );
 }
 

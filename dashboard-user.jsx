@@ -694,42 +694,36 @@ function UserDashboard() {
   }
 
   return (
-    <div className="dash-layout">
-      <Sidebar tab={tab} setTab={setTab} />
-
-      <div className="dash-main">
-        {/* Mobile top bar */}
-        <header className="topbar">
-          <img src="assets/logo.png" alt="Midnight Pick" className="topbar-logo" />
-          <span className="topbar-title">{tabTitles[tab]}</span>
-          <div className="topbar-right">
-            <button className="icon-btn">
-              <i className="fa fa-bell" />
-              <span className="notif-dot" />
-            </button>
-          </div>
-        </header>
-
-        {/* Page content */}
-        <main className="dash-content">
-          <div className="dash-inner">
-            {renderTab()}
-          </div>
-        </main>
-
-        {/* Mobile tab bar */}
-        <nav className="tabbar">
-          <div className="tabbar-inner">
-            {tabs.map(t => (
-              <button key={t.id} className={`tab-item ${tab === t.id ? "active" : ""}`} onClick={() => setTab(t.id)}>
-                <i className={`fa ${t.icon} tab-icon`} />
-                <span>{t.label}</span>
+    <>
+      <div className="dash-layout">
+        <Sidebar tab={tab} setTab={setTab} />
+        <div className="dash-main">
+          <header className="topbar">
+            <img src="assets/logo.png" alt="Midnight Pick" className="topbar-logo" />
+            <span className="topbar-title">{tabTitles[tab]}</span>
+            <div className="topbar-right">
+              <button className="icon-btn">
+                <i className="fa fa-bell" />
+                <span className="notif-dot" />
               </button>
-            ))}
-          </div>
-        </nav>
+            </div>
+          </header>
+          <main className="dash-content">
+            <div className="dash-inner">{renderTab()}</div>
+          </main>
+        </div>
       </div>
-    </div>
+      <nav className="tabbar">
+        <div className="tabbar-inner">
+          {tabs.map(t => (
+            <button key={t.id} className={`tab-item ${tab === t.id ? "active" : ""}`} onClick={() => setTab(t.id)}>
+              <span className="tab-icon"><i className={`fa ${t.icon}`} /></span>
+              <span>{t.label}</span>
+            </button>
+          ))}
+        </div>
+      </nav>
+    </>
   );
 }
 
