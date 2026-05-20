@@ -351,6 +351,15 @@ body {
   border-bottom: 1px solid var(--cream-10);
   color: var(--cream);
 }
+.slide-panel .input-label { color: var(--cream-65); }
+.slide-panel .input-note  { color: var(--cream-30); }
+.slide-panel .input  { background: rgba(247,227,201,.08); border-color: rgba(247,227,201,.18); color: var(--cream); }
+.slide-panel .input::placeholder { color: rgba(247,227,201,.3); }
+.slide-panel .input:focus { border-color: var(--orange); }
+.slide-panel .select { background: rgba(247,227,201,.08); border-color: rgba(247,227,201,.18); color: var(--cream); colorScheme: dark; }
+.slide-panel .select option { background: #2C1810; color: var(--cream); }
+.slide-panel .divider { background: var(--cream-10); }
+.slide-panel label { color: var(--cream-65); }
 
 /* ── Misc ───────────────────────────────── */
 .divider { height: 1px; background: var(--text-08); margin: 16px 0; }

@@ -11,6 +11,14 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous" />
   <link rel="stylesheet" href="styles.css" />
 
+  <script>
+    window.MP_CONFIG = { googleClientId: "441978018594-rgubekigfvjlpp62utifk2bj6or5hfrq.apps.googleusercontent.com" };
+    window.onGoogleLibraryLoad = function() {
+      if (typeof window._gsiInit === 'function') window._gsiInit();
+      else window._gsiReady = true;
+    };
+  </script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
   <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
   <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>

@@ -3,11 +3,16 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
+<meta http-equiv="Pragma" content="no-cache"/>
+<meta http-equiv="Expires" content="0"/>
 <title>Midnight Pick — Dashboard</title>
+<link rel="icon" href="assets/logo.png" type="image/png"/>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500;700&display=swap" rel="stylesheet"/>
-<script>if(!sessionStorage.getItem('mp_role')){window.location.replace('index.html');}</script>
+<script>if(!localStorage.getItem('mp_access_token')){window.location.replace('index.html');}</script>
+<script src="mp-api.js"></script>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
@@ -30,7 +35,33 @@ button,input,select,textarea{font-family:inherit}
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const{useState,useEffect,useRef,useCallback}=React;
+const{useState,useEffect,useRef,useCallback,useContext,createContext}=React;
+
+/* ── Context ────────────────────────────────────────────── */
+const MobileCtx=createContext({
+  user:null,orders:[],addresses:[],paymentMethods:[],pointsHistory:[],
+  adminStats:null,adminOrders:[],adminCustomers:[],adminProducts:[],setAdminProducts:()=>{},
+  adminInfluencers:[],setAdminInfluencers:()=>{},
+});
+
+/* ── Helpers ─────────────────────────────────────────────── */
+function fmtDate(iso){
+  if(!iso)return'—';
+  return new Date(iso).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
+}
+function fmtStatus(s){
+  if(!s)return'—';
+  return s.charAt(0).toUpperCase()+s.slice(1);
+}
+function orderSummary(items){
+  if(!items||!items.length)return'—';
+  return items.map(i=>`${i.name} ×${i.qty}`).join(', ');
+}
+function addrString(snap){
+  if(!snap)return'—';
+  try{const s=typeof snap==='string'?JSON.parse(snap):snap;return[s.line1,s.line2,s.city].filter(Boolean).join(', ');}
+  catch(_){return String(snap);}
+}
 
 /* ── Icons ─────────────────────────────────────────────── */
 function Ic({n,size=22,color='currentColor',style:xs,strokeWidth=2}){
@@ -69,6 +100,7 @@ function Ic({n,size=22,color='currentColor',style:xs,strokeWidth=2}){
     bar:<svg {...p}><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>,
     settings:<svg {...p}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>,
     customers:<svg {...p}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
+    bolt:<svg {...p}><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>,
   };
   return paths[n]||<svg {...p}><circle cx="12" cy="12" r="3"/></svg>;
 }
@@ -86,105 +118,28 @@ const C={
 const mono={fontFamily:"'DM Mono',monospace"};
 const sans={fontFamily:"'DM Sans',system-ui,sans-serif"};
 
-/* ── Demo Accounts (login gate) ─────────────────────────── */
-const DEMO_ACCOUNTS=[
-  {email:'rafi@midnightpick.com',  password:'coffee123', role:'user',       label:'User — Rafi Islam'},
-  {email:'crew@midnightpick.com',  password:'crew123',   role:'crew',       label:'Crew — Rafi Islam'},
-  {email:'tanha@midnightpick.com', password:'tanha123',  role:'influencer', label:'Influencer — Tanha Islam'},
-  {email:'admin@midnightpick.com', password:'admin123',  role:'admin',      label:'Admin'},
-];
-
-/* ── Mock Data ───────────────────────────────────────────── */
-const USER={name:'Rafi Islam',firstName:'Rafi',phone:'01712 345678',email:'rafi@example.com',points:3450,lifetimeEarned:8200,lifetimeRedeemed:4750};
-const SUBSCRIPTION={plan:'Night Shift Plan',price:210,contents:'10× Midnight Black sachets',status:'active',nextDelivery:'June 1 – June 3',nextBilling:'July 1, 2026',countdown:16,cancelBefore:'June 25'};
-const ORDERS=[
-  {id:'ORD-00042',date:'May 14',items:'Midnight Blend 100g × 1',total:349,status:'Processing',address:'Flat 3B, House 14, Road 7, Mirpur-10, Dhaka',payment:'bKash •••• 1234',coupon:'RAFI15 applied — ৳52 off',itemList:[{name:'Midnight Blend 100g',qty:1,price:349}],pts:174},
-  {id:'ORD-00038',date:'May 3',items:'Midnight Black × 5',total:249,status:'Shipped',address:'Flat 3B, House 14, Road 7, Mirpur-10, Dhaka',payment:'bKash •••• 1234',coupon:null,itemList:[{name:'Midnight Black Sachet',qty:5,price:25}],pts:125},
-  {id:'ORD-00021',date:'Apr 20',items:'Trial Pack × 1',total:99,status:'Delivered',address:'Flat 3B, House 14, Road 7, Mirpur-10, Dhaka',payment:'Nagad •••• 5678',coupon:null,itemList:[{name:'Trial Pack',qty:1,price:99}],pts:50},
-];
-const ADDRESSES=[
-  {id:1,label:'Home',line1:'Flat 3B, House 14, Road 7',line2:'Mirpur-10, Dhaka',isDefault:true},
-  {id:2,label:'Hostel',line1:'Room 214, Hall A',line2:'University of Dhaka, Ramna',isDefault:false},
-];
-const PAYMENT_METHODS=[
-  {id:1,type:'bKash',number:'01712 345678',isDefault:true},
-  {id:2,type:'Visa',number:'•••• 4242',isDefault:false},
-];
-const POINTS_HISTORY=[
-  {date:'May 14',desc:'Order #ORD-00042',pts:174,type:'earned'},
-  {date:'May 3',desc:'Order #ORD-00038',pts:125,type:'earned'},
-  {date:'Apr 28',desc:'Referral: order placed',pts:500,type:'earned'},
-  {date:'Apr 22',desc:'Redeemed for 1 sachet',pts:1000,type:'spent'},
-  {date:'Apr 20',desc:'Order #ORD-00021',pts:50,type:'earned'},
-  {date:'Apr 15',desc:'Referral: subscription started',pts:2000,type:'earned'},
-  {date:'Mar 14',desc:'Referral: order placed',pts:500,type:'earned'},
-];
-const CREW={code:'RAFI15',discount:15,refsThisMonth:7,ptsThisMonth:3500,lifetime:23,totalUsed:23,thisMonth:7,conversion:'30%',lifetimePts:16550,foundingTarget:25000};
-const REFERRAL_ACTIVITY=[
-  {date:'May 14, 2026',type:'order',pts:500},
-  {date:'May 10, 2026',type:'subscription',pts:2000},
-  {date:'May 3, 2026',type:'order',pts:500},
-  {date:'Apr 28, 2026',type:'order',pts:500},
-  {date:'Apr 15, 2026',type:'order',pts:500},
-  {date:'Apr 10, 2026',type:'subscription',pts:2000},
-];
-const INFLUENCER={code:'TANHA10',commission:420,pending:420,orders:12};
-const COMMISSION_ROWS=[
-  {date:'May 14',orderVal:349,comm:52},
-  {date:'May 10',orderVal:699,comm:105},
-  {date:'May 3',orderVal:249,comm:37},
-  {date:'Apr 28',orderVal:349,comm:52},
-  {date:'Apr 20',orderVal:99,comm:15},
-];
-const PAYOUT_HISTORY=[
-  {month:'May 2026',amount:420,method:'01712 345678',status:'Pending'},
-  {month:'Apr 2026',amount:380,method:'01712 345678',status:'Paid'},
-  {month:'Mar 2026',amount:210,method:'01712 345678',status:'Paid'},
-];
-const ADMIN={orders:12,revenue:4200,subs:34,crew:18,pendingApps:3,pendingRedemptions:2};
-const RECENT_ORDERS=[
-  {id:'ORD-00042',customer:'Rafi Islam',items:'Midnight Blend 100g × 1',total:349,status:'Processing',coupon:'RAFI15',phone:'01712 345678'},
-  {id:'ORD-00041',customer:'Nadia Rahman',items:'Midnight Black × 10',total:249,status:'Shipped',coupon:null,phone:'01811 234567'},
-  {id:'ORD-00040',customer:'Arif Hossain',items:'Trial Pack × 2',total:198,status:'Delivered',coupon:'EID2026',phone:'01912 345678'},
-  {id:'ORD-00039',customer:'Tanha Islam',items:'Midnight Blend × 1',total:349,status:'Processing',coupon:null,phone:'01512 345678'},
-  {id:'ORD-00038',customer:'Shanto Ahmed',items:'Midnight Black × 5',total:249,status:'Delivered',coupon:null,phone:'01612 345678'},
-];
-const PENDING_APPS=[
-  {id:1,name:'Nadia Rahman',inst:'NSU · BBA Dept.',date:'May 12, 2026',why:"I've been drinking Midnight Pick every morning for 6 months and my friends are always asking where I get it. I want to share it officially and be part of something cool.",social:'@nadiax_coffee'},
-  {id:2,name:'Arif Hossain',inst:'BUET · CSE Dept.',date:'May 10, 2026',why:"As a CS student who codes late at night, Midnight Pick is literally my fuel. I've already told 20+ people about it and want to do it properly.",social:'@arif_codes'},
-  {id:3,name:'Tanha Islam',inst:'DU · Economics Dept.',date:'May 8, 2026',why:"Coffee runs our study groups. Midnight Pick is the only one we all agree on.",social:'@tanha.iu'},
-];
-const ACTIVE_CREW=[
-  {id:1,name:'Sakib Al Hassan',inst:'NSU · CSE',code:'SAKIB20',refs:5},
-  {id:2,name:'Mitu Akter',inst:'BRAC · MBA',code:'MITU15',refs:3},
-  {id:3,name:'Raihan Kabir',inst:'IUT · EEE',code:'RAIHAN12',refs:8},
-];
-const FESTIVAL_COUPONS=[
-  {id:1,code:'EID2026',type:'Percentage',discount:20,minOrder:299,used:14,cap:200,expiry:'May 31, 2026',active:true},
-  {id:2,code:'FINALS26',type:'Flat',discount:50,minOrder:199,used:31,cap:100,expiry:'Jun 15, 2026',active:true},
-];
-const INFLUENCER_CODES=[
-  {id:1,name:'Tanha Islam',code:'TANHA10',orders:12,commission:420,paid:false},
-  {id:2,name:'Shanto Ahmed',code:'SHANTO12',orders:8,commission:280,paid:true},
-];
-
 /* ── Shared Components ──────────────────────────────────── */
 function Badge({status}){
+  const s=status?status.toLowerCase():status;
   const map={
-    Processing:{bg:C.orangeFaint,color:'#CC7300'},
-    Shipped:{bg:C.blueFaint,color:C.blue},
-    Delivered:{bg:C.greenFaint,color:C.green},
-    Cancelled:{bg:C.redFaint,color:C.red},
-    Active:{bg:C.greenFaint,color:C.green},
-    Paused:{bg:'rgba(247,227,201,0.1)',color:C.mutedCard},
-    Pending:{bg:C.orangeFaint,color:C.orange},
-    Paid:{bg:C.greenFaint,color:C.green},
+    processing:{bg:C.orangeFaint,color:'#CC7300'},
+    confirmed:{bg:C.orangeFaint,color:'#CC7300'},
+    packed:{bg:C.orangeFaint,color:'#CC7300'},
+    packaged:{bg:C.orangeFaint,color:'#CC7300'},
+    shipped:{bg:C.blueFaint,color:C.blue},
+    delivered:{bg:C.greenFaint,color:C.green},
+    cancelled:{bg:C.redFaint,color:C.red},
+    active:{bg:C.greenFaint,color:C.green},
+    paused:{bg:'rgba(247,227,201,0.1)',color:C.mutedCard},
+    pending:{bg:C.orangeFaint,color:C.orange},
+    paid:{bg:C.greenFaint,color:C.green},
   };
-  const m=map[status]||{bg:'rgba(247,227,201,0.1)',color:C.mutedCard};
+  const m=map[s]||{bg:'rgba(247,227,201,0.1)',color:C.mutedCard};
+  const label=status?status.charAt(0).toUpperCase()+status.slice(1):status;
   return(
     <span style={{...mono,fontSize:10,fontWeight:700,letterSpacing:'0.08em',textTransform:'uppercase',
       background:m.bg,color:m.color,padding:'3px 10px',borderRadius:99,display:'inline-flex',alignItems:'center'}}>
-      {status}
+      {label}
     </span>
   );
 }
@@ -292,7 +247,7 @@ function ProgressBar({pct,height=4,style:xs}){
   );
 }
 
-function DarkInput({value,onChange,placeholder,style:xs,suffix,right}){
+function DarkInput({value,onChange,placeholder,style:xs,right}){
   return(
     <div style={{position:'relative'}}>
       <input value={value} onChange={onChange} placeholder={placeholder}
@@ -304,11 +259,24 @@ function DarkInput({value,onChange,placeholder,style:xs,suffix,right}){
   );
 }
 
+function EmptyState({icon,title,body}){
+  return(
+    <div style={{textAlign:'center',padding:'48px 24px'}}>
+      <Ic n={icon||'coffee'} size={48} color='rgba(44,24,16,0.2)'/>
+      <div style={{...sans,fontSize:16,fontWeight:700,color:C.text,marginTop:16,marginBottom:6}}>{title}</div>
+      {body&&<div style={{...sans,fontSize:13,color:C.muted,lineHeight:1.5}}>{body}</div>}
+    </div>
+  );
+}
+
 /* ── STATUS BAR ─────────────────────────────────────────── */
 function StatusBar(){
+  const now=new Date();
+  const h=now.getHours().toString().padStart(2,'0');
+  const m=now.getMinutes().toString().padStart(2,'0');
   return(
     <div style={{height:44,background:C.bg,display:'flex',alignItems:'center',justifyContent:'space-between',padding:'0 20px',flexShrink:0}}>
-      <span style={{...mono,fontSize:12,color:C.text,fontWeight:500}}>9:41</span>
+      <span style={{...mono,fontSize:12,color:C.text,fontWeight:500}}>{h}:{m}</span>
       <div style={{display:'flex',alignItems:'center',gap:4}}>
         <span style={{fontSize:11,color:C.text}}>●●●</span>
         <span style={{fontSize:10,color:C.text,marginLeft:2}}>WiFi</span>
@@ -358,12 +326,10 @@ function BottomNav({role,tab,setTab,mobile}){
       borderTop:`1px solid rgba(247,227,201,0.08)`,
       borderRadius:mobile?0:'20px 20px 0 0',
       boxShadow:'0 -4px 20px rgba(44,24,16,0.12)',
-      display:'flex',
-      alignItems:'stretch',
+      display:'flex',alignItems:'stretch',
       paddingBottom:mobile?'max(env(safe-area-inset-bottom,0px),12px)':16,
       paddingTop:mobile?8:0,
-      flexShrink:0,
-      minHeight:mobile?0:80,
+      flexShrink:0,minHeight:mobile?0:80,
     }}>
       {tabs.map(t=>{
         const active=tab===t.id;
@@ -388,77 +354,66 @@ function BottomNav({role,tab,setTab,mobile}){
 ═══════════════════════════════════════════════════════════ */
 
 function UserHomeTab({setTab,isCrew}){
-  const pct=Math.round((USER.points/(USER.points+1550))*100);
-  const last=ORDERS[0];
+  const ctx=useContext(MobileCtx);
+  const user=ctx.user;
+  const orders=ctx.orders||[];
+  const pts=user?.points_balance||0;
+  const nextThreshold=1000;
+  const pct=Math.round((pts%nextThreshold)/nextThreshold*100);
+  const firstName=(user?.name||'').split(' ')[0]||'there';
+  const last=orders[0];
+
   return(
     <div style={{padding:'24px 16px 0'}}>
-      {/* Greeting */}
       <RowBetween style={{marginBottom:20}}>
         <div>
-          <div style={{...sans,fontSize:22,fontWeight:700,color:C.text}}>Good evening, {USER.firstName}.</div>
-          <div style={{...sans,fontSize:13,color:C.muted,marginTop:2}}>Saturday, 16 May 2026</div>
+          <div style={{...sans,fontSize:22,fontWeight:700,color:C.text}}>Good evening, {firstName}.</div>
+          <div style={{...sans,fontSize:13,color:C.muted,marginTop:2}}>{new Date().toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</div>
         </div>
         <div style={{position:'relative'}}>
           <Ic n="bell" size={22} color={C.text}/>
-          <div style={{position:'absolute',top:-2,right:-2,width:6,height:6,background:C.orange,borderRadius:'50%'}}/>
         </div>
       </RowBetween>
 
-      {/* Points card */}
       <Card onClick={()=>setTab('points')} style={{marginBottom:12}}>
         <Eyebrow>Midnight Points</Eyebrow>
         <Row style={{alignItems:'baseline',marginBottom:12}}>
-          <span style={{...mono,fontSize:40,fontWeight:700,color:C.orange,lineHeight:1}}>{USER.points.toLocaleString()}</span>
+          <span style={{...mono,fontSize:40,fontWeight:700,color:C.orange,lineHeight:1}}>{pts.toLocaleString()}</span>
           <span style={{...sans,fontSize:14,color:C.mutedCard,marginLeft:6}}>points</span>
         </Row>
         <ProgressBar pct={pct} style={{marginBottom:8}}/>
-        <div style={{...sans,fontSize:11,color:'rgba(247,227,201,0.65)'}}>1,550 pts to your next free sachet →</div>
+        <div style={{...sans,fontSize:11,color:'rgba(247,227,201,0.65)'}}>{nextThreshold-(pts%nextThreshold)} pts to your next free sachet →</div>
       </Card>
 
-      {/* Stat strip */}
       <StatStrip stats={[
-        {label:'Orders',value:'3'},
-        {label:'Subscriptions',value:'1 Active',small:true},
-        {label:'This Month',value:'৳699'},
+        {label:'Orders',value:orders.length},
+        {label:'Subscriptions',value:'—',small:true},
+        {label:'Points',value:pts.toLocaleString(),small:true},
       ]}/>
 
-      {/* Active subscription */}
-      <Card onClick={()=>setTab('subscription')} style={{marginBottom:12,padding:'14px 16px'}}>
-        <RowBetween>
-          <div>
-            <Row style={{marginBottom:4}}>
-              <Ic n="flame" size={16} color={C.orange}/>
-              <span style={{...sans,fontSize:14,fontWeight:700,color:C.textCard}}>Night Shift Plan</span>
-            </Row>
-            <div style={{...sans,fontSize:12,color:C.mutedCard}}>Next delivery: Jun 1–3</div>
-          </div>
-          <Row>
-            <Badge status="Active"/>
-            <Ic n="chevright" size={16} color='rgba(247,227,201,0.4)'/>
-          </Row>
-        </RowBetween>
-      </Card>
+      {last?(
+        <Card onClick={()=>setTab('orders')} style={{marginBottom:12,padding:'14px 16px'}}>
+          <Eyebrow>Last Order</Eyebrow>
+          <RowBetween style={{marginBottom:8}}>
+            <span style={{...sans,fontSize:14,fontWeight:700,color:C.textCard,flex:1,marginRight:8,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{orderSummary(last.items)}</span>
+            <Badge status={last.status}/>
+          </RowBetween>
+          <RowBetween>
+            <span style={{...mono,fontSize:14,fontWeight:700,color:C.orange}}>৳{last.total}</span>
+            <button style={{...sans,fontSize:11,color:C.orange,background:'none',border:'none',cursor:'pointer'}}>View all orders →</button>
+          </RowBetween>
+        </Card>
+      ):(
+        <Card style={{marginBottom:12,padding:'14px 16px'}}>
+          <div style={{...sans,fontSize:13,color:C.mutedCard,textAlign:'center'}}>No orders yet. Place your first order!</div>
+        </Card>
+      )}
 
-      {/* Last order */}
-      <Card onClick={()=>setTab('orders')} style={{marginBottom:12,padding:'14px 16px'}}>
-        <Eyebrow>Last Order</Eyebrow>
-        <RowBetween style={{marginBottom:8}}>
-          <span style={{...sans,fontSize:14,fontWeight:700,color:C.textCard}}>{last.items}</span>
-          <Badge status={last.status}/>
-        </RowBetween>
-        <RowBetween>
-          <span style={{...mono,fontSize:14,fontWeight:700,color:C.orange}}>৳{last.total}</span>
-          <button style={{...sans,fontSize:11,color:C.orange,background:'none',border:'none',cursor:'pointer'}}>View all orders →</button>
-        </RowBetween>
-      </Card>
-
-      {/* Quick actions */}
       <Col style={{marginBottom:12}}>
         <OrangeBtn full>Shop Now</OrangeBtn>
         {isCrew&&<GhostBtn full><Ic n="share" size={14} color={C.orange}/>Refer a Friend</GhostBtn>}
       </Col>
 
-      {/* Crew promo (if not crew) */}
       {!isCrew&&(
         <div style={{marginBottom:12,background:'linear-gradient(135deg,#3D2015,#2C1810)',borderRadius:12,padding:16,borderLeft:`3px solid ${C.orange}`}}>
           <Ic n="flame" size={16} color={C.orange} style={{marginBottom:8}}/>
@@ -473,26 +428,30 @@ function UserHomeTab({setTab,isCrew}){
 }
 
 function UserOrdersTab(){
+  const ctx=useContext(MobileCtx);
+  const orders=ctx.orders||[];
   const [filter,setFilter]=useState('All');
   const [expanded,setExpanded]=useState(null);
-  const filters=['All','Processing','Shipped','Delivered','Cancelled'];
-  const visible=filter==='All'?ORDERS:ORDERS.filter(o=>o.status===filter);
+  const filters=['All','processing','confirmed','packed','shipped','delivered','cancelled'];
+  const visible=filter==='All'?orders:orders.filter(o=>o.status===filter);
 
   return(
     <div style={{padding:'24px 0 0'}}>
       <RowBetween style={{padding:'0 16px',marginBottom:16}}>
         <div style={{...sans,fontSize:20,fontWeight:700,color:C.text}}>Your Orders</div>
-        <span style={{...sans,fontSize:12,color:C.muted}}>{ORDERS.length} orders</span>
+        <span style={{...sans,fontSize:12,color:C.muted}}>{orders.length} orders</span>
       </RowBetween>
       <div style={{display:'flex',gap:8,overflowX:'auto',padding:'0 16px 12px',scrollbarWidth:'none'}}>
-        {filters.map(f=><Pill key={f} label={f} active={filter===f} onClick={()=>setFilter(f)}/>)}
+        {['All','Processing','Shipped','Delivered','Cancelled'].map(f=>(
+          <Pill key={f} label={f} active={filter===(f==='All'?'All':f.toLowerCase())} onClick={()=>setFilter(f==='All'?'All':f.toLowerCase())}/>
+        ))}
       </div>
       <div style={{padding:'0 16px'}}>
         {visible.length===0?(
           <div style={{textAlign:'center',padding:'60px 0'}}>
-            <Ic n="package" size={48} color='rgba(247,227,201,0.25)'/>
-            <div style={{...sans,fontSize:16,fontWeight:700,color:C.textCard,marginTop:16}}>No orders yet.</div>
-            <div style={{...sans,fontSize:13,color:C.mutedCard,marginTop:6}}>Your first cup is waiting.</div>
+            <Ic n="package" size={48} color='rgba(44,24,16,0.25)'/>
+            <div style={{...sans,fontSize:16,fontWeight:700,color:C.text,marginTop:16}}>No orders yet.</div>
+            <div style={{...sans,fontSize:13,color:C.muted,marginTop:6}}>Your first cup is waiting.</div>
             <OrangeBtn style={{marginTop:20,width:160}}>Shop Now</OrangeBtn>
           </div>
         ):visible.map(order=>{
@@ -502,10 +461,10 @@ function UserOrdersTab(){
               style={{background:C.card,borderRadius:12,marginBottom:10,border:`1px solid ${C.borderCard}`,cursor:'pointer',overflow:'hidden'}}>
               <div style={{padding:'14px 16px'}}>
                 <RowBetween style={{marginBottom:8}}>
-                  <span style={{...mono,fontSize:10,color:'rgba(247,227,201,0.5)'}}>{order.id}</span>
-                  <span style={{...sans,fontSize:12,color:'rgba(247,227,201,0.5)'}}>{order.date}</span>
+                  <span style={{...mono,fontSize:10,color:'rgba(247,227,201,0.5)'}}>{order.order_ref}</span>
+                  <span style={{...sans,fontSize:12,color:'rgba(247,227,201,0.5)'}}>{fmtDate(order.created_at)}</span>
                 </RowBetween>
-                <div style={{...sans,fontSize:14,fontWeight:600,color:C.textCard,marginBottom:8}}>{order.items}</div>
+                <div style={{...sans,fontSize:14,fontWeight:600,color:C.textCard,marginBottom:8,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{orderSummary(order.items)}</div>
                 <RowBetween>
                   <span style={{...mono,fontSize:14,fontWeight:700,color:C.orange}}>৳{order.total}</span>
                   <Row>
@@ -516,16 +475,16 @@ function UserOrdersTab(){
               </div>
               {open&&(
                 <div style={{borderTop:`1px solid ${C.borderCard}`,padding:'14px 16px',background:'rgba(0,0,0,0.1)'}} onClick={e=>e.stopPropagation()}>
-                  {order.itemList.map((item,i)=>(
+                  {(order.items||[]).map((item,i)=>(
                     <RowBetween key={i} style={{marginBottom:8}}>
                       <span style={{...sans,fontSize:13,color:C.textCard}}>{item.name} × {item.qty}</span>
-                      <span style={{...sans,fontSize:13,color:C.mutedCard}}>৳{item.price*item.qty}</span>
+                      <span style={{...sans,fontSize:13,color:C.mutedCard}}>৳{item.unit_price*item.qty}</span>
                     </RowBetween>
                   ))}
                   <div style={{height:1,background:C.borderCard,margin:'10px 0'}}/>
-                  <div style={{...sans,fontSize:12,color:C.mutedCard,marginBottom:6}}><b style={{color:C.textCard}}>Address:</b> {order.address}</div>
-                  <div style={{...sans,fontSize:12,color:C.mutedCard,marginBottom:6}}><b style={{color:C.textCard}}>Payment:</b> {order.payment}</div>
-                  {order.coupon&&<div style={{...sans,fontSize:12,color:C.green,marginBottom:6}}>{order.coupon}</div>}
+                  {order.address_snapshot&&<div style={{...sans,fontSize:12,color:C.mutedCard,marginBottom:6}}><b style={{color:C.textCard}}>Address:</b> {addrString(order.address_snapshot)}</div>}
+                  <div style={{...sans,fontSize:12,color:C.mutedCard,marginBottom:6}}><b style={{color:C.textCard}}>Payment:</b> {order.payment_type||'—'}</div>
+                  {order.coupon_code&&<div style={{...sans,fontSize:12,color:C.green,marginBottom:6}}>Coupon: {order.coupon_code}</div>}
                   <Col style={{marginTop:12}}>
                     <OrangeBtn full>Reorder</OrangeBtn>
                     <GhostBtn full><Ic n="msg" size={14} color={C.mutedCard}/>Help with this order →</GhostBtn>
@@ -542,67 +501,21 @@ function UserOrdersTab(){
 }
 
 function UserSubscriptionTab(){
-  const [sheet,setSheet]=useState(null);
-  const actions=[
-    {label:'Pause Next Delivery',key:'pause'},
-    {label:'Skip This Month',key:'skip'},
-    {label:'Change Plan',key:'change'},
-    {label:'Update Delivery Address',key:'address'},
-  ];
-  const sheetText={
-    pause:{title:'Pause next delivery?',body:`Your delivery on ${SUBSCRIPTION.nextDelivery} will be paused. You can resume any time.`,confirm:'Yes, Pause'},
-    skip:{title:'Skip this month?',body:'Your subscription continues next month normally. This month\'s delivery won\'t ship.',confirm:'Yes, Skip'},
-    change:{title:'Change plan',body:'You\'ll be taken to plan selection. Your billing date stays the same.',confirm:'Change Plan'},
-    address:{title:'Update address',body:'We\'ll update the delivery address for all future deliveries.',confirm:'Update'},
-    cancel:{title:'Cancel subscription?',body:'Your subscription will end after the current billing cycle. Points already earned are yours.',confirm:'Yes, Cancel'},
-  };
   return(
-    <div style={{padding:'24px 16px 0',position:'relative'}}>
+    <div style={{padding:'24px 16px 0'}}>
       <div style={{...sans,fontSize:20,fontWeight:700,color:C.text,marginBottom:20}}>Subscription</div>
-      {/* Plan card */}
-      <Card style={{marginBottom:12}}>
-        <RowBetween style={{marginBottom:12}}>
-          <Eyebrow style={{marginBottom:0}}>Night Shift Plan</Eyebrow>
-          <Badge status="Active"/>
-        </RowBetween>
-        <div style={{...mono,fontSize:24,fontWeight:700,color:C.textCard,marginBottom:4}}>৳210 <span style={{fontSize:13,fontWeight:400,color:C.mutedCard}}>/ month</span></div>
-        <div style={{...sans,fontSize:13,color:C.mutedCard}}>10× Midnight Black sachets</div>
-      </Card>
-      {/* Next delivery */}
-      <Card style={{marginBottom:12}}>
-        <Eyebrow>Next Delivery</Eyebrow>
-        <div style={{...sans,fontSize:18,fontWeight:700,color:C.textCard,marginBottom:4}}>{SUBSCRIPTION.nextDelivery}</div>
-        <div style={{...mono,fontSize:12,color:C.mutedCard}}>In {SUBSCRIPTION.countdown} days</div>
-        <div style={{...sans,fontSize:11,color:C.mutedCard,marginTop:4}}>Inside Dhaka · 1–2 business days</div>
-      </Card>
-      {/* Billing */}
-      <Card style={{marginBottom:20}}>
-        <Eyebrow>Next Billing</Eyebrow>
-        <div style={{...sans,fontSize:15,fontWeight:700,color:C.textCard,marginBottom:4}}>৳210 on {SUBSCRIPTION.nextBilling}</div>
-        <div style={{...sans,fontSize:11,color:C.mutedCard,fontStyle:'italic'}}>Cancel before {SUBSCRIPTION.cancelBefore} to skip</div>
-      </Card>
-      <Col style={{marginBottom:20}}>
-        {actions.map(a=><GhostBtn key={a.key} full onClick={()=>setSheet(a.key)}>{a.label}</GhostBtn>)}
-      </Col>
-      <div style={{textAlign:'center',marginTop:8}}>
-        <button onClick={()=>setSheet('cancel')} style={{...sans,fontSize:12,color:'rgba(247,227,201,0.5)',background:'none',border:'none',cursor:'pointer'}}>Cancel Subscription</button>
-      </div>
+      <EmptyState icon="repeat" title="No active subscription" body="Subscribe to a plan and get fresh coffee delivered monthly. Subscription plans coming soon."/>
       <div style={{height:100}}/>
-      {sheet&&sheetText[sheet]&&(
-        <BottomSheet onClose={()=>setSheet(null)} title={sheetText[sheet].title}>
-          <div style={{...sans,fontSize:14,color:C.mutedCard,lineHeight:1.6,marginBottom:20}}>{sheetText[sheet].body}</div>
-          <Col>
-            <OrangeBtn full onClick={()=>setSheet(null)}>{sheetText[sheet].confirm}</OrangeBtn>
-            <GhostBtn full onClick={()=>setSheet(null)}>Cancel</GhostBtn>
-          </Col>
-        </BottomSheet>
-      )}
     </div>
   );
 }
 
 function UserPointsTab(){
+  const ctx=useContext(MobileCtx);
+  const user=ctx.user;
+  const history=ctx.pointsHistory||[];
   const [sheet,setSheet]=useState(null);
+  const pts=user?.points_balance||0;
   const rewards=[
     {id:'sachet',label:'1 Free Sachet',pts:1000,worth:'৳25',icon:'coffee'},
     {id:'bkash',label:'৳100 bKash Credit',pts:5000,worth:'৳100',icon:'phone'},
@@ -610,58 +523,56 @@ function UserPointsTab(){
   ];
   return(
     <div style={{padding:'24px 16px 0',position:'relative'}}>
-      {/* Balance */}
       <div style={{marginBottom:20}}>
         <div style={{...mono,fontSize:10,color:C.text,letterSpacing:'0.2em',textTransform:'uppercase',marginBottom:8}}>Midnight Points</div>
-        <div style={{...mono,fontSize:48,fontWeight:700,color:C.orange,lineHeight:1}}>{USER.points.toLocaleString()}</div>
-        <RowBetween style={{marginTop:10}}>
-          <span style={{...mono,fontSize:12,color:C.muted}}>Earned {USER.lifetimeEarned.toLocaleString()}</span>
-          <span style={{...mono,fontSize:12,color:C.muted}}>Redeemed {USER.lifetimeRedeemed.toLocaleString()}</span>
-        </RowBetween>
+        <div style={{...mono,fontSize:48,fontWeight:700,color:C.orange,lineHeight:1}}>{pts.toLocaleString()}</div>
+        <div style={{...mono,fontSize:12,color:C.muted,marginTop:10}}>Available balance</div>
       </div>
-      {/* Rewards */}
       {rewards.map(r=>{
-        const can=USER.points>=r.pts;
+        const canRedeem=pts>=r.pts;
         return(
-          <Card key={r.id} style={{marginBottom:10,padding:'14px 16px'}}>
+          <Card key={r.id} style={{marginBottom:10}} onClick={canRedeem?()=>setSheet(r):undefined}>
             <RowBetween>
               <Row>
-                <Ic n={r.icon} size={24} color={C.orange}/>
+                <div style={{width:40,height:40,borderRadius:10,background:C.cardAlt,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                  <Ic n={r.icon} size={18} color={C.orange}/>
+                </div>
                 <div>
-                  <div style={{...sans,fontSize:15,fontWeight:700,color:C.textCard}}>{r.label}</div>
-                  <div style={{...sans,fontSize:12,color:C.mutedCard,marginTop:2}}>{r.pts.toLocaleString()} points · Worth {r.worth}</div>
+                  <div style={{...sans,fontSize:14,fontWeight:600,color:C.textCard}}>{r.label}</div>
+                  <div style={{...mono,fontSize:11,color:C.mutedCard}}>{r.pts.toLocaleString()} pts · worth {r.worth}</div>
                 </div>
               </Row>
-              <button onClick={()=>can&&setSheet(r)} style={{padding:'6px 14px',borderRadius:99,border:'none',cursor:can?'pointer':'not-allowed',
-                background:can?C.orange:'rgba(247,227,201,0.1)',color:can?C.card:'rgba(247,227,201,0.3)',
-                ...sans,fontSize:12,fontWeight:700,transition:'all 150ms'}}>
-                {can?'Redeem':'Locked'}
-              </button>
+              {canRedeem?(
+                <div style={{...sans,fontSize:11,color:C.orange,fontWeight:600,flexShrink:0}}>Redeem →</div>
+              ):(
+                <div style={{...mono,fontSize:10,color:C.mutedCard,flexShrink:0}}>{(r.pts-pts).toLocaleString()} more</div>
+              )}
             </RowBetween>
           </Card>
         );
       })}
-      {/* History */}
-      <div style={{...mono,fontSize:9,color:C.text,letterSpacing:'0.2em',textTransform:'uppercase',margin:'24px 0 8px'}}>History</div>
-      {POINTS_HISTORY.map((p,i)=>(
-        <div key={i} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'12px 0',borderBottom:`1px solid ${C.borderBg}`}}>
+      <div style={{...mono,fontSize:9,color:C.text,letterSpacing:'0.2em',textTransform:'uppercase',margin:'20px 0 8px'}}>History</div>
+      {history.length===0?(
+        <EmptyState icon="star" title="No history yet" body="Points earned from orders will appear here."/>
+      ):history.map((p,i)=>(
+        <RowBetween key={i} style={{padding:'10px 0',borderBottom:`1px solid ${C.borderBg}`}}>
           <div>
-            <div style={{...sans,fontSize:13,color:C.text}}>{p.desc}</div>
-            <div style={{...mono,fontSize:11,color:C.muted,marginTop:2}}>{p.date}</div>
+            <div style={{...sans,fontSize:13,color:C.text}}>{p.description||'—'}</div>
+            <div style={{...mono,fontSize:10,color:C.muted,marginTop:2}}>{fmtDate(p.created_at)}</div>
           </div>
-          <span style={{...mono,fontSize:13,fontWeight:700,color:p.type==='earned'?C.green:C.red}}>
-            {p.type==='earned'?'+':'−'}{p.pts} pts
+          <span style={{...mono,fontSize:14,fontWeight:700,color:p.type==='earned'?C.green:C.red}}>
+            {p.type==='earned'?'+':'-'}{(p.points||0).toLocaleString()} pts
           </span>
-        </div>
+        </RowBetween>
       ))}
       <div style={{height:100}}/>
       {sheet&&(
-        <BottomSheet onClose={()=>setSheet(null)} title={`Redeem ${sheet.pts.toLocaleString()} points?`}>
+        <BottomSheet onClose={()=>setSheet(null)} title={`Redeem: ${sheet.label}`}>
           <div style={{...sans,fontSize:14,color:C.mutedCard,lineHeight:1.6,marginBottom:20}}>
-            You're redeeming {sheet.pts.toLocaleString()} points for {sheet.label}. This cannot be undone.
+            This will use {sheet.pts.toLocaleString()} points from your balance of {pts.toLocaleString()} pts.
           </div>
           <Col>
-            <OrangeBtn full onClick={()=>setSheet(null)}>Yes, Redeem</OrangeBtn>
+            <OrangeBtn full onClick={()=>setSheet(null)}>Confirm Redemption</OrangeBtn>
             <GhostBtn full onClick={()=>setSheet(null)}>Cancel</GhostBtn>
           </Col>
         </BottomSheet>
@@ -671,45 +582,48 @@ function UserPointsTab(){
 }
 
 function UserAccountTab({isCrew,onLogout}){
-  const [name,setName]=useState(USER.name);
-  const [email,setEmail]=useState(USER.email);
+  const ctx=useContext(MobileCtx);
+  const user=ctx.user;
+  const addresses=ctx.addresses||[];
+  const paymentMethods=ctx.paymentMethods||[];
+  const [name,setName]=useState(user?.name||'');
+  const [email,setEmail]=useState(user?.email||'');
   const [editName,setEditName]=useState(false);
   const [editEmail,setEditEmail]=useState(false);
   const [sheet,setSheet]=useState(null);
   const [swipedAddr,setSwipedAddr]=useState(null);
-  const [addresses,setAddresses]=useState(ADDRESSES);
+
+  useEffect(()=>{
+    if(user){setName(user.name||'');setEmail(user.email||'');}
+  },[user]);
 
   return(
     <div style={{padding:'24px 16px 0',position:'relative'}}>
       <div style={{...sans,fontSize:20,fontWeight:700,color:C.text,marginBottom:16}}>Account</div>
-      {/* Profile */}
       <div style={{...mono,fontSize:9,color:C.text,letterSpacing:'0.2em',textTransform:'uppercase',marginBottom:8}}>Your Profile</div>
       <Card style={{marginBottom:16}}>
-        {/* Name */}
         <RowBetween style={{marginBottom:14,paddingBottom:14,borderBottom:`1px solid ${C.borderCard}`}}>
           {editName?(
             <input value={name} onChange={e=>setName(e.target.value)} autoFocus
               style={{flex:1,background:C.cardAlt,border:`1px solid ${C.borderCard}`,borderRadius:8,padding:'8px 12px',
                 color:C.textCard,...sans,fontSize:15,outline:'none',marginRight:8}}/>
-          ):<span style={{...sans,fontSize:15,fontWeight:500,color:C.textCard}}>{name}</span>}
+          ):<span style={{...sans,fontSize:15,fontWeight:500,color:C.textCard}}>{name||'—'}</span>}
           {editName?(
             <button onClick={()=>setEditName(false)} style={{...sans,fontSize:13,color:C.orange,fontWeight:600,background:'none',border:'none',cursor:'pointer'}}>Save</button>
           ):(
             <button onClick={()=>setEditName(true)} style={{background:'none',border:'none',cursor:'pointer'}}><Ic n="pencil" size={16} color={C.orange}/></button>
           )}
         </RowBetween>
-        {/* Phone */}
         <RowBetween style={{marginBottom:14,paddingBottom:14,borderBottom:`1px solid ${C.borderCard}`}}>
-          <span style={{...sans,fontSize:15,color:C.mutedCard}}>{USER.phone}</span>
+          <span style={{...sans,fontSize:15,color:C.mutedCard}}>{user?.phone||'—'}</span>
           <Ic n="lock" size={16} color={C.mutedCard}/>
         </RowBetween>
-        {/* Email */}
         <RowBetween>
           {editEmail?(
             <input value={email} onChange={e=>setEmail(e.target.value)} autoFocus
               style={{flex:1,background:C.cardAlt,border:`1px solid ${C.borderCard}`,borderRadius:8,padding:'8px 12px',
                 color:C.textCard,...sans,fontSize:15,outline:'none',marginRight:8}}/>
-          ):<span style={{...sans,fontSize:15,color:C.textCard}}>{email}</span>}
+          ):<span style={{...sans,fontSize:15,color:C.textCard}}>{email||'—'}</span>}
           {editEmail?(
             <button onClick={()=>setEditEmail(false)} style={{...sans,fontSize:13,color:C.orange,fontWeight:600,background:'none',border:'none',cursor:'pointer'}}>Save</button>
           ):(
@@ -718,11 +632,9 @@ function UserAccountTab({isCrew,onLogout}){
         </RowBetween>
       </Card>
 
-      {/* Addresses */}
       <div style={{...mono,fontSize:9,color:C.text,letterSpacing:'0.2em',textTransform:'uppercase',marginBottom:8}}>Saved Addresses</div>
       {addresses.map(addr=>(
         <div key={addr.id} style={{position:'relative',marginBottom:8,overflow:'hidden',borderRadius:12}}>
-          {/* Delete zone */}
           <div style={{position:'absolute',right:0,top:0,bottom:0,width:80,background:C.red,display:'flex',alignItems:'center',justifyContent:'center',borderRadius:'0 12px 12px 0'}}>
             <Ic n="trash" size={18} color="#fff"/>
           </div>
@@ -732,16 +644,14 @@ function UserAccountTab({isCrew,onLogout}){
               display:'flex',justifyContent:'space-between',alignItems:'flex-start',position:'relative',zIndex:1}}>
             <div>
               <Row style={{marginBottom:6}}>
-                <span style={{...sans,fontSize:13,fontWeight:700,color:C.textCard}}>{addr.label}</span>
-                {addr.isDefault&&<span style={{...mono,fontSize:9,background:C.orangeFaint,color:C.orange,padding:'2px 8px',borderRadius:99,letterSpacing:'0.1em'}}>DEFAULT</span>}
+                <span style={{...sans,fontSize:13,fontWeight:700,color:C.textCard}}>{addr.label||'Address'}</span>
+                {addr.is_default&&<span style={{...mono,fontSize:9,background:C.orangeFaint,color:C.orange,padding:'2px 8px',borderRadius:99,letterSpacing:'0.1em'}}>DEFAULT</span>}
               </Row>
               <div style={{...sans,fontSize:12,color:C.mutedCard}}>{addr.line1}</div>
-              <div style={{...sans,fontSize:12,color:C.mutedCard}}>{addr.line2}</div>
+              {addr.line2&&<div style={{...sans,fontSize:12,color:C.mutedCard}}>{addr.line2}</div>}
+              {addr.city&&<div style={{...sans,fontSize:12,color:C.mutedCard}}>{addr.city}</div>}
             </div>
-            <Row>
-              <button style={{background:'none',border:'none',cursor:'pointer'}}><Ic n="pencil" size={14} color={C.mutedCard}/></button>
-              <button onClick={()=>setSwipedAddr(addr.id===swipedAddr?null:addr.id)} style={{background:'none',border:'none',cursor:'pointer'}}><Ic n="trash" size={14} color={C.mutedCard}/></button>
-            </Row>
+            <button style={{background:'none',border:'none',cursor:'pointer'}}><Ic n="pencil" size={14} color={C.mutedCard}/></button>
           </div>
         </div>
       ))}
@@ -751,72 +661,40 @@ function UserAccountTab({isCrew,onLogout}){
         <span style={{...sans,fontSize:14,color:C.muted}}>Add address</span>
       </button>
 
-      {/* Payment methods */}
       <div style={{...mono,fontSize:9,color:C.text,letterSpacing:'0.2em',textTransform:'uppercase',marginBottom:8}}>Payment Methods</div>
-      {PAYMENT_METHODS.map(pm=>(
+      {paymentMethods.length===0?(
+        <div style={{...sans,fontSize:13,color:C.muted,marginBottom:16,textAlign:'center',padding:'16px 0'}}>No payment methods saved.</div>
+      ):paymentMethods.map(pm=>(
         <Card key={pm.id} style={{marginBottom:8,padding:'14px 16px'}}>
           <RowBetween>
             <Row>
-              <div style={{width:36,height:36,borderRadius:8,background:pm.type==='bKash'?'rgba(231,48,137,0.15)':'rgba(26,68,175,0.15)',
+              <div style={{width:36,height:36,borderRadius:8,background:'rgba(231,48,137,0.15)',
                 display:'flex',alignItems:'center',justifyContent:'center'}}>
-                <span style={{...mono,fontSize:10,fontWeight:700,color:pm.type==='bKash'?'#e73089':'#1a44af'}}>{pm.type==='bKash'?'bK':'VI'}</span>
+                <span style={{...mono,fontSize:10,fontWeight:700,color:'#e73089'}}>{(pm.type||'?')[0]}</span>
               </div>
               <div>
-                <div style={{...sans,fontSize:13,fontWeight:600,color:C.textCard}}>{pm.type}</div>
-                <div style={{...mono,fontSize:11,color:C.mutedCard}}>{pm.number}</div>
+                <div style={{...sans,fontSize:13,fontWeight:600,color:C.textCard}}>{pm.type||'—'}</div>
+                <div style={{...mono,fontSize:11,color:C.mutedCard}}>{pm.number||'—'}</div>
               </div>
             </Row>
-            {pm.isDefault&&<span style={{...mono,fontSize:9,background:C.orangeFaint,color:C.orange,padding:'2px 8px',borderRadius:99}}>DEFAULT</span>}
+            {pm.is_default&&<span style={{...mono,fontSize:9,background:C.orangeFaint,color:C.orange,padding:'2px 8px',borderRadius:99}}>DEFAULT</span>}
           </RowBetween>
         </Card>
       ))}
 
-      {/* Crew status */}
-      {isCrew?(
-        <Card style={{marginBottom:16,marginTop:16}}>
-          <Row style={{marginBottom:8}}>
-            <Ic n="flame" size={18} color={C.orange}/>
-            <div style={{...mono,fontSize:10,color:C.orange,letterSpacing:'0.15em',textTransform:'uppercase'}}>Midnight Crew Member</div>
-          </Row>
-          <Badge status="Active"/>
-          <button style={{...sans,fontSize:13,color:C.orange,background:'none',border:'none',cursor:'pointer',marginTop:10,display:'block',fontWeight:600}}>Go to Crew Dashboard →</button>
-        </Card>
-      ):(
-        <Card style={{marginBottom:16,marginTop:16,borderColor:`rgba(255,145,0,0.3)`,background:'rgba(255,145,0,0.06)'}}>
-          <div style={{...sans,fontSize:14,fontWeight:700,color:C.textCard,marginBottom:6}}>Join the Midnight Crew</div>
-          <div style={{...sans,fontSize:12,color:C.mutedCard,lineHeight:1.6,marginBottom:12}}>Earn points for every referral. Apply for free.</div>
-          <button style={{...sans,fontSize:13,color:C.orange,background:'none',border:'none',cursor:'pointer',fontWeight:600}}>Apply Now →</button>
-        </Card>
+      {isCrew&&(
+        <>
+          <div style={{...mono,fontSize:9,color:C.text,letterSpacing:'0.2em',textTransform:'uppercase',marginBottom:8,marginTop:8}}>Your Crew Code</div>
+          <Card style={{marginBottom:16,textAlign:'center',padding:'20px 16px'}}>
+            <div style={{...mono,fontSize:28,fontWeight:700,color:C.orange,letterSpacing:4}}>{user?.crew_code||'—'}</div>
+            <div style={{...sans,fontSize:12,color:C.mutedCard,marginTop:6}}>{user?.crew_discount||15}% off for referrals</div>
+          </Card>
+        </>
       )}
 
-      {/* Danger */}
-      <div style={{height:1,background:C.borderBg,margin:'16px 0'}}/>
-      <Col>
-        <GhostBtn full onClick={()=>setSheet('logout')}>Log Out</GhostBtn>
-        <div style={{textAlign:'center'}}>
-          <button onClick={()=>setSheet('delete')} style={{...sans,fontSize:12,color:'rgba(44,24,16,0.5)',background:'none',border:'none',cursor:'pointer',marginTop:8}}>Delete Account</button>
-        </div>
-      </Col>
+      <div style={{height:1,background:C.borderBg,margin:'24px 0 16px'}}/>
+      <GhostBtn full onClick={onLogout} style={{color:C.red,borderColor:'rgba(229,115,115,0.3)'}}>Sign Out</GhostBtn>
       <div style={{height:100}}/>
-
-      {sheet==='logout'&&(
-        <BottomSheet onClose={()=>setSheet(null)} title="Log out?">
-          <div style={{...sans,fontSize:14,color:C.mutedCard,marginBottom:20}}>You'll be signed out of your Midnight Pick account.</div>
-          <Col>
-            <OrangeBtn full onClick={onLogout}>Log Out</OrangeBtn>
-            <GhostBtn full onClick={()=>setSheet(null)}>Cancel</GhostBtn>
-          </Col>
-        </BottomSheet>
-      )}
-      {sheet==='delete'&&(
-        <BottomSheet onClose={()=>setSheet(null)} title="Delete account?">
-          <div style={{...sans,fontSize:14,color:C.mutedCard,marginBottom:20}}>This is permanent. All your orders, points, and subscriptions will be removed.</div>
-          <Col>
-            <OrangeBtn full onClick={()=>setSheet(null)}>Yes, Delete My Account</OrangeBtn>
-            <GhostBtn full onClick={()=>setSheet(null)}>Cancel</GhostBtn>
-          </Col>
-        </BottomSheet>
-      )}
     </div>
   );
 }
@@ -826,132 +704,56 @@ function UserAccountTab({isCrew,onLogout}){
 ═══════════════════════════════════════════════════════════ */
 
 function CrewTab(){
+  const ctx=useContext(MobileCtx);
+  const user=ctx.user;
+  const crewCode=user?.crew_code||'—';
+  const crewDiscount=user?.crew_discount||15;
   const [filter,setFilter]=useState('This Month');
   const [copied,setCopied]=useState(false);
-  const [codeInput,setCodeInput]=useState('');
-  const [codeState,setCodeState]=useState('idle');
-  const [codeMsg,setCodeMsg]=useState('');
-  const [sheet,setSheet]=useState(null);
-  const debRef=useRef(null);
+  const months=['This Month','Last Month','All Time'];
 
   function handleCopy(){
-    navigator.clipboard.writeText(CREW.code).catch(()=>{});
+    if(crewCode==='—')return;
+    navigator.clipboard.writeText(crewCode).catch(()=>{});
     setCopied(true);
     setTimeout(()=>setCopied(false),2000);
   }
 
-  function handleCodeChange(val){
-    setCodeInput(val.toUpperCase());
-    clearTimeout(debRef.current);
-    if(!val){setCodeState('idle');setCodeMsg('');return;}
-    setCodeState('checking');
-    debRef.current=setTimeout(()=>{
-      if(val.toUpperCase()==='RAFI15'){setCodeState('taken');setCodeMsg(`${val.toUpperCase()} is already taken ✗`);}
-      else{setCodeState('available');setCodeMsg(`${val.toUpperCase()} is available ✓`);}
-    },600);
-  }
-
-  const codeValid=codeInput.length>=4&&codeInput.length<=8&&/^[A-Z0-9]+$/.test(codeInput)&&codeState==='available';
-  const months=['This Month','Last Month','All Time'];
-  const pct=Math.round((CREW.lifetimePts/CREW.foundingTarget)*100);
-
   return(
     <div style={{padding:'24px 16px 0',position:'relative'}}>
-      {/* Header */}
       <div style={{marginBottom:20}}>
         <div style={{...sans,fontSize:22,fontWeight:700,color:C.text}}>Midnight Crew</div>
         <div style={{...sans,fontSize:13,color:C.muted,marginTop:2}}>Your referral dashboard</div>
       </div>
 
       <StatStrip stats={[
-        {label:'This Month',value:CREW.refsThisMonth,small:false},
-        {label:'Points Earned',value:CREW.ptsThisMonth.toLocaleString(),small:false},
-        {label:'Lifetime',value:CREW.lifetime,muted:true},
+        {label:'This Month',value:'—',small:false},
+        {label:'Points Earned',value:'—',small:false},
+        {label:'Lifetime',value:'—',muted:true},
       ]}/>
 
-      {/* My Code card */}
       <Card style={{marginBottom:12,textAlign:'center'}}>
         <Eyebrow>My Code</Eyebrow>
-        <div style={{...mono,fontSize:36,fontWeight:700,color:C.orange,letterSpacing:4,marginBottom:8}}>{CREW.code}</div>
-        <div style={{...sans,fontSize:12,color:C.mutedCard,marginBottom:16}}>Friends get {CREW.discount}% off their first order</div>
-        <Row style={{justifyContent:'center',gap:8}}>
-          <button onClick={handleCopy} style={{flex:1,padding:'10px 0',borderRadius:8,border:`1px solid ${C.orange}`,
-            background:'transparent',color:copied?C.green:C.orange,cursor:'pointer',...sans,fontSize:13,fontWeight:600,
-            display:'flex',alignItems:'center',justifyContent:'center',gap:6,transition:'all 200ms'}}>
-            {copied?<><Ic n="check" size={14} color={C.green}/>Copied ✓</>:<><Ic n="share" size={14} color={C.orange}/>Copy Code</>}
-          </button>
-          <OrangeBtn style={{flex:1,padding:'10px 0'}}><Ic n="msg" size={14} color={C.card}/>WhatsApp</OrangeBtn>
-        </Row>
+        <div style={{...mono,fontSize:crewCode==='—'?20:36,fontWeight:700,color:crewCode==='—'?C.mutedCard:C.orange,letterSpacing:crewCode==='—'?0:4,marginBottom:8}}>{crewCode}</div>
+        {crewCode!=='—'&&<div style={{...sans,fontSize:12,color:C.mutedCard,marginBottom:16}}>Friends get {crewDiscount}% off their first order</div>}
+        {crewCode==='—'&&<div style={{...sans,fontSize:12,color:C.mutedCard,marginBottom:16}}>Crew code not assigned yet — contact admin.</div>}
+        {crewCode!=='—'&&(
+          <Row style={{justifyContent:'center',gap:8}}>
+            <button onClick={handleCopy} style={{flex:1,padding:'10px 0',borderRadius:8,border:`1px solid ${C.orange}`,
+              background:'transparent',color:copied?C.green:C.orange,cursor:'pointer',...sans,fontSize:13,fontWeight:600,
+              display:'flex',alignItems:'center',justifyContent:'center',gap:6,transition:'all 200ms'}}>
+              {copied?<><Ic n="check" size={14} color={C.green}/>Copied ✓</>:<><Ic n="share" size={14} color={C.orange}/>Copy Code</>}
+            </button>
+            <OrangeBtn style={{flex:1,padding:'10px 0'}}><Ic n="msg" size={14} color={C.card}/>WhatsApp</OrangeBtn>
+          </Row>
+        )}
       </Card>
 
-      <StatStrip stats={[
-        {label:'Total Used',value:CREW.totalUsed},
-        {label:'This Month',value:CREW.thisMonth},
-        {label:'Conversion',value:CREW.conversion,muted:true},
-      ]}/>
-
-      {/* Activity */}
       <div style={{...mono,fontSize:9,color:C.text,letterSpacing:'0.2em',textTransform:'uppercase',marginBottom:8}}>Referral Activity</div>
       <div style={{display:'flex',gap:8,marginBottom:12}}>
         {months.map(m=><Pill key={m} label={m} active={filter===m} onClick={()=>setFilter(m)}/>)}
       </div>
-      {REFERRAL_ACTIVITY.map((r,i)=>(
-        <div key={i} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'12px 0',borderBottom:`1px solid ${C.borderBg}`}}>
-          <div style={{...sans,fontSize:12,color:C.muted}}>{r.date}</div>
-          <div style={{...sans,fontSize:13,color:C.text,flex:1,margin:'0 12px'}}>
-            {r.type==='subscription'?`Subscription started via ${CREW.code}`:`Order placed via ${CREW.code}`}
-          </div>
-          <span style={{...mono,fontSize:13,fontWeight:700,color:C.green}}>+{r.pts} pts</span>
-        </div>
-      ))}
-      <Card style={{marginTop:0,padding:'12px 16px'}}>
-        <RowBetween>
-          <span style={{...sans,fontSize:12,color:C.mutedCard}}>Total from referrals:</span>
-          <span style={{...mono,fontSize:14,fontWeight:700,color:C.orange}}>8,450 pts</span>
-        </RowBetween>
-      </Card>
-
-      {/* Status & Milestones */}
-      <div style={{...mono,fontSize:9,color:C.text,letterSpacing:'0.2em',textTransform:'uppercase',margin:'24px 0 8px'}}>Your Status</div>
-      <Card style={{marginBottom:12}}>
-        <Row style={{marginBottom:12}}>
-          <span style={{...mono,fontSize:10,background:C.orangeFaint,color:C.orange,padding:'3px 10px',borderRadius:99,letterSpacing:'0.1em'}}>MIDNIGHT CREW</span>
-        </Row>
-        <div style={{...sans,fontSize:11,color:C.mutedCard,marginBottom:6}}>{(CREW.foundingTarget-CREW.lifetimePts).toLocaleString()} pts to Founding Crew</div>
-        <ProgressBar pct={pct} height={6}/>
-        <div style={{height:1,background:C.borderCard,margin:'14px 0'}}/>
-        {[
-          {icon:'star',desc:'1,000 pts — Free sachet',done:true},
-          {icon:'phone',desc:'5,000 pts — ৳100 bKash credit',done:true},
-          {icon:'repeat',desc:'10,000 pts — Free month',done:false},
-          {icon:'flame',desc:'25,000 pts — Founding Crew',done:false},
-        ].map((m,i)=>(
-          <RowBetween key={i} style={{padding:'10px 0',borderBottom:i<3?`1px solid ${C.borderCard}`:'none'}}>
-            <Row>
-              <Ic n={m.icon} size={16} color={m.done?C.orange:'rgba(247,227,201,0.3)'}/>
-              <span style={{...sans,fontSize:13,color:m.done?C.textCard:'rgba(247,227,201,0.4)'}}>{m.desc}</span>
-            </Row>
-            {m.done?<Ic n="check" size={16} color={C.green}/>:<Ic n="lock" size={14} color='rgba(247,227,201,0.3)'/>}
-          </RowBetween>
-        ))}
-      </Card>
-
-      {/* Code settings */}
-      <div style={{...mono,fontSize:9,color:C.text,letterSpacing:'0.2em',textTransform:'uppercase',marginBottom:8}}>Change My Code</div>
-      <Card style={{marginBottom:12}}>
-        <div style={{position:'relative',marginBottom:6}}>
-          <DarkInput value={codeInput} onChange={e=>handleCodeChange(e.target.value)}
-            placeholder="e.g. RAFI20"
-            style={{...mono,letterSpacing:'0.15em',fontSize:16,paddingRight:40}}
-            right={codeState==='checking'?<Ic n="loader" size={16} color={C.orange}/>:
-                   codeState==='available'?<Ic n="check" size={16} color={C.green}/>:
-                   codeState==='taken'?<Ic n="x" size={16} color={C.red}/>:null}/>
-        </div>
-        {codeMsg&&<div style={{...mono,fontSize:10,color:codeState==='available'?C.green:C.red,marginBottom:8}}>{codeMsg}</div>}
-        <div style={{...sans,fontSize:11,color:C.mutedCard,marginBottom:12}}>4–8 characters · letters and numbers only</div>
-        <OrangeBtn full disabled={!codeValid} onClick={()=>{}}>Save New Code</OrangeBtn>
-        <div style={{...sans,fontSize:10,color:'rgba(247,227,201,0.5)',fontStyle:'italic',marginTop:8,textAlign:'center'}}>Your old code stops working immediately.</div>
-      </Card>
+      <EmptyState icon="users" title="No activity yet" body="Referral activity will appear here once the crew backend is built."/>
       <div style={{height:100}}/>
     </div>
   );
@@ -962,35 +764,26 @@ function CrewTab(){
 ═══════════════════════════════════════════════════════════ */
 
 function PerformanceTab(){
+  const ctx=useContext(MobileCtx);
+  const user=ctx.user;
+  const code=user?.influencer_code||'—';
+  const discount=user?.influencer_discount||10;
+
   return(
     <div style={{padding:'24px 16px 0'}}>
       <div style={{...sans,fontSize:20,fontWeight:700,color:C.text,marginBottom:16}}>Performance</div>
       <StatStrip stats={[
-        {label:'Orders',value:INFLUENCER.orders},
-        {label:'Commission',value:`৳${INFLUENCER.commission}`},
-        {label:'Pending',value:`৳${INFLUENCER.pending}`},
+        {label:'Orders',value:'—'},
+        {label:'Commission',value:'৳—'},
+        {label:'Pending',value:'৳—'},
       ]}/>
-      <div style={{...mono,fontSize:9,color:C.text,letterSpacing:'0.2em',textTransform:'uppercase',marginBottom:8}}>Commission Breakdown</div>
-      <Card style={{marginBottom:16,padding:0,overflow:'hidden'}}>
-        {COMMISSION_ROWS.map((r,i)=>(
-          <RowBetween key={i} style={{padding:'12px 16px',borderBottom:i<COMMISSION_ROWS.length-1?`1px solid ${C.borderCard}`:'none'}}>
-            <span style={{...mono,fontSize:11,color:C.mutedCard}}>{r.date}</span>
-            <span style={{...sans,fontSize:12,color:C.textCard,flex:1,margin:'0 12px'}}>৳{r.orderVal} order</span>
-            <span style={{...mono,fontSize:13,fontWeight:700,color:C.orange}}>+৳{r.comm}</span>
-          </RowBetween>
-        ))}
-        <RowBetween style={{padding:'12px 16px',background:C.cardAlt}}>
-          <span style={{...sans,fontSize:12,color:C.mutedCard}}>This month's total:</span>
-          <span style={{...mono,fontSize:14,fontWeight:700,color:C.orange}}>৳{INFLUENCER.commission}</span>
-        </RowBetween>
-      </Card>
-      {/* Code card */}
-      <div style={{...mono,fontSize:9,color:C.text,letterSpacing:'0.2em',textTransform:'uppercase',marginBottom:8}}>My Code</div>
+      <EmptyState icon="trending" title="Commission data coming soon" body="Detailed commission breakdown will appear here once the influencer backend is built."/>
+      <div style={{...mono,fontSize:9,color:C.text,letterSpacing:'0.2em',textTransform:'uppercase',marginBottom:8,marginTop:24}}>My Code</div>
       <Card style={{textAlign:'center'}}>
         <Eyebrow>Influencer Code</Eyebrow>
-        <div style={{...mono,fontSize:32,fontWeight:700,color:C.orange,letterSpacing:4,marginBottom:8}}>{INFLUENCER.code}</div>
-        <div style={{...sans,fontSize:12,color:C.mutedCard,marginBottom:16}}>Friends get 10% off · You earn 15% commission</div>
-        <OrangeBtn full><Ic n="share" size={14} color={C.card}/>Share Code</OrangeBtn>
+        <div style={{...mono,fontSize:code==='—'?20:32,fontWeight:700,color:code==='—'?C.mutedCard:C.orange,letterSpacing:code==='—'?0:4,marginBottom:8}}>{code}</div>
+        {code!=='—'&&<div style={{...sans,fontSize:12,color:C.mutedCard,marginBottom:16}}>Friends get {discount}% off · You earn commission</div>}
+        {code!=='—'&&<OrangeBtn full><Ic n="share" size={14} color={C.card}/>Share Code</OrangeBtn>}
       </Card>
       <div style={{height:100}}/>
     </div>
@@ -1003,25 +796,10 @@ function PayoutsTab(){
       <div style={{...sans,fontSize:20,fontWeight:700,color:C.text,marginBottom:16}}>Payouts</div>
       <Card style={{marginBottom:16}}>
         <Eyebrow>Pending Payout</Eyebrow>
-        <div style={{...mono,fontSize:40,fontWeight:700,color:C.orange,lineHeight:1,marginBottom:8}}>৳{INFLUENCER.pending}</div>
-        <div style={{...sans,fontSize:12,color:C.mutedCard}}>Estimated payment: June 5, 2026</div>
-        <div style={{...sans,fontSize:11,color:'rgba(247,227,201,0.5)',fontStyle:'italic',marginTop:4}}>Paid on the 5th of each month</div>
+        <div style={{...mono,fontSize:40,fontWeight:700,color:C.orange,lineHeight:1,marginBottom:8}}>৳—</div>
+        <div style={{...sans,fontSize:12,color:C.mutedCard}}>Paid on the 5th of each month</div>
       </Card>
-      <div style={{...mono,fontSize:9,color:C.text,letterSpacing:'0.2em',textTransform:'uppercase',marginBottom:8}}>Payout History</div>
-      <Card style={{padding:0,overflow:'hidden'}}>
-        {PAYOUT_HISTORY.map((p,i)=>(
-          <RowBetween key={i} style={{padding:'14px 16px',borderBottom:i<PAYOUT_HISTORY.length-1?`1px solid ${C.borderCard}`:'none'}}>
-            <div>
-              <div style={{...sans,fontSize:13,fontWeight:600,color:C.textCard}}>{p.month}</div>
-              <div style={{...sans,fontSize:11,color:C.mutedCard,marginTop:2}}>Paid to {p.method}</div>
-            </div>
-            <Row>
-              <span style={{...mono,fontSize:13,fontWeight:700,color:C.orange}}>৳{p.amount}</span>
-              <Badge status={p.status}/>
-            </Row>
-          </RowBetween>
-        ))}
-      </Card>
+      <EmptyState icon="wallet" title="No payout history yet" body="Payout history will appear here once the influencer backend is built."/>
       <div style={{height:100}}/>
     </div>
   );
@@ -1032,38 +810,25 @@ function PayoutsTab(){
 ═══════════════════════════════════════════════════════════ */
 
 function AdminOverviewTab({setTab}){
-  // Simple SVG line chart
-  const data=[120,180,145,220,195,260,210,280,230,300,250,320,290,340,310,280,350,400,370,420,390,450,410,480,460,500,470,490,480,510];
-  const subData=[40,55,50,70,60,80,65,90,75,95,80,100,90,110,95,100,110,130,120,140,130,150,140,160,155,170,160,175,170,180];
-  const max=Math.max(...data);
-  const W=330,H=120;
-  const pts=data.map((v,i)=>`${(i/(data.length-1))*W},${H-((v/max)*H)}`).join(' ');
-  const spts=subData.map((v,i)=>`${(i/(subData.length-1))*W},${H-((v/max)*H)}`).join(' ');
+  const ctx=useContext(MobileCtx);
+  const stats=ctx.adminStats;
+  const orders=ctx.adminOrders||[];
 
   return(
     <div style={{padding:'24px 16px 0'}}>
       <RowBetween style={{marginBottom:16}}>
         <div style={{...sans,fontSize:22,fontWeight:700,color:C.text}}>Admin</div>
-        <span style={{...sans,fontSize:12,color:C.muted}}>May 16, 2026</span>
+        <span style={{...sans,fontSize:12,color:C.muted}}>{new Date().toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'})}</span>
       </RowBetween>
 
-      {/* Alert strip */}
-      <div onClick={()=>setTab('crew')} style={{background:'rgba(255,145,0,0.08)',borderLeft:`3px solid ${C.orange}`,borderRadius:12,
-        padding:'12px 16px',marginBottom:16,cursor:'pointer',display:'flex',alignItems:'center',gap:10}}>
-        <Ic n="bell" size={16} color={C.orange}/>
-        <span style={{...sans,fontSize:13,color:C.text,flex:1}}>3 pending Crew applications</span>
-        <Ic n="chevright" size={14} color={C.muted}/>
-      </div>
-
-      {/* 2×3 stat grid */}
       <div style={{display:'flex',flexWrap:'wrap',gap:8,marginBottom:12}}>
         {[
-          {label:"Today's Orders",value:'12'},
-          {label:"Today's Revenue",value:'৳4,200',orange:true},
-          {label:'Active Subs',value:'34'},
-          {label:'Crew Members',value:'18'},
-          {label:'Pending Apps',value:'3',alert:true},
-          {label:'Pending Redemptions',value:'2'},
+          {label:'Total Orders',value:stats?.orders?.total??'…'},
+          {label:'Active Orders',value:stats?.orders?.active??'…',orange:true},
+          {label:'Total Users',value:stats?.users?.total??'…'},
+          {label:'Crew Members',value:stats?.users?.crew??'…'},
+          {label:'Influencers',value:stats?.users?.influencer??'…'},
+          {label:'Revenue Delivered',value:`৳${Number(stats?.revenue?.total_delivered||0).toLocaleString()}`,orange:true},
         ].map((s,i)=>(
           <div key={i} style={{width:'calc(50% - 4px)',background:C.card,borderRadius:12,padding:12,border:`1px solid ${C.borderCard}`}}>
             <div style={{...mono,fontSize:9,color:s.alert?C.orange:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>{s.label}</div>
@@ -1072,35 +837,25 @@ function AdminOverviewTab({setTab}){
         ))}
       </div>
 
-      {/* Revenue chart */}
       <Card style={{marginBottom:16}}>
         <Eyebrow>Revenue — Last 30 Days</Eyebrow>
-        <div style={{overflowX:'hidden'}}>
-          <svg width="100%" viewBox={`0 0 ${W} ${H+20}`} style={{display:'block'}}>
-            <polyline points={pts} fill="none" stroke={C.textCard} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.6"/>
-            <polyline points={spts} fill="none" stroke={C.orange} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-            {['May 1','May 8','May 15','May 22','May 30'].map((d,i)=>(
-              <text key={i} x={(i/4)*W} y={H+16} fontSize="9" fill="rgba(247,227,201,0.5)" fontFamily="DM Mono">{d}</text>
-            ))}
-          </svg>
+        <div style={{height:80,display:'flex',alignItems:'center',justifyContent:'center',background:'rgba(247,227,201,0.05)',borderRadius:8}}>
+          <span style={{...mono,fontSize:11,color:'rgba(247,227,201,0.25)'}}>No revenue data yet</span>
         </div>
-        <Row style={{gap:16,marginTop:8}}>
-          <Row style={{gap:6}}><div style={{width:12,height:2,background:C.textCard,opacity:0.6,borderRadius:1}}/><span style={{...mono,fontSize:9,color:C.mutedCard}}>Total</span></Row>
-          <Row style={{gap:6}}><div style={{width:12,height:2,background:C.orange,borderRadius:1}}/><span style={{...mono,fontSize:9,color:C.mutedCard}}>Subscription</span></Row>
-        </Row>
       </Card>
 
-      {/* Recent orders */}
       <RowBetween style={{marginBottom:8}}>
         <div style={{...mono,fontSize:9,color:C.text,letterSpacing:'0.2em',textTransform:'uppercase'}}>Recent Orders</div>
         <button style={{...sans,fontSize:11,color:C.orange,background:'none',border:'none',cursor:'pointer'}} onClick={()=>setTab('orders')}>See all →</button>
       </RowBetween>
       <Card style={{padding:0,overflow:'hidden'}}>
-        {RECENT_ORDERS.map((o,i)=>(
-          <RowBetween key={i} style={{padding:'12px 16px',borderBottom:i<RECENT_ORDERS.length-1?`1px solid ${C.borderCard}`:'none'}}>
+        {orders.length===0?(
+          <div style={{...sans,fontSize:13,color:C.mutedCard,textAlign:'center',padding:'20px 0'}}>No orders yet.</div>
+        ):orders.slice(0,5).map((o,i)=>(
+          <RowBetween key={i} style={{padding:'12px 16px',borderBottom:i<Math.min(orders.length,5)-1?`1px solid ${C.borderCard}`:'none'}}>
             <div style={{flex:1,minWidth:0}}>
-              <div style={{...sans,fontSize:13,fontWeight:600,color:C.textCard,marginBottom:2}}>{o.customer}</div>
-              <div style={{...sans,fontSize:11,color:C.mutedCard,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{o.items}</div>
+              <div style={{...sans,fontSize:13,fontWeight:600,color:C.textCard,marginBottom:2}}>{o.customer_name}</div>
+              <div style={{...sans,fontSize:11,color:C.mutedCard,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{orderSummary(o.items)}</div>
             </div>
             <div style={{flexShrink:0,textAlign:'right'}}>
               <div style={{...mono,fontSize:13,fontWeight:700,color:C.orange,marginBottom:4}}>৳{o.total}</div>
@@ -1115,79 +870,342 @@ function AdminOverviewTab({setTab}){
 }
 
 function AdminOrdersTab(){
+  const ctx=useContext(MobileCtx);
+  const [orders,setOrders]=useState(ctx.adminOrders||[]);
   const [search,setSearch]=useState('');
-  const [filter,setFilter]=useState('All');
-  const [expanded,setExpanded]=useState(null);
-  const [sheet,setSheet]=useState(null);
-  const filters=['All','Processing','Shipped','Delivered','Cancelled'];
-  const visible=RECENT_ORDERS.filter(o=>{
-    const matchF=filter==='All'||o.status===filter;
-    const matchS=!search||o.customer.toLowerCase().includes(search.toLowerCase())||o.phone.includes(search);
-    return matchF&&matchS;
+  const [statusFilter,setStatusFilter]=useState('All');
+  const [couponFilter,setCouponFilter]=useState('All');
+  const [detail,setDetail]=useState(null);
+  const [editMode,setEditMode]=useState(false);
+  const [editFields,setEditFields]=useState({});
+  const [cancelConfirm,setCancelConfirm]=useState(false);
+  const [newOrderSheet,setNewOrderSheet]=useState(false);
+  const [prodPickerOpen,setProdPickerOpen]=useState(false);
+  const emptyOrder={customer:'',phone:'',address:'',orderItems:[],payment:'bKash',coupon:'',couponDiscount:0,couponState:null,couponError:'',notes:'',status:'processing'};
+  const [newOrder,setNewOrder]=useState(emptyOrder);
+  const [couponApplying,setCouponApplying]=useState(false);
+
+  useEffect(()=>{setOrders(ctx.adminOrders||[]);},[ctx.adminOrders]);
+
+  const visible=orders.filter(o=>{
+    const matchS=statusFilter==='All'||o.status===statusFilter.toLowerCase();
+    const matchC=couponFilter==='All'||(couponFilter==='With Coupon'&&o.coupon_code)||(couponFilter==='No Coupon'&&!o.coupon_code);
+    const q=search.toLowerCase();
+    const matchQ=!q||(o.customer_name||'').toLowerCase().includes(q)||(o.customer_phone||'').includes(search);
+    return matchS&&matchC&&matchQ;
   });
 
+  async function updateStatus(orderId,newSt){
+    try{await window.mpApi.fetch(`/admin/orders/${orderId}/status`,{method:'PATCH',body:JSON.stringify({status:newSt})});}catch(_){}
+    setOrders(prev=>prev.map(o=>o.id===orderId?{...o,status:newSt}:o));
+    if(detail?.id===orderId)setDetail(d=>({...d,status:newSt}));
+    setCancelConfirm(false);
+    if(newSt==='cancelled'){setDetail(null);}
+  }
+
+  function openDetail(o){setDetail(o);setEditMode(false);setEditFields({total:o.total,phone:o.customer_phone||''});setCancelConfirm(false);}
+
+  function saveEdit(){
+    const updated={...detail,total:parseFloat(editFields.total)||detail.total,customer_phone:editFields.phone};
+    setOrders(prev=>prev.map(o=>o.id===detail.id?updated:o));
+    setDetail(updated);setEditMode(false);
+  }
+
+  function addOrderItem(productId){
+    const p=(ctx.adminProducts||[]).find(x=>x.id===productId);
+    if(!p)return;
+    setNewOrder(f=>{
+      const existing=f.orderItems.find(x=>x.id===productId);
+      if(existing)return{...f,orderItems:f.orderItems.map(it=>it.id===productId?{...it,qty:(parseInt(it.qty)||1)+1}:it)};
+      return{...f,orderItems:[...f.orderItems,{id:p.id,name:p.name,qty:1,unit_price:parseFloat(p.price)||0}]};
+    });
+  }
+
+  function removeOrderItem(idx){
+    setNewOrder(f=>({...f,orderItems:f.orderItems.filter((_,i)=>i!==idx)}));
+  }
+
+  function updateOrderItemQty(idx,delta){
+    setNewOrder(f=>({...f,orderItems:f.orderItems.map((it,i)=>i===idx?{...it,qty:Math.max(1,(parseInt(it.qty)||1)+delta)}:it)}));
+  }
+
+  async function applyCoupon(){
+    if(!newOrder.coupon)return;
+    const sub=newOrder.orderItems.reduce((s,it)=>s+it.unit_price*(parseInt(it.qty)||1),0);
+    setCouponApplying(true);
+    try{
+      const res=await window.mpApi.fetch(`/admin/coupons/validate?code=${encodeURIComponent(newOrder.coupon)}&subtotal=${sub}`);
+      if(res?.ok){
+        setNewOrder(f=>({...f,couponDiscount:res.data.discount,couponState:'ok',couponError:''}));
+      }else{
+        setNewOrder(f=>({...f,couponDiscount:0,couponState:'error',couponError:res?.error?.message||'Invalid coupon'}));
+      }
+    }catch(_){
+      setNewOrder(f=>({...f,couponDiscount:0,couponState:'error',couponError:'Failed to validate'}));
+    }
+    setCouponApplying(false);
+  }
+
+  async function submitManualOrder(){
+    if(!newOrder.customer||!newOrder.phone||!newOrder.orderItems.length)return;
+    const sub=newOrder.orderItems.reduce((s,it)=>s+it.unit_price*(parseInt(it.qty)||1),0);
+    try{
+      const res=await window.mpApi.fetch('/admin/orders',{
+        method:'POST',
+        body:JSON.stringify({
+          customer_name:newOrder.customer,
+          customer_phone:newOrder.phone,
+          address:newOrder.address||undefined,
+          items:newOrder.orderItems.map(it=>({id:it.id,name:it.name,qty:parseInt(it.qty)||1,unit_price:it.unit_price})),
+          payment_type:newOrder.payment,
+          coupon_code:newOrder.coupon||undefined,
+          discount_amount:newOrder.couponDiscount,
+          status:newOrder.status,
+          notes:newOrder.notes||undefined,
+        }),
+      });
+      if(res?.ok&&res.data)setOrders(prev=>[res.data,...prev]);
+    }catch(_){}
+    setNewOrder(emptyOrder);setProdPickerOpen(false);setNewOrderSheet(false);
+  }
+
+  const lbl=s=>s.charAt(0).toUpperCase()+s.slice(1);
+
   return(
-    <div style={{padding:'24px 0 0',position:'relative'}}>
-      <div style={{padding:'0 16px',marginBottom:12}}>
-        <div style={{...sans,fontSize:20,fontWeight:700,color:C.text,marginBottom:12}}>Orders</div>
-        <div style={{position:'relative'}}>
-          <Ic n="search" size={16} color={C.muted} style={{position:'absolute',left:12,top:'50%',transform:'translateY(-50%)'}}/>
-          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search by name or phone"
-            style={{width:'100%',background:C.bg,border:`1px solid rgba(44,24,16,0.15)`,borderRadius:10,
-              padding:'10px 14px 10px 38px',color:C.text,...sans,fontSize:13,outline:'none'}}/>
-        </div>
+    <div style={{padding:'24px 0 0'}}>
+      <RowBetween style={{padding:'0 16px',marginBottom:12}}>
+        <div style={{...sans,fontSize:20,fontWeight:700,color:C.text}}>Orders</div>
+        <OrangeBtn onClick={()=>setNewOrderSheet(true)} style={{padding:'8px 14px',fontSize:12}}>
+          <Ic n="plus" size={14} color={C.card}/>New
+        </OrangeBtn>
+      </RowBetween>
+
+      <div style={{padding:'0 16px',marginBottom:8}}>
+        <DarkInput value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search customer or phone…"/>
+      </div>
+      <div style={{display:'flex',gap:8,overflowX:'auto',padding:'0 16px 6px',scrollbarWidth:'none'}}>
+        {['All','Processing','Packed','Shipped','Delivered','Cancelled'].map(f=>(
+          <Pill key={f} label={f} active={statusFilter===(f==='All'?'All':f.toLowerCase())} onClick={()=>setStatusFilter(f==='All'?'All':f.toLowerCase())}/>
+        ))}
       </div>
       <div style={{display:'flex',gap:8,overflowX:'auto',padding:'0 16px 12px',scrollbarWidth:'none'}}>
-        {filters.map(f=><Pill key={f} label={f} active={filter===f} onClick={()=>setFilter(f)}/>)}
+        {['All','With Coupon','No Coupon'].map(f=>(
+          <Pill key={f} label={f} active={couponFilter===f} onClick={()=>setCouponFilter(f)}/>
+        ))}
       </div>
+
       <div style={{padding:'0 16px'}}>
-        {visible.map((o,i)=>{
-          const open=expanded===o.id;
-          return(
-            <div key={o.id} onClick={()=>setExpanded(open?null:o.id)}
-              style={{background:C.card,borderRadius:12,marginBottom:10,border:`1px solid ${C.borderCard}`,cursor:'pointer'}}>
-              <div style={{padding:'14px 16px'}}>
-                <RowBetween style={{marginBottom:6}}>
-                  <span style={{...mono,fontSize:10,color:'rgba(247,227,201,0.5)'}}>{o.id}</span>
-                  <Badge status={o.status}/>
-                </RowBetween>
-                <RowBetween>
-                  <div>
-                    <div style={{...sans,fontSize:14,fontWeight:600,color:C.textCard}}>{o.customer}</div>
-                    <div style={{...sans,fontSize:11,color:C.mutedCard,marginTop:2}}>{o.items}</div>
-                    {o.coupon&&<div style={{...sans,fontSize:11,color:C.green,marginTop:2}}>via {o.coupon}</div>}
+        {visible.length===0?(
+          <EmptyState icon="package" title="No orders found"/>
+        ):visible.map(o=>(
+          <div key={o.id} onClick={()=>openDetail(o)}
+            style={{background:C.card,borderRadius:12,marginBottom:10,border:`1px solid ${C.borderCard}`,padding:'14px 16px',cursor:'pointer'}}>
+            <RowBetween style={{marginBottom:4}}>
+              <span style={{...mono,fontSize:10,color:'rgba(247,227,201,0.5)'}}>{o.order_ref}</span>
+              <span style={{...sans,fontSize:11,color:'rgba(247,227,201,0.5)'}}>{fmtDate(o.created_at)}</span>
+            </RowBetween>
+            <div style={{...sans,fontSize:14,fontWeight:700,color:C.textCard,marginBottom:4}}>{o.customer_name}</div>
+            <div style={{...sans,fontSize:12,color:C.mutedCard,marginBottom:8,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{orderSummary(o.items)}</div>
+            <RowBetween>
+              <Row style={{gap:8}}>
+                <span style={{...mono,fontSize:14,fontWeight:700,color:C.orange}}>৳{o.total}</span>
+                {o.coupon_code&&<span style={{...mono,fontSize:9,color:C.blue,background:'rgba(100,181,246,0.1)',padding:'2px 6px',borderRadius:4}}>{o.coupon_code}</span>}
+              </Row>
+              <Row><Badge status={o.status}/><Ic n="chevright" size={14} color='rgba(247,227,201,0.4)'/></Row>
+            </RowBetween>
+          </div>
+        ))}
+      </div>
+      <div style={{height:100}}/>
+
+      {detail&&(
+        <BottomSheet onClose={()=>{setDetail(null);setEditMode(false);setCancelConfirm(false);}}>
+          <div style={{...mono,fontSize:10,color:C.orange,letterSpacing:'0.15em',marginBottom:4}}>{detail.order_ref}</div>
+          <div style={{...sans,fontSize:18,fontWeight:700,color:C.textCard,marginBottom:16}}>{detail.customer_name}</div>
+
+          {!editMode&&!cancelConfirm&&(<>
+            <Col style={{gap:10,marginBottom:16}}>
+              <RowBetween><span style={{...sans,fontSize:13,color:C.mutedCard}}>Items</span><span style={{...sans,fontSize:13,color:C.textCard,textAlign:'right',maxWidth:200}}>{orderSummary(detail.items)}</span></RowBetween>
+              <RowBetween><span style={{...sans,fontSize:13,color:C.mutedCard}}>Total</span><span style={{...mono,fontSize:15,fontWeight:700,color:C.orange}}>৳{detail.total}</span></RowBetween>
+              <RowBetween><span style={{...sans,fontSize:13,color:C.mutedCard}}>Phone</span><span style={{...sans,fontSize:13,color:C.textCard}}>{detail.customer_phone||'—'}</span></RowBetween>
+              <RowBetween><span style={{...sans,fontSize:13,color:C.mutedCard}}>Payment</span><span style={{...sans,fontSize:13,color:C.textCard}}>{detail.payment_type||'—'}</span></RowBetween>
+              {detail.coupon_code&&<RowBetween><span style={{...sans,fontSize:13,color:C.mutedCard}}>Coupon</span><span style={{...mono,fontSize:13,color:C.blue}}>{detail.coupon_code}</span></RowBetween>}
+              <RowBetween><span style={{...sans,fontSize:13,color:C.mutedCard}}>Date</span><span style={{...sans,fontSize:13,color:C.textCard}}>{fmtDate(detail.created_at)}</span></RowBetween>
+              <RowBetween><span style={{...sans,fontSize:13,color:C.mutedCard}}>Status</span><Badge status={detail.status}/></RowBetween>
+            </Col>
+            <div style={{height:1,background:C.borderCard,marginBottom:16}}/>
+            {detail.status!=='cancelled'&&detail.status!=='delivered'&&(
+              <Col style={{gap:8,marginBottom:12}}>
+                {(detail.status==='processing'||detail.status==='confirmed')&&(
+                  <OrangeBtn full onClick={()=>updateStatus(detail.id,'packed')}>Mark as Packaged</OrangeBtn>
+                )}
+                {detail.status==='packed'&&(
+                  <OrangeBtn full onClick={()=>updateStatus(detail.id,'shipped')}>Hand to Delivery Service</OrangeBtn>
+                )}
+                {detail.status==='shipped'&&(
+                  <div style={{...sans,fontSize:12,color:C.blue,padding:'10px 14px',background:'rgba(100,181,246,0.1)',borderRadius:8}}>
+                    Tracking will auto-update via the delivery service API.
                   </div>
-                  <div style={{textAlign:'right',flexShrink:0}}>
-                    <div style={{...mono,fontSize:14,fontWeight:700,color:C.orange}}>৳{o.total}</div>
-                    {o.status==='Processing'&&(
-                      <button onClick={e=>{e.stopPropagation();setSheet(o);}} style={{...sans,fontSize:11,color:C.orange,background:'none',border:'none',cursor:'pointer',marginTop:4}}>Tap to mark shipped</button>
-                    )}
-                  </div>
-                </RowBetween>
+                )}
+                <GhostBtn full onClick={()=>setEditMode(true)}><Ic n="pencil" size={14} color={C.mutedCard}/>Edit Order</GhostBtn>
+              </Col>
+            )}
+            {detail.status!=='cancelled'&&(
+              <GhostBtn full onClick={()=>setCancelConfirm(true)} style={{color:C.red,borderColor:'rgba(229,115,115,0.3)'}}>
+                <Ic n="x" size={14} color={C.red}/>Cancel Order
+              </GhostBtn>
+            )}
+          </>)}
+
+          {editMode&&(<>
+            <div style={{...sans,fontSize:14,fontWeight:700,color:C.textCard,marginBottom:12}}>Edit Order</div>
+            <Col style={{gap:10,marginBottom:16}}>
+              <div>
+                <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Total (৳)</div>
+                <DarkInput value={editFields.total} onChange={e=>setEditFields(f=>({...f,total:e.target.value}))} placeholder="0"/>
               </div>
-              {open&&(
-                <div style={{borderTop:`1px solid ${C.borderCard}`,padding:'14px 16px'}} onClick={e=>e.stopPropagation()}>
-                  <div style={{...sans,fontSize:13,fontWeight:600,color:C.textCard,marginBottom:4}}>{o.customer}</div>
-                  <a href={`tel:${o.phone}`} style={{...mono,fontSize:12,color:C.orange,display:'block',marginBottom:10}}>{o.phone}</a>
-                  <div style={{...sans,fontSize:12,color:C.mutedCard,marginBottom:4}}>Payment: bKash •••• 1234</div>
-                  <div style={{...sans,fontSize:12,color:C.mutedCard,marginBottom:12}}>Customer's 3rd order — loyal buyer</div>
-                  <Col>
-                    <OrangeBtn full onClick={()=>setSheet(o)}>Mark as Shipped</OrangeBtn>
-                    <GhostBtn full>Flag Order</GhostBtn>
-                  </Col>
+              <div>
+                <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Customer Phone</div>
+                <DarkInput value={editFields.phone} onChange={e=>setEditFields(f=>({...f,phone:e.target.value}))} placeholder="01XXXXXXXXX"/>
+              </div>
+            </Col>
+            <Col style={{gap:8}}>
+              <OrangeBtn full onClick={saveEdit}>Save Changes</OrangeBtn>
+              <GhostBtn full onClick={()=>setEditMode(false)}>Cancel Edit</GhostBtn>
+            </Col>
+          </>)}
+
+          {cancelConfirm&&(<>
+            <div style={{...sans,fontSize:15,fontWeight:700,color:C.textCard,marginBottom:8}}>Cancel this order?</div>
+            <div style={{...sans,fontSize:13,color:C.mutedCard,marginBottom:20,lineHeight:1.5}}>
+              {detail.customer_name} will be notified. This cannot be undone.
+            </div>
+            <Col style={{gap:8}}>
+              <GhostBtn full onClick={()=>updateStatus(detail.id,'cancelled')} style={{color:C.red,borderColor:'rgba(229,115,115,0.3)'}}>Yes, Cancel Order</GhostBtn>
+              <GhostBtn full onClick={()=>setCancelConfirm(false)}>Keep Order</GhostBtn>
+            </Col>
+          </>)}
+        </BottomSheet>
+      )}
+
+      {newOrderSheet&&(
+        <BottomSheet onClose={()=>{setNewOrderSheet(false);setProdPickerOpen(false);}} title="New Manual Order">
+          <div style={{...sans,fontSize:12,color:C.orange,background:'rgba(255,145,0,0.1)',border:'1px solid rgba(255,145,0,0.2)',borderRadius:8,padding:'10px 12px',marginBottom:16}}>
+            Use this for orders placed via phone, WhatsApp, or in person.
+          </div>
+          <Col style={{gap:12}}>
+            <div>
+              <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Customer Name *</div>
+              <DarkInput value={newOrder.customer} onChange={e=>setNewOrder(f=>({...f,customer:e.target.value}))} placeholder="Full name"/>
+            </div>
+            <div>
+              <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Phone <span style={{color:C.red}}>*</span></div>
+              <DarkInput value={newOrder.phone} onChange={e=>setNewOrder(f=>({...f,phone:e.target.value}))} placeholder="01XXXXXXXXX"/>
+            </div>
+            <div>
+              <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Delivery Address</div>
+              <DarkInput value={newOrder.address} onChange={e=>setNewOrder(f=>({...f,address:e.target.value}))} placeholder="House, Road, Area, City"/>
+            </div>
+            <div>
+              <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Products *</div>
+              <button
+                onClick={()=>setProdPickerOpen(v=>!v)}
+                style={{width:'100%',background:C.cardAlt,color:C.mutedCard,border:`1px solid rgba(247,227,201,${prodPickerOpen?'0.35':'0.15'})`,borderRadius:prodPickerOpen?'8px 8px 0 0':8,padding:'10px 12px',fontSize:13,...sans,outline:'none',display:'flex',alignItems:'center',justifyContent:'space-between',cursor:'pointer',textAlign:'left'}}
+              >
+                <span>— Select a product —</span>
+                <span style={{fontSize:9,color:C.mutedCard,transform:prodPickerOpen?'rotate(180deg)':'none',transition:'transform 150ms',display:'inline-block'}}>▼</span>
+              </button>
+              {prodPickerOpen&&(
+                <div style={{background:C.cardAlt,border:`1px solid rgba(247,227,201,0.2)`,borderTop:'none',borderRadius:'0 0 8px 8px',maxHeight:160,overflowY:'auto'}}>
+                  {(ctx.adminProducts||[]).length===0?(
+                    <div style={{padding:'10px 12px',...sans,fontSize:13,color:C.mutedCard}}>No products added yet</div>
+                  ):(ctx.adminProducts||[]).map(p=>(
+                    <button key={p.id} onClick={()=>{addOrderItem(p.id);setProdPickerOpen(false);}} style={{width:'100%',display:'flex',alignItems:'center',justifyContent:'space-between',textAlign:'left',padding:'10px 12px',background:'none',border:'none',borderBottom:`1px solid rgba(247,227,201,0.08)`,color:newOrder.orderItems.some(x=>x.id===p.id)?C.orange:C.textCard,fontSize:13,...sans,cursor:'pointer'}}>
+                      <span>{p.name}</span>
+                      <span style={{...mono,fontSize:12,color:newOrder.orderItems.some(x=>x.id===p.id)?C.orange:C.mutedCard,whiteSpace:'nowrap',marginLeft:8}}>
+                        ৳{p.price}{newOrder.orderItems.some(x=>x.id===p.id)&&' ✓'}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {newOrder.orderItems.length>0&&(
+                <div style={{marginTop:8,display:'flex',flexDirection:'column',gap:6}}>
+                  {newOrder.orderItems.map((it,idx)=>{
+                    const qty=parseInt(it.qty)||1;
+                    const qBtnStyle={width:28,height:28,borderRadius:6,background:'rgba(247,227,201,0.1)',border:'1px solid rgba(247,227,201,0.18)',color:C.textCard,fontSize:18,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',lineHeight:1,flexShrink:0,fontWeight:400};
+                    return(
+                      <div key={it.id} style={{display:'flex',alignItems:'center',gap:8,background:C.cardAlt,borderRadius:8,padding:'8px 10px'}}>
+                        <span style={{flex:1,...sans,fontSize:13,color:C.textCard}}>{it.name}</span>
+                        <span style={{...mono,fontSize:11,color:C.mutedCard,whiteSpace:'nowrap'}}>৳{it.unit_price}</span>
+                        <button onClick={()=>updateOrderItemQty(idx,-1)} style={qBtnStyle}>−</button>
+                        <span style={{...mono,fontSize:13,color:C.textCard,minWidth:22,textAlign:'center'}}>{qty}</span>
+                        <button onClick={()=>updateOrderItemQty(idx,1)} style={qBtnStyle}>+</button>
+                        <button onClick={()=>removeOrderItem(idx)} style={{background:'none',border:'none',color:C.mutedCard,cursor:'pointer',padding:4,fontSize:14,lineHeight:1,flexShrink:0}}>×</button>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
-          );
-        })}
-      </div>
-      <div style={{height:100}}/>
-      {sheet&&(
-        <BottomSheet onClose={()=>setSheet(null)} title={`Mark ${sheet.id} as Shipped?`}>
-          <div style={{...sans,fontSize:14,color:C.mutedCard,marginBottom:20}}>A shipping notification will be sent to {sheet.customer}.</div>
-          <Col>
-            <OrangeBtn full onClick={()=>setSheet(null)}>Confirm — Mark Shipped</OrangeBtn>
-            <GhostBtn full onClick={()=>setSheet(null)}>Cancel</GhostBtn>
+            {(()=>{
+              const sub=newOrder.orderItems.reduce((s,it)=>s+it.unit_price*(parseInt(it.qty)||1),0);
+              const total=Math.max(0,sub-newOrder.couponDiscount);
+              return newOrder.orderItems.length>0&&(
+                <div style={{background:'rgba(247,227,201,0.05)',border:'1px solid rgba(247,227,201,0.1)',borderRadius:10,padding:'12px 14px'}}>
+                  <RowBetween style={{marginBottom:newOrder.couponDiscount>0?8:0}}>
+                    <span style={{...sans,fontSize:13,color:C.mutedCard}}>Subtotal</span>
+                    <span style={{...mono,fontSize:13,color:C.textCard}}>৳{sub.toFixed(2)}</span>
+                  </RowBetween>
+                  {newOrder.couponDiscount>0&&(
+                    <RowBetween style={{marginBottom:8}}>
+                      <span style={{...sans,fontSize:13,color:C.green}}>Coupon ({newOrder.coupon})</span>
+                      <span style={{...mono,fontSize:13,color:C.green}}>−৳{newOrder.couponDiscount.toFixed(2)}</span>
+                    </RowBetween>
+                  )}
+                  <div style={{height:1,background:'rgba(247,227,201,0.1)',marginBottom:8}}/>
+                  <RowBetween>
+                    <span style={{...sans,fontSize:14,fontWeight:700,color:C.textCard}}>Total</span>
+                    <span style={{...mono,fontSize:16,fontWeight:700,color:C.orange}}>৳{total.toFixed(2)}</span>
+                  </RowBetween>
+                </div>
+              );
+            })()}
+            <div>
+              <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Coupon Code</div>
+              <Row style={{gap:8}}>
+                <div style={{flex:1}}>
+                  <DarkInput value={newOrder.coupon} onChange={e=>setNewOrder(f=>({...f,coupon:e.target.value.toUpperCase(),couponDiscount:0,couponState:null,couponError:''}))} placeholder="Optional"/>
+                </div>
+                <OrangeBtn onClick={applyCoupon} disabled={!newOrder.coupon||couponApplying||!newOrder.orderItems.length} style={{padding:'0 16px',height:48,fontSize:13,flexShrink:0,borderRadius:8}}>
+                  {couponApplying?'…':'Apply'}
+                </OrangeBtn>
+              </Row>
+              {newOrder.couponState==='ok'&&<div style={{...sans,fontSize:11,color:C.green,marginTop:5}}>✓ Applied — saving ৳{newOrder.couponDiscount.toFixed(2)}</div>}
+              {newOrder.couponState==='error'&&<div style={{...sans,fontSize:11,color:C.red,marginTop:5}}>✗ {newOrder.couponError||'Invalid coupon'}</div>}
+            </div>
+            <div>
+              <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:8}}>Payment Method</div>
+              <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                {['bKash','Nagad','Rocket','Cash','Card','Bank Transfer'].map(m=>(
+                  <Pill key={m} label={m} active={newOrder.payment===m} onClick={()=>setNewOrder(f=>({...f,payment:m}))}/>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:8}}>Initial Status</div>
+              <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                {['processing','packed','shipped','delivered'].map(s=>(
+                  <Pill key={s} label={lbl(s)} active={newOrder.status===s} onClick={()=>setNewOrder(f=>({...f,status:s}))}/>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Internal Notes</div>
+              <DarkInput value={newOrder.notes} onChange={e=>setNewOrder(f=>({...f,notes:e.target.value}))} placeholder="e.g. Customer prefers evening delivery"/>
+            </div>
+            <OrangeBtn full onClick={submitManualOrder} disabled={!newOrder.customer||!newOrder.phone||!newOrder.orderItems.length}>Create Order</OrangeBtn>
+            <GhostBtn full onClick={()=>{setNewOrderSheet(false);setProdPickerOpen(false);}}>Cancel</GhostBtn>
           </Col>
         </BottomSheet>
       )}
@@ -1196,306 +1214,196 @@ function AdminOrdersTab(){
 }
 
 function AdminCrewTab(){
-  const [sub,setSub]=useState('Pending');
-  const [apps,setApps]=useState(PENDING_APPS);
-  const [toast,setToast]=useState(null);
-  const [expanded,setExpanded]=useState({});
-
-  function approve(app){
-    setApps(a=>a.filter(x=>x.id!==app.id));
-    setToast(`${app.name} approved. WhatsApp notification sent.`);
-    setTimeout(()=>setToast(null),3000);
-  }
-
   return(
-    <div style={{padding:'24px 16px 0',position:'relative'}}>
-      {toast&&<Toast msg={toast} type="success" onDone={()=>setToast(null)}/>}
-      <div style={{...sans,fontSize:20,fontWeight:700,color:C.text,marginBottom:16}}>Crew</div>
-      <Row style={{marginBottom:16}}>
-        {['Pending','Active'].map(s=>(
-          <button key={s} onClick={()=>setSub(s)} style={{padding:'8px 20px',borderRadius:99,border:'none',cursor:'pointer',
-            background:sub===s?C.card:'transparent',color:sub===s?C.textCard:C.muted,...sans,fontSize:13,fontWeight:sub===s?600:400,
-            transition:'all 150ms'}}>
-            {s}{s==='Pending'?` (${apps.length})`:''}
-          </button>
-        ))}
-      </Row>
-
-      {sub==='Pending'&&(
-        apps.length===0?(
-          <div style={{textAlign:'center',padding:'60px 0'}}>
-            <Ic n="users" size={48} color='rgba(247,227,201,0.25)'/>
-            <div style={{...sans,fontSize:16,fontWeight:700,color:C.textCard,marginTop:16}}>No pending applications</div>
-            <div style={{...sans,fontSize:13,color:C.mutedCard,marginTop:6}}>Check back soon</div>
-          </div>
-        ):apps.map(app=>{
-          const long=app.why.length>150;
-          const isExp=expanded[app.id];
-          return(
-            <Card key={app.id} style={{marginBottom:12}}>
-              <RowBetween style={{marginBottom:6}}>
-                <span style={{...sans,fontSize:15,fontWeight:700,color:C.textCard}}>{app.name}</span>
-                <span style={{...sans,fontSize:11,color:C.mutedCard}}>{app.date}</span>
-              </RowBetween>
-              <div style={{...mono,fontSize:11,color:C.orange,marginBottom:10}}>{app.inst}</div>
-              <div style={{...sans,fontSize:11,color:C.mutedCard,marginBottom:6}}>Why I drink Midnight Pick:</div>
-              <div style={{...sans,fontSize:13,color:C.textCard,lineHeight:1.6,marginBottom:4}}>
-                {!isExp&&long?app.why.slice(0,150)+'…':app.why}
-              </div>
-              {long&&<button onClick={()=>setExpanded(e=>({...e,[app.id]:!e[app.id]}))} style={{...sans,fontSize:12,color:C.orange,background:'none',border:'none',cursor:'pointer',marginBottom:10}}>{isExp?'Read less':'Read more →'}</button>}
-              {app.social&&<div style={{...sans,fontSize:11,color:C.mutedCard,marginBottom:12}}>{app.social}</div>}
-              <Row>
-                <OrangeBtn style={{flex:1}} onClick={()=>approve(app)}>Approve</OrangeBtn>
-                <GhostBtn style={{width:90}} onClick={()=>setApps(a=>a.filter(x=>x.id!==app.id))}>Decline</GhostBtn>
-              </Row>
-            </Card>
-          );
-        })
-      )}
-
-      {sub==='Active'&&ACTIVE_CREW.map(m=>(
-        <Card key={m.id} style={{marginBottom:8,padding:'14px 16px'}}>
-          <RowBetween>
-            <div>
-              <div style={{...sans,fontSize:14,fontWeight:700,color:C.textCard}}>{m.name}</div>
-              <div style={{...sans,fontSize:11,color:C.mutedCard,marginTop:2}}>{m.inst}</div>
-            </div>
-            <div style={{textAlign:'right'}}>
-              <div style={{...mono,fontSize:13,fontWeight:700,color:C.orange}}>{m.code}</div>
-              <div style={{...sans,fontSize:11,color:C.mutedCard,marginTop:2}}>{m.refs} refs this month</div>
-            </div>
-          </RowBetween>
-        </Card>
-      ))}
+    <div style={{padding:'24px 16px 0'}}>
+      <div style={{...sans,fontSize:20,fontWeight:700,color:C.text,marginBottom:16}}>Crew Management</div>
+      <EmptyState icon="users" title="Coming soon" body="Crew applications and management will appear here once the crew backend is built."/>
       <div style={{height:100}}/>
     </div>
   );
 }
 
 function AdminCouponsTab(){
-  const [sub,setSub]=useState('Festival');
-  const [sheet,setSheet]=useState(false);
-  const [form,setForm]=useState({code:'',type:'Percentage',discount:'',minOrder:'',cap:'',expiry:'',active:true});
-  const [codeState,setCodeState]=useState('idle');
-  const [codeMsg,setCodeMsg]=useState('');
-  const [influencers,setInfluencers]=useState(INFLUENCER_CODES);
-  const [paySheet,setPaySheet]=useState(null);
-  const debRef=useRef(null);
+  const ctx=useContext(MobileCtx);
+  const [tab,setTab]=useState('Festival');
+  const [coupons,setCoupons]=useState([]);
+  const [showForm,setShowForm]=useState(false);
+  const emptyForm={code:'',type:'Percentage',value:'',minOrder:'',cap:'',perAccount:'1',expiry:''};
+  const [form,setForm]=useState(emptyForm);
 
-  function handleCodeInput(val){
-    setForm(f=>({...f,code:val.toUpperCase()}));
-    clearTimeout(debRef.current);
-    if(!val){setCodeState('idle');setCodeMsg('');return;}
-    setCodeState('checking');
-    debRef.current=setTimeout(()=>{
-      if(['EID2026','FINALS26'].includes(val.toUpperCase())){setCodeState('taken');setCodeMsg(`${val.toUpperCase()} is already taken ✗`);}
-      else{setCodeState('available');setCodeMsg(`${val.toUpperCase()} is available ✓`);}
-    },600);
+  useEffect(()=>{
+    if((ctx.adminInfluencers||[]).length>0)return;
+    window.mpApi.fetch('/admin/influencers').then(res=>{
+      if(res?.data?.influencers?.length)ctx.setAdminInfluencers(res.data.influencers);
+    }).catch(()=>{});
+  },[]);
+
+  async function toggleInfluencerCoupon(code){
+    const res=await window.mpApi.fetch(`/admin/coupons/${code}/toggle`,{method:'PATCH'});
+    if(res?.ok&&res?.data){
+      ctx.setAdminInfluencers(prev=>prev.map(c=>c.code===code?{...c,is_active:res.data.is_active}:c));
+    }else if(res){
+      alert(res?.error?.message||res?.message||'Failed to toggle coupon.');
+    }
   }
 
-  const tabs=['Festival','Crew','Influencer'];
-
   return(
-    <div style={{padding:'24px 16px 0',position:'relative'}}>
+    <div style={{padding:'24px 16px 0'}}>
       <div style={{...sans,fontSize:20,fontWeight:700,color:C.text,marginBottom:16}}>Coupons</div>
-      <Row style={{marginBottom:16,gap:6}}>
-        {tabs.map(t=><Pill key={t} label={t} active={sub===t} onClick={()=>setSub(t)}/>)}
-      </Row>
+      <div style={{display:'flex',gap:8,marginBottom:16}}>
+        {['Festival','Crew','Influencer'].map(t=><Pill key={t} label={t} active={tab===t} onClick={()=>setTab(t)}/>)}
+      </div>
 
-      {sub==='Festival'&&(
-        <>
-          <OrangeBtn full style={{marginBottom:16}} onClick={()=>setSheet(true)}><Ic n="plus" size={14} color={C.card}/>Create Coupon</OrangeBtn>
-          {FESTIVAL_COUPONS.map(c=>(
-            <Card key={c.id} style={{marginBottom:10}}>
-              <RowBetween style={{marginBottom:8}}>
-                <span style={{...mono,fontSize:14,fontWeight:700,color:C.orange}}>{c.code}</span>
-                <span style={{...mono,fontSize:10,background:'rgba(247,227,201,0.1)',color:C.mutedCard,padding:'2px 8px',borderRadius:99}}>{c.type}</span>
-              </RowBetween>
-              <div style={{...sans,fontSize:12,color:C.mutedCard,marginBottom:8}}>
-                {c.type==='Percentage'?`${c.discount}% off`:`৳${c.discount} off`} · Min order ৳{c.minOrder}
-              </div>
-              <ProgressBar pct={Math.round((c.used/c.cap)*100)} height={4} style={{marginBottom:4}}/>
-              <RowBetween>
-                <span style={{...mono,fontSize:10,color:C.mutedCard}}>{c.used} / {c.cap} used</span>
-                <span style={{...sans,fontSize:11,color:C.mutedCard}}>Expires {c.expiry}</span>
-              </RowBetween>
-              <RowBetween style={{marginTop:10}}>
-                <span style={{...sans,fontSize:11,color:C.mutedCard}}></span>
-                <button style={{...sans,fontSize:11,color:C.red,background:'none',border:'none',cursor:'pointer'}}>Deactivate</button>
-              </RowBetween>
-            </Card>
-          ))}
-        </>
-      )}
-
-      {sub==='Crew'&&(
-        <>
-          <RowBetween style={{marginBottom:12}}>
-            <div/>
-            <button style={{...sans,fontSize:11,color:C.mutedCard,background:'rgba(247,227,201,0.08)',border:`1px solid ${C.borderCard}`,
-              borderRadius:8,padding:'6px 12px',cursor:'pointer'}}>Export CSV</button>
+      {tab==='Festival'&&(<>
+        <Card style={{marginBottom:12}}>
+          <RowBetween style={{cursor:'pointer'}} onClick={()=>setShowForm(!showForm)}>
+            <div style={{...sans,fontSize:13,fontWeight:700,color:C.textCard}}>Create Coupon</div>
+            <Ic n={showForm?'chevup':'chevdown'} size={16} color={C.mutedCard}/>
           </RowBetween>
-          {ACTIVE_CREW.map(m=>(
-            <Card key={m.id} style={{marginBottom:8}}>
-              <RowBetween>
-                <div>
-                  <div style={{...sans,fontSize:14,fontWeight:600,color:C.textCard}}>{m.name}</div>
-                  <div style={{...mono,fontSize:13,color:C.orange,marginTop:4}}>{m.code}</div>
+          {showForm&&(
+            <Col style={{marginTop:12,gap:10}}>
+              <DarkInput value={form.code} onChange={e=>setForm(f=>({...f,code:e.target.value.toUpperCase()}))} placeholder="e.g. SUMMER25"/>
+              <div>
+                <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:8}}>Type</div>
+                <div style={{display:'flex',gap:6}}>
+                  {['Percentage','Flat amount'].map(t=>(
+                    <Pill key={t} label={t} active={form.type===t} onClick={()=>setForm(f=>({...f,type:t}))}/>
+                  ))}
                 </div>
-                <div style={{textAlign:'right'}}>
-                  <div style={{...sans,fontSize:12,color:C.mutedCard}}>{m.refs} used</div>
-                  <div style={{...sans,fontSize:12,color:C.mutedCard}}>৳{m.refs*100} generated</div>
-                  <div style={{...sans,fontSize:12,color:C.orange}}>{m.refs*500} pts owed</div>
-                </div>
-              </RowBetween>
-            </Card>
-          ))}
-        </>
-      )}
-
-      {sub==='Influencer'&&influencers.map(inf=>(
-        <Card key={inf.id} style={{marginBottom:8}}>
-          <RowBetween>
-            <div>
-              <div style={{...sans,fontSize:14,fontWeight:600,color:C.textCard}}>{inf.name}</div>
-              <div style={{...mono,fontSize:13,color:C.orange,marginTop:4}}>{inf.code}</div>
-              <div style={{...sans,fontSize:12,color:C.mutedCard,marginTop:2}}>{inf.orders} orders · ৳{inf.commission} commission</div>
-            </div>
-            {inf.paid?<Badge status="Paid"/>:(
-              <button onClick={()=>setPaySheet(inf)} style={{...sans,fontSize:12,color:C.orange,background:'none',border:'none',cursor:'pointer',fontWeight:600}}>Mark as Paid</button>
-            )}
-          </RowBetween>
-        </Card>
-      ))}
-
-      <div style={{height:100}}/>
-
-      {/* Create coupon sheet */}
-      {sheet&&(
-        <BottomSheet onClose={()=>setSheet(false)} title="Create Coupon">
-          <Col style={{gap:14}}>
-            <div>
-              <div style={{...mono,fontSize:9,color:C.mutedCard,marginBottom:6,letterSpacing:'0.15em',textTransform:'uppercase'}}>Coupon Code</div>
-              <div style={{position:'relative'}}>
-                <DarkInput value={form.code} onChange={e=>handleCodeInput(e.target.value)} placeholder="e.g. SUMMER25"
-                  style={{...mono,letterSpacing:'0.15em'}}
-                  right={codeState==='checking'?<Ic n="loader" size={14} color={C.orange}/>:
-                         codeState==='available'?<Ic n="check" size={14} color={C.green}/>:
-                         codeState==='taken'?<Ic n="x" size={14} color={C.red}/>:null}/>
               </div>
-              {codeMsg&&<div style={{...mono,fontSize:10,color:codeState==='available'?C.green:C.red,marginTop:4}}>{codeMsg}</div>}
-            </div>
-            <div>
-              <div style={{...mono,fontSize:9,color:C.mutedCard,marginBottom:6,letterSpacing:'0.15em',textTransform:'uppercase'}}>Type</div>
-              <Row>
-                {['Flat ৳','Percentage %'].map(t=>(
-                  <button key={t} onClick={()=>setForm(f=>({...f,type:t==='Flat ৳'?'Flat':'Percentage'}))}
-                    style={{flex:1,padding:'10px',borderRadius:8,border:`1px solid ${form.type===(t==='Flat ৳'?'Flat':'Percentage')?C.orange:C.borderCard}`,
-                      background:form.type===(t==='Flat ৳'?'Flat':'Percentage')?C.orangeFaint:'transparent',
-                      color:form.type===(t==='Flat ৳'?'Flat':'Percentage')?C.orange:C.mutedCard,...sans,fontSize:13,cursor:'pointer'}}>
-                    {t}
-                  </button>
-                ))}
+              <DarkInput value={form.value} onChange={e=>setForm(f=>({...f,value:e.target.value}))} placeholder={form.type==='Percentage'?'Discount % (e.g. 15)':'Flat amount (৳)'}/>
+              <DarkInput value={form.minOrder} onChange={e=>setForm(f=>({...f,minOrder:e.target.value}))} placeholder="Min order (৳)"/>
+              <Row style={{gap:8}}>
+                <div style={{flex:1}}>
+                  <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Usage Cap</div>
+                  <DarkInput value={form.cap} onChange={e=>setForm(f=>({...f,cap:e.target.value}))} placeholder="e.g. 100"/>
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Per-account Limit</div>
+                  <DarkInput value={form.perAccount} onChange={e=>setForm(f=>({...f,perAccount:e.target.value}))} placeholder="1"/>
+                </div>
               </Row>
+              <div>
+                <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Expiry Date</div>
+                <input type="date" value={form.expiry} onChange={e=>setForm(f=>({...f,expiry:e.target.value}))}
+                  style={{width:'100%',background:C.cardAlt,border:'1px solid rgba(247,227,201,0.15)',borderRadius:8,
+                    padding:'12px 14px',color:C.textCard,fontFamily:'inherit',fontSize:14,outline:'none'}}/>
+              </div>
+              <Row style={{gap:8}}>
+                <OrangeBtn onClick={()=>{
+                  if(!form.code||!form.value)return;
+                  setCoupons(prev=>[...prev,{...form,used:0,active:true}]);
+                  setForm(emptyForm);setShowForm(false);
+                }}>Create</OrangeBtn>
+                <GhostBtn onClick={()=>setShowForm(false)}>Cancel</GhostBtn>
+              </Row>
+            </Col>
+          )}
+        </Card>
+        {coupons.length===0?(
+          <EmptyState icon="tag" title="No coupons yet" body="Create your first festival coupon above."/>
+        ):coupons.map((c,i)=>(
+          <Card key={i} style={{marginBottom:8}}>
+            <RowBetween style={{marginBottom:6}}>
+              <span style={{...mono,fontSize:16,fontWeight:700,color:C.orange,letterSpacing:2}}>{c.code}</span>
+              <span style={{...mono,fontSize:9,background:c.active?C.greenFaint:'rgba(247,227,201,0.1)',color:c.active?C.green:C.mutedCard,padding:'3px 8px',borderRadius:99}}>{c.active?'ACTIVE':'INACTIVE'}</span>
+            </RowBetween>
+            <div style={{...sans,fontSize:12,color:C.mutedCard,marginBottom:10}}>
+              {c.type==='Percentage'?`${c.value}% off`:`৳${c.value} off`}
+              {c.minOrder?` · Min ৳${c.minOrder}`:''}
+              {c.cap?` · Cap ${c.used||0}/${c.cap}`:''}
+              {c.expiry?` · Exp ${c.expiry}`:''}
             </div>
-            <div>
-              <div style={{...mono,fontSize:9,color:C.mutedCard,marginBottom:6,letterSpacing:'0.15em',textTransform:'uppercase'}}>Discount Value</div>
-              <DarkInput value={form.discount} onChange={e=>setForm(f=>({...f,discount:e.target.value}))} placeholder="e.g. 20"/>
-            </div>
-            <div>
-              <div style={{...mono,fontSize:9,color:C.mutedCard,marginBottom:6,letterSpacing:'0.15em',textTransform:'uppercase'}}>Minimum Order ৳</div>
-              <DarkInput value={form.minOrder} onChange={e=>setForm(f=>({...f,minOrder:e.target.value}))} placeholder="e.g. 299"/>
-            </div>
-            <div>
-              <div style={{...mono,fontSize:9,color:C.mutedCard,marginBottom:6,letterSpacing:'0.15em',textTransform:'uppercase'}}>Usage Cap</div>
-              <DarkInput value={form.cap} onChange={e=>setForm(f=>({...f,cap:e.target.value}))} placeholder="e.g. 200"/>
-            </div>
-            <div>
-              <div style={{...mono,fontSize:9,color:C.mutedCard,marginBottom:6,letterSpacing:'0.15em',textTransform:'uppercase'}}>Expiry Date</div>
-              <input type="date" value={form.expiry} onChange={e=>setForm(f=>({...f,expiry:e.target.value}))}
-                style={{width:'100%',background:C.cardAlt,border:`1px solid rgba(247,227,201,0.15)`,borderRadius:8,
-                  padding:'12px 14px',color:C.textCard,...sans,fontSize:13,outline:'none',colorScheme:'dark'}}/>
-            </div>
-            <OrangeBtn full onClick={()=>setSheet(false)}>Create Coupon</OrangeBtn>
-          </Col>
-        </BottomSheet>
-      )}
+            <Row style={{gap:8}}>
+              <GhostBtn onClick={()=>setCoupons(prev=>prev.map((x,j)=>j===i?{...x,active:!x.active}:x))} style={{flex:1,padding:'8px 0',fontSize:12}}>
+                {c.active?'Deactivate':'Activate'}
+              </GhostBtn>
+              <GhostBtn onClick={()=>setCoupons(prev=>prev.filter((_,j)=>j!==i))} style={{flex:1,padding:'8px 0',fontSize:12,color:C.red,borderColor:'rgba(229,115,115,0.3)'}}>Delete</GhostBtn>
+            </Row>
+          </Card>
+        ))}
+      </>)}
 
-      {paySheet&&(
-        <BottomSheet onClose={()=>setPaySheet(null)} title={`Mark ৳${paySheet.commission} as paid?`}>
-          <div style={{...sans,fontSize:14,color:C.mutedCard,lineHeight:1.6,marginBottom:20}}>
-            Mark commission of ৳{paySheet.commission} paid to {paySheet.name} ({paySheet.code})?
-          </div>
-          <Col>
-            <OrangeBtn full onClick={()=>{setInfluencers(i=>i.map(x=>x.id===paySheet.id?{...x,paid:true}:x));setPaySheet(null);}}>Confirm Payment</OrangeBtn>
-            <GhostBtn full onClick={()=>setPaySheet(null)}>Cancel</GhostBtn>
-          </Col>
-        </BottomSheet>
+      {tab==='Crew'&&<EmptyState icon="users" title="Crew codes coming soon" body="Crew referral codes will appear here once the crew backend is built."/>}
+      {tab==='Influencer'&&(
+        (ctx.adminInfluencers||[]).length===0?(
+          <EmptyState icon="bolt" title="No influencer codes yet" body="Add influencers from the More → Influencers tab. Their promo codes will appear here automatically."/>
+        ):(ctx.adminInfluencers||[]).map((c,i)=>(
+          <Card key={c.id||i} style={{marginBottom:8}}>
+            <RowBetween style={{marginBottom:6}}>
+              <span style={{...mono,fontSize:16,fontWeight:700,color:C.orange,letterSpacing:2}}>{c.code}</span>
+              <span style={{...mono,fontSize:9,background:c.is_active!==false?C.greenFaint:'rgba(247,227,201,0.1)',color:c.is_active!==false?C.green:C.mutedCard,padding:'3px 8px',borderRadius:99}}>{c.is_active!==false?'ACTIVE':'INACTIVE'}</span>
+            </RowBetween>
+            <div style={{...sans,fontSize:12,color:C.mutedCard,marginBottom:10}}>
+              {c.name} · {c.comm_rate||15}% commission
+              {(c.total_owed||0)>0&&<span style={{color:C.orange,marginLeft:6}}>৳{c.total_owed} owed</span>}
+            </div>
+            <GhostBtn onClick={()=>toggleInfluencerCoupon(c.code)} style={{width:'100%',padding:'8px 0',fontSize:12}}>
+              {c.is_active!==false?'Deactivate':'Activate'}
+            </GhostBtn>
+          </Card>
+        ))
       )}
+      <div style={{height:100}}/>
     </div>
   );
 }
 
 function AdminCustomersTab({setTab}){
-  const customers=[
-    {name:'Rafi Islam',orders:3,total:696,status:'Active'},
-    {name:'Nadia Rahman',orders:1,total:249,status:'Active'},
-    {name:'Arif Hossain',orders:2,total:447,status:'Active'},
-    {name:'Tanha Islam',orders:1,total:349,status:'Active'},
-    {name:'Shanto Ahmed',orders:1,total:249,status:'Inactive'},
-  ];
-  return(
-    <div style={{padding:'24px 16px 0'}}>
-      <Row style={{gap:8,marginBottom:16}}>
-        <button onClick={()=>setTab('more')} style={{background:'none',border:'none',cursor:'pointer',padding:0,display:'flex',alignItems:'center'}}>
-          <Ic n="chevright" size={20} color={C.muted} style={{transform:'rotate(180deg)'}}/>
-        </button>
-        <div style={{...sans,fontSize:20,fontWeight:700,color:C.text}}>Customers</div>
-      </Row>
-      <div style={{...sans,fontSize:13,color:C.muted,marginBottom:16}}>{customers.length} registered customers</div>
-      {customers.map((c,i)=>(
-        <div key={i} style={{background:C.card,borderRadius:12,padding:'14px 16px',marginBottom:10,border:`1px solid ${C.borderCard}`}}>
-          <RowBetween>
-            <div>
-              <div style={{...sans,fontSize:14,fontWeight:600,color:C.textCard,marginBottom:2}}>{c.name}</div>
-              <div style={{...mono,fontSize:12,color:C.mutedCard}}>{c.orders} orders · ৳{c.total.toLocaleString()}</div>
-            </div>
-            <Badge status={c.status}/>
-          </RowBetween>
-        </div>
-      ))}
-      <div style={{height:100}}/>
-    </div>
-  );
-}
+  const ctx=useContext(MobileCtx);
+  const customers=ctx.adminCustomers||[];
+  const [search,setSearch]=useState('');
+  const [selected,setSelected]=useState(null);
 
-function AdminSubscriptionsTab({setTab}){
-  const subs=[
-    {name:'Rafi Islam',plan:'Night Shift Plan',price:210,status:'Active',next:'Jun 1'},
-    {name:'Nadia Rahman',plan:'Night Shift Plan',price:210,status:'Active',next:'Jun 3'},
-    {name:'Arif Hossain',plan:'Night Shift Plan',price:210,status:'Paused',next:'—'},
-    {name:'Tanha Islam',plan:'Night Shift Plan',price:210,status:'Active',next:'Jun 5'},
-  ];
-  return(
-    <div style={{padding:'24px 16px 0'}}>
-      <Row style={{gap:8,marginBottom:16}}>
-        <button onClick={()=>setTab('more')} style={{background:'none',border:'none',cursor:'pointer',padding:0,display:'flex',alignItems:'center'}}>
-          <Ic n="chevright" size={20} color={C.muted} style={{transform:'rotate(180deg)'}}/>
-        </button>
-        <div style={{...sans,fontSize:20,fontWeight:700,color:C.text}}>Subscriptions</div>
-      </Row>
-      <div style={{background:C.orangeFaint,borderRadius:12,padding:'12px 16px',marginBottom:16,display:'flex',gap:24}}>
-        <div><div style={{...mono,fontSize:9,color:C.orange,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:4}}>Active</div><div style={{...mono,fontSize:24,fontWeight:700,color:C.text}}>34</div></div>
-        <div><div style={{...mono,fontSize:9,color:C.muted,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:4}}>Paused</div><div style={{...mono,fontSize:24,fontWeight:700,color:C.text}}>3</div></div>
+  const visible=customers.filter(c=>{
+    const q=search.toLowerCase();
+    return!q||(c.name||'').toLowerCase().includes(q)||(c.phone||'').includes(search)||(c.email||'').toLowerCase().includes(q);
+  });
+
+  if(selected){
+    const c=selected;
+    return(
+      <div style={{padding:'24px 16px 0'}}>
+        <button onClick={()=>setSelected(null)} style={{...sans,fontSize:13,color:C.orange,background:'none',border:'none',cursor:'pointer',marginBottom:16}}>← Back</button>
+        <div style={{...sans,fontSize:22,fontWeight:700,color:C.text,marginBottom:4}}>{c.name||'—'}</div>
+        <div style={{...sans,fontSize:13,color:C.muted,marginBottom:20}}>{c.phone||c.email||'—'}</div>
+        <StatStrip stats={[
+          {label:'Orders',value:c.order_count||0},
+          {label:'Spent',value:`৳${Number(c.total_spent||0).toLocaleString()}`},
+          {label:'Points',value:(c.points_balance||0).toLocaleString()},
+        ]}/>
+        <Card style={{marginBottom:12}}>
+          <RowBetween style={{marginBottom:10}}><span style={{...sans,fontSize:13,color:C.mutedCard}}>Role</span><span style={{...sans,fontSize:13,color:C.textCard,fontWeight:600}}>{fmtStatus(c.role)}</span></RowBetween>
+          <RowBetween style={{marginBottom:10}}><span style={{...sans,fontSize:13,color:C.mutedCard}}>Joined</span><span style={{...sans,fontSize:13,color:C.textCard}}>{fmtDate(c.created_at)}</span></RowBetween>
+          <RowBetween><span style={{...sans,fontSize:13,color:C.mutedCard}}>Status</span><span style={{...mono,fontSize:10,background:c.is_active?C.greenFaint:C.redFaint,color:c.is_active?C.green:C.red,padding:'3px 8px',borderRadius:99}}>{c.is_active?'ACTIVE':'SUSPENDED'}</span></RowBetween>
+        </Card>
+        <Col>
+          <GhostBtn full>Adjust Points Manually</GhostBtn>
+          <GhostBtn full style={{color:C.red,borderColor:'rgba(229,115,115,0.3)'}}>Suspend Account</GhostBtn>
+        </Col>
+        <div style={{height:100}}/>
       </div>
-      {subs.map((s,i)=>(
-        <div key={i} style={{background:C.card,borderRadius:12,padding:'14px 16px',marginBottom:10,border:`1px solid ${C.borderCard}`}}>
+    );
+  }
+
+  return(
+    <div style={{padding:'24px 16px 0'}}>
+      <div style={{...sans,fontSize:20,fontWeight:700,color:C.text,marginBottom:12}}>Customers</div>
+      <DarkInput value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name, phone, email…" style={{marginBottom:12}}/>
+      {visible.length===0?(
+        <EmptyState icon="customers" title="No customers yet"/>
+      ):visible.map((c,i)=>(
+        <div key={c.id||i} onClick={()=>setSelected(c)} style={{background:C.card,borderRadius:12,padding:'14px 16px',marginBottom:10,border:`1px solid ${C.borderCard}`,cursor:'pointer'}}>
+          <RowBetween style={{marginBottom:4}}>
+            <span style={{...sans,fontSize:14,fontWeight:700,color:C.textCard}}>{c.name||'—'}</span>
+            <span style={{...mono,fontSize:10,background:c.role==='crew'?C.orangeFaint:c.role==='influencer'?C.blueFaint:'rgba(247,227,201,0.08)',
+              color:c.role==='crew'?C.orange:c.role==='influencer'?C.blue:C.mutedCard,
+              padding:'2px 8px',borderRadius:99}}>{fmtStatus(c.role)}</span>
+          </RowBetween>
+          <div style={{...sans,fontSize:12,color:C.mutedCard,marginBottom:4}}>{c.phone||c.email||'—'}</div>
           <RowBetween>
-            <div>
-              <div style={{...sans,fontSize:14,fontWeight:600,color:C.textCard,marginBottom:2}}>{s.name}</div>
-              <div style={{...mono,fontSize:11,color:C.mutedCard}}>৳{s.price}/mo · Next: {s.next}</div>
-            </div>
-            <Badge status={s.status}/>
+            <span style={{...sans,fontSize:12,color:C.mutedCard}}>{c.order_count||0} orders · ৳{Number(c.total_spent||0).toLocaleString()}</span>
+            <Ic n="chevright" size={14} color={C.mutedCard}/>
           </RowBetween>
         </div>
       ))}
@@ -1504,152 +1412,579 @@ function AdminSubscriptionsTab({setTab}){
   );
 }
 
-function AdminRedemptionsTab({setTab}){
-  const redemptions=[
-    {name:'Rafi Islam',points:500,value:'৳50',date:'May 15',status:'Pending'},
-    {name:'Nadia Rahman',points:200,value:'৳20',date:'May 14',status:'Pending'},
-    {name:'Arif Hossain',points:750,value:'৳75',date:'May 12',status:'Approved'},
-    {name:'Shanto Ahmed',points:300,value:'৳30',date:'May 10',status:'Approved'},
-  ];
+function AdminSubscriptionsTab(){
   return(
     <div style={{padding:'24px 16px 0'}}>
-      <Row style={{gap:8,marginBottom:16}}>
-        <button onClick={()=>setTab('more')} style={{background:'none',border:'none',cursor:'pointer',padding:0,display:'flex',alignItems:'center'}}>
-          <Ic n="chevright" size={20} color={C.muted} style={{transform:'rotate(180deg)'}}/>
-        </button>
-        <div style={{...sans,fontSize:20,fontWeight:700,color:C.text}}>Redemptions</div>
-      </Row>
-      <div style={{background:'rgba(229,115,115,0.1)',borderLeft:`3px solid ${C.red}`,borderRadius:12,padding:'12px 16px',marginBottom:16}}>
-        <div style={{...sans,fontSize:13,color:C.text}}>2 redemptions pending approval</div>
-      </div>
-      {redemptions.map((r,i)=>(
-        <div key={i} style={{background:C.card,borderRadius:12,padding:'14px 16px',marginBottom:10,border:`1px solid ${C.borderCard}`}}>
-          <RowBetween>
-            <div>
-              <div style={{...sans,fontSize:14,fontWeight:600,color:C.textCard,marginBottom:2}}>{r.name}</div>
-              <div style={{...mono,fontSize:11,color:C.mutedCard}}>{r.points.toLocaleString()} pts → {r.value} · {r.date}</div>
-            </div>
-            <Badge status={r.status}/>
-          </RowBetween>
-        </div>
-      ))}
+      <div style={{...sans,fontSize:20,fontWeight:700,color:C.text,marginBottom:16}}>Subscriptions</div>
+      <EmptyState icon="repeat" title="Coming soon" body="Subscription management backend is not yet built."/>
       <div style={{height:100}}/>
     </div>
   );
 }
 
-function AdminFinancialsTab({setTab}){
-  const months=[
-    {month:'May 2026',orders:12,orderRev:4200,subRev:7140},
-    {month:'Apr 2026',orders:48,orderRev:15800,subRev:6930},
-    {month:'Mar 2026',orders:40,orderRev:13200,subRev:6720},
-    {month:'Feb 2026',orders:35,orderRev:11500,subRev:6510},
-  ];
+function AdminRedemptionsTab(){
+  const [adjSearch,setAdjSearch]=useState('');
+  const [adjAmount,setAdjAmount]=useState('');
+  const [adjReason,setAdjReason]=useState('');
+
   return(
     <div style={{padding:'24px 16px 0'}}>
-      <Row style={{gap:8,marginBottom:16}}>
-        <button onClick={()=>setTab('more')} style={{background:'none',border:'none',cursor:'pointer',padding:0,display:'flex',alignItems:'center'}}>
-          <Ic n="chevright" size={20} color={C.muted} style={{transform:'rotate(180deg)'}}/>
-        </button>
-        <div style={{...sans,fontSize:20,fontWeight:700,color:C.text}}>Financials</div>
-      </Row>
+      <div style={{...sans,fontSize:20,fontWeight:700,color:C.text,marginBottom:16}}>Points &amp; Redemptions</div>
+      <EmptyState icon="star" title="No pending redemptions" body="Pending redemption requests will appear here once the redemptions backend is built."/>
+      <div style={{...mono,fontSize:9,color:C.text,letterSpacing:'0.2em',textTransform:'uppercase',margin:'24px 0 10px'}}>Manual Points Adjustment</div>
+      <Card style={{marginBottom:16}}>
+        <Col style={{gap:10}}>
+          <div>
+            <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Search Customer</div>
+            <DarkInput value={adjSearch} onChange={e=>setAdjSearch(e.target.value)} placeholder="Name or phone…"/>
+          </div>
+          <div>
+            <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Adjustment Amount (+/−)</div>
+            <DarkInput value={adjAmount} onChange={e=>setAdjAmount(e.target.value)} placeholder="e.g. 500 or -200"/>
+          </div>
+          <div>
+            <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Reason (required)</div>
+            <DarkInput value={adjReason} onChange={e=>setAdjReason(e.target.value)} placeholder="Customer service compensation…"/>
+          </div>
+          <OrangeBtn full disabled={!adjSearch||!adjAmount||!adjReason}>Apply Adjustment</OrangeBtn>
+        </Col>
+      </Card>
+      <div style={{height:100}}/>
+    </div>
+  );
+}
+
+function AdminFinancialsTab(){
+  const ctx=useContext(MobileCtx);
+  const stats=ctx.adminStats;
+  const revenue=Number(stats?.revenue?.total_delivered||0);
+
+  return(
+    <div style={{padding:'24px 16px 0'}}>
+      <div style={{...sans,fontSize:20,fontWeight:700,color:C.text,marginBottom:16}}>Financials</div>
+      <StatStrip stats={[
+        {label:'Revenue Delivered',value:`৳${revenue.toLocaleString()}`},
+        {label:'Discounts',value:'—',muted:true},
+        {label:'Commission',value:'—',muted:true},
+      ]}/>
+      <Card style={{marginBottom:12}}>
+        <div style={{...sans,fontSize:13,color:C.mutedCard,textAlign:'center',padding:'12px 0'}}>
+          Detailed financial breakdown will be available once the full order pipeline is live.
+        </div>
+      </Card>
+      <div style={{height:100}}/>
+    </div>
+  );
+}
+
+function AdminSettingsTab(){
+  const ctx=useContext(MobileCtx);
+  const user=ctx.user;
+  const [store,setStore]=useState({freeDelivery:'',city:'',whatsapp:''});
+  const [crew,setCrew]=useState({refPts:'',subBonus:'',orderPts:''});
+
+  return(
+    <div style={{padding:'24px 16px 0'}}>
+      <div style={{...sans,fontSize:20,fontWeight:700,color:C.text,marginBottom:16}}>Settings</div>
+
+      <div style={{...mono,fontSize:9,color:C.text,letterSpacing:'0.2em',textTransform:'uppercase',marginBottom:8}}>Store Settings</div>
+      <Card style={{marginBottom:16}}>
+        <Col style={{gap:10}}>
+          <div>
+            <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Free Delivery Threshold (৳)</div>
+            <DarkInput value={store.freeDelivery} onChange={e=>setStore(s=>({...s,freeDelivery:e.target.value}))} placeholder="e.g. 499"/>
+          </div>
+          <div>
+            <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Default City</div>
+            <DarkInput value={store.city} onChange={e=>setStore(s=>({...s,city:e.target.value}))} placeholder="e.g. Dhaka"/>
+          </div>
+          <div>
+            <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Support WhatsApp Number</div>
+            <DarkInput value={store.whatsapp} onChange={e=>setStore(s=>({...s,whatsapp:e.target.value}))} placeholder="01XXXXXXXXX"/>
+          </div>
+          <OrangeBtn full>Save Store Settings</OrangeBtn>
+        </Col>
+      </Card>
+
+      <div style={{...mono,fontSize:9,color:C.text,letterSpacing:'0.2em',textTransform:'uppercase',marginBottom:8}}>Crew Program</div>
+      <Card style={{marginBottom:16}}>
+        <Col style={{gap:10}}>
+          <div>
+            <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Points per referral order</div>
+            <DarkInput value={crew.refPts} onChange={e=>setCrew(c=>({...c,refPts:e.target.value}))} placeholder="e.g. 500"/>
+          </div>
+          <div>
+            <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Bonus pts for subscription conversion</div>
+            <DarkInput value={crew.subBonus} onChange={e=>setCrew(c=>({...c,subBonus:e.target.value}))} placeholder="e.g. 2000"/>
+          </div>
+          <div>
+            <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Points per ৳ spent</div>
+            <DarkInput value={crew.orderPts} onChange={e=>setCrew(c=>({...c,orderPts:e.target.value}))} placeholder="e.g. 0.5"/>
+          </div>
+          <OrangeBtn full>Save Crew Settings</OrangeBtn>
+        </Col>
+      </Card>
+
+      <div style={{...mono,fontSize:9,color:C.text,letterSpacing:'0.2em',textTransform:'uppercase',marginBottom:8}}>Notification Templates</div>
+      <Card style={{marginBottom:16}}>
+        <Col style={{gap:12}}>
+          {['Crew Approval','Order Confirmation','Subscription Charge Reminder','Redemption Fulfilled'].map(t=>(
+            <div key={t}>
+              <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>{t}</div>
+              <textarea placeholder={`Template for: ${t}`}
+                style={{width:'100%',background:C.cardAlt,border:'1px solid rgba(247,227,201,0.15)',borderRadius:8,
+                  padding:'10px 14px',color:C.textCard,fontFamily:'inherit',fontSize:13,outline:'none',resize:'vertical',minHeight:60}}/>
+            </div>
+          ))}
+          <OrangeBtn full>Save Templates</OrangeBtn>
+        </Col>
+      </Card>
+
+      <div style={{...mono,fontSize:9,color:C.text,letterSpacing:'0.2em',textTransform:'uppercase',marginBottom:8}}>Admin Account</div>
+      <Card style={{marginBottom:16}}>
+        <Col style={{gap:10}}>
+          <div>
+            <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Email</div>
+            <DarkInput value={user?.email||''} placeholder="—" style={{opacity:0.6}}/>
+          </div>
+          <div>
+            <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>New Password</div>
+            <input type="password" placeholder="Leave blank to keep current"
+              style={{width:'100%',background:C.cardAlt,border:'1px solid rgba(247,227,201,0.15)',borderRadius:8,
+                padding:'12px 14px',color:C.textCard,fontFamily:'inherit',fontSize:14,outline:'none'}}/>
+          </div>
+          <RowBetween>
+            <span style={{...sans,fontSize:13,color:C.textCard}}>Two-Factor Authentication</span>
+            <span style={{...mono,fontSize:10,background:C.greenFaint,color:C.green,padding:'3px 8px',borderRadius:99}}>ENABLED</span>
+          </RowBetween>
+          <OrangeBtn full>Update Account</OrangeBtn>
+        </Col>
+      </Card>
+      <div style={{height:100}}/>
+    </div>
+  );
+}
+
+function AdminInfluencersTab(){
+  const ctx=useContext(MobileCtx);
+  const influencers=ctx.adminInfluencers||[];
+  const setInfluencers=ctx.setAdminInfluencers;
+
+  useEffect(()=>{
+    if(influencers.length>0)return;
+    window.mpApi.fetch('/admin/influencers').then(res=>{
+      if(res?.data?.influencers?.length)setInfluencers(res.data.influencers);
+    }).catch(()=>{});
+  },[]);
+
+  const [createSheet,setCreateSheet]=useState(false);
+  const [viewSheet,setViewSheet]=useState(null);
+  const [saving,setSaving]=useState(false);
+  const emptyForm={name:'',email:'',phone:'',code:'',commRate:'15',notes:''};
+  const [form,setForm]=useState(emptyForm);
+
+  async function submit(){
+    if(!form.name||!form.email||!form.code)return;
+    setSaving(true);
+    try{
+      const res=await window.mpApi.fetch('/admin/influencers',{
+        method:'POST',
+        body:JSON.stringify({
+          name:form.name,email:form.email,phone:form.phone||undefined,
+          code:form.code.toUpperCase(),comm_rate:parseFloat(form.commRate)||15,
+          notes:form.notes||undefined,
+        }),
+      });
+      setInfluencers(prev=>[res.data,...prev]);
+    }catch(e){alert(e?.message||'Failed to save influencer.');}
+    finally{setSaving(false);}
+    setForm(emptyForm);setCreateSheet(false);
+  }
+
+  async function markPaid(id){
+    try{
+      await window.mpApi.fetch(`/admin/influencers/${id}/paid`,{method:'PATCH'});
+      setInfluencers(prev=>prev.map(c=>c.id===id?{...c,total_owed:0}:c));
+      if(viewSheet?.id===id)setViewSheet(v=>({...v,total_owed:0}));
+    }catch(_){}
+  }
+
+  return(
+    <div style={{padding:'24px 16px 0'}}>
+      <RowBetween style={{marginBottom:16}}>
+        <div style={{...sans,fontSize:20,fontWeight:700,color:C.text}}>Influencers</div>
+        <OrangeBtn onClick={()=>setCreateSheet(true)} style={{padding:'8px 14px',fontSize:12}}>
+          <Ic n="plus" size={14} color={C.card}/>Add
+        </OrangeBtn>
+      </RowBetween>
+      {influencers.length===0?(
+        <EmptyState icon="bolt" title="No influencers yet" body="Add influencers to track their codes and commissions."/>
+      ):influencers.map((c,i)=>(
+        <Card key={c.id||i} style={{marginBottom:8}} onClick={()=>setViewSheet(c)}>
+          <RowBetween style={{marginBottom:6}}>
+            <span style={{...sans,fontSize:14,fontWeight:700,color:C.textCard}}>{c.name}</span>
+            <span style={{...mono,fontSize:13,fontWeight:700,color:C.orange}}>{c.code}</span>
+          </RowBetween>
+          <RowBetween>
+            <div style={{...sans,fontSize:12,color:C.mutedCard}}>{c.comm_rate||15}% commission · {c.email}</div>
+            <span style={{...mono,fontSize:11,fontWeight:700,color:(c.total_owed||0)>0?C.orange:C.green}}>
+              {(c.total_owed||0)>0?`৳${c.total_owed} owed`:'Paid'}
+            </span>
+          </RowBetween>
+        </Card>
+      ))}
+      <div style={{height:100}}/>
+
+      {createSheet&&(
+        <BottomSheet onClose={()=>setCreateSheet(false)} title="Add Influencer">
+          <div style={{...sans,fontSize:12,color:C.orange,background:'rgba(255,145,0,0.1)',border:'1px solid rgba(255,145,0,0.2)',borderRadius:8,padding:'10px 12px',marginBottom:16}}>
+            Influencer will be saved to the database. Their promo code is auto-registered as a coupon.
+          </div>
+          <Col style={{gap:10}}>
+            <DarkInput value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="Full name *"/>
+            <DarkInput value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value}))} placeholder="Email address *"/>
+            <DarkInput value={form.phone} onChange={e=>setForm(f=>({...f,phone:e.target.value}))} placeholder="Phone number"/>
+            <Row style={{gap:8}}>
+              <div style={{flex:1}}>
+                <DarkInput value={form.code} onChange={e=>setForm(f=>({...f,code:e.target.value.toUpperCase()}))} placeholder="Promo code * (e.g. SADIA20)" style={{...mono,letterSpacing:'0.08em'}}/>
+              </div>
+              <div style={{width:88}}>
+                <DarkInput value={form.commRate} onChange={e=>setForm(f=>({...f,commRate:e.target.value}))} placeholder="Rate %"/>
+              </div>
+            </Row>
+            <DarkInput value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} placeholder="Notes (platform, audience, niche…)"/>
+            <OrangeBtn full onClick={submit} disabled={saving||!form.name||!form.email||!form.code}>{saving?'Saving…':'Create Account'}</OrangeBtn>
+            <GhostBtn full onClick={()=>setCreateSheet(false)}>Cancel</GhostBtn>
+          </Col>
+        </BottomSheet>
+      )}
+
+      {viewSheet&&(
+        <BottomSheet onClose={()=>setViewSheet(null)} title={viewSheet.name}>
+          <Col style={{gap:10,marginBottom:16}}>
+            {viewSheet.email&&<RowBetween><span style={{...sans,fontSize:13,color:C.mutedCard}}>Email</span><span style={{...sans,fontSize:13,color:C.textCard}}>{viewSheet.email}</span></RowBetween>}
+            {viewSheet.phone&&<RowBetween><span style={{...sans,fontSize:13,color:C.mutedCard}}>Phone</span><span style={{...sans,fontSize:13,color:C.textCard}}>{viewSheet.phone}</span></RowBetween>}
+            <RowBetween><span style={{...sans,fontSize:13,color:C.mutedCard}}>Code</span><span style={{...mono,fontSize:14,fontWeight:700,color:C.orange}}>{viewSheet.code}</span></RowBetween>
+            <RowBetween><span style={{...sans,fontSize:13,color:C.mutedCard}}>Commission Rate</span><span style={{...sans,fontSize:13,color:C.textCard}}>{viewSheet.comm_rate||15}%</span></RowBetween>
+          </Col>
+          <div style={{height:1,background:C.borderCard,marginBottom:16}}/>
+          <div style={{...mono,fontSize:9,color:C.orange,letterSpacing:'0.2em',textTransform:'uppercase',marginBottom:10}}>This Month</div>
+          <Col style={{gap:10,marginBottom:16}}>
+            <RowBetween><span style={{...sans,fontSize:13,color:C.mutedCard}}>Orders</span><span style={{...sans,fontSize:13,color:C.textCard}}>{viewSheet.orders_mo||0}</span></RowBetween>
+            <RowBetween><span style={{...sans,fontSize:13,color:C.mutedCard}}>Commission Earned</span><span style={{...mono,fontSize:15,fontWeight:700,color:C.orange}}>৳{viewSheet.comm_mo||0}</span></RowBetween>
+            <RowBetween><span style={{...sans,fontSize:13,color:C.mutedCard}}>Total Owed</span>
+              <span style={{...mono,fontSize:15,fontWeight:700,color:(viewSheet.total_owed||0)>0?C.orange:C.green}}>
+                {(viewSheet.total_owed||0)>0?`৳${viewSheet.total_owed}`:'All paid'}
+              </span>
+            </RowBetween>
+          </Col>
+          {(viewSheet.total_owed||0)>0&&(
+            <OrangeBtn full onClick={()=>markPaid(viewSheet.id)}>Mark Commission as Paid</OrangeBtn>
+          )}
+        </BottomSheet>
+      )}
+    </div>
+  );
+}
+
+const PROD_STATUSES=['Active','New','Coming Soon','Stock Out','Featured','Discontinued'];
+
+function AdminProductsTab(){
+  const {adminProducts:products,setAdminProducts:setProducts}=useContext(MobileCtx);
+  const [prodTab,setProdTab]=useState('Products');
+  const [packages,setPackages]=useState([]);
+  const [sheet,setSheet]=useState(null);
+  const [pkgSheet,setPkgSheet]=useState(null);
+  const [confirmDelete,setConfirmDelete]=useState(null);
+  const emptyProd={name:'',description:'',price:'',stock:'',qty:'',unit:'g',status:'Active',images:[]};
+  const emptyPkg={name:'',description:'',price:'',status:'Active',productIds:[],quantities:{}};
+  const [form,setForm]=useState(emptyProd);
+  const [pkgForm,setPkgForm]=useState(emptyPkg);
+  const fileRef=useRef(null);
+  const activeImgIdx=useRef(0);
+
+  function handleImageChange(e){
+    const file=e.target.files[0];
+    if(!file){e.target.value='';return;}
+    const idx=activeImgIdx.current;
+    const reader=new FileReader();
+    reader.onload=ev=>setForm(f=>{const imgs=[...(f.images||[])];imgs[idx]=ev.target.result;return{...f,images:imgs};});
+    reader.readAsDataURL(file);e.target.value='';
+  }
+
+  async function saveProduct(){
+    if(!form.name||!form.price||!(form.images?.length))return;
+    const body={
+      name:form.name,
+      price:parseFloat(form.price)||0,
+      stock:parseInt(form.stock)||0,
+      status:form.status,
+      images:form.images||[],
+    };
+    if(form.description)body.description=form.description;
+    const qtyVal=parseInt(form.qty);
+    if(qtyVal>0)body.qty=qtyVal;
+    if(form.unit)body.unit=form.unit;
+    try{
+      let res;
+      if(sheet.type==='add'){
+        res=await window.mpApi.fetch('/admin/products',{method:'POST',body:JSON.stringify(body)});
+        if(res?.data)setProducts(prev=>[res.data,...prev]);
+      }else{
+        res=await window.mpApi.fetch(`/admin/products/${sheet.data.id}`,{method:'PATCH',body:JSON.stringify(body)});
+        if(res?.data)setProducts(prev=>prev.map(p=>p.id===sheet.data.id?res.data:p));
+      }
+    }catch(_){alert('Failed to save product.');return;}
+    setSheet(null);
+  }
+
+  function toggleProdInPkg(id){
+    setPkgForm(f=>{
+      const has=f.productIds.includes(id);
+      const ids=has?f.productIds.filter(x=>x!==id):[...f.productIds,id];
+      const qty={...f.quantities};if(has)delete qty[id];else qty[id]=1;
+      return{...f,productIds:ids,quantities:qty};
+    });
+  }
+
+  function savePkg(){
+    if(!pkgForm.name||!pkgForm.price)return;
+    const entry={...pkgForm,price:parseFloat(pkgForm.price)||0,id:pkgSheet.data?.id||`PKG${Date.now()}`};
+    if(pkgSheet.type==='add')setPackages(prev=>[...prev,entry]);
+    else setPackages(prev=>prev.map(p=>p.id===pkgSheet.data.id?{...p,...entry}:p));
+    setPkgSheet(null);
+  }
+
+  const mrpOf=pkg=>products.filter(p=>pkg.productIds.includes(p.id)).reduce((s,p)=>s+p.price*(pkg.quantities?.[p.id]||1),0);
+
+  return(
+    <div style={{padding:'24px 16px 0'}}>
+      <RowBetween style={{marginBottom:12}}>
+        <div style={{...sans,fontSize:20,fontWeight:700,color:C.text}}>Products</div>
+        <OrangeBtn onClick={()=>{
+          if(prodTab==='Products'){setForm(emptyProd);setSheet({type:'add'});}
+          else{setPkgForm(emptyPkg);setPkgSheet({type:'add'});}
+        }} style={{padding:'8px 14px',fontSize:12}}>
+          <Ic n="plus" size={14} color={C.card}/>{prodTab==='Products'?'Add':'Package'}
+        </OrangeBtn>
+      </RowBetween>
+
       <div style={{display:'flex',gap:8,marginBottom:16}}>
-        {[{label:'MTD Orders',val:'৳4,200',color:C.orange},{label:'MTD Subs',val:'৳7,140',color:C.text}].map((s,i)=>(
-          <div key={i} style={{flex:1,background:C.card,borderRadius:12,padding:12,border:`1px solid ${C.borderCard}`}}>
-            <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>{s.label}</div>
-            <div style={{...mono,fontSize:20,fontWeight:700,color:s.color}}>{s.val}</div>
-          </div>
-        ))}
+        {['Products','Packages'].map(t=><Pill key={t} label={t} active={prodTab===t} onClick={()=>setProdTab(t)}/>)}
       </div>
-      {months.map((m,i)=>(
-        <div key={i} style={{background:C.card,borderRadius:12,padding:'14px 16px',marginBottom:10,border:`1px solid ${C.borderCard}`}}>
-          <div style={{...sans,fontSize:13,fontWeight:600,color:C.textCard,marginBottom:8}}>{m.month}</div>
-          <div style={{display:'flex',gap:16}}>
-            <div><div style={{...mono,fontSize:9,color:C.mutedCard}}>ORDERS</div><div style={{...mono,fontSize:14,color:C.textCard}}>{m.orders}</div></div>
-            <div><div style={{...mono,fontSize:9,color:C.mutedCard}}>ORDER REV</div><div style={{...mono,fontSize:14,color:C.orange}}>৳{m.orderRev.toLocaleString()}</div></div>
-            <div><div style={{...mono,fontSize:9,color:C.mutedCard}}>SUB REV</div><div style={{...mono,fontSize:14,color:C.textCard}}>৳{m.subRev.toLocaleString()}</div></div>
-          </div>
-        </div>
-      ))}
-      <div style={{height:100}}/>
-    </div>
-  );
-}
 
-function AdminSettingsTab({setTab}){
-  const settings=[
-    {label:'Store Name',value:'Midnight Pick'},
-    {label:'Support Email',value:'support@midnightpick.com'},
-    {label:'Currency',value:'BDT (৳)'},
-    {label:'Points Rate',value:'1 pt = ৳0.10'},
-    {label:'Min Redemption',value:'100 pts'},
-    {label:'Referral Bonus',value:'50 pts'},
-  ];
-  return(
-    <div style={{padding:'24px 16px 0'}}>
-      <Row style={{gap:8,marginBottom:16}}>
-        <button onClick={()=>setTab('more')} style={{background:'none',border:'none',cursor:'pointer',padding:0,display:'flex',alignItems:'center'}}>
-          <Ic n="chevright" size={20} color={C.muted} style={{transform:'rotate(180deg)'}}/>
-        </button>
-        <div style={{...sans,fontSize:20,fontWeight:700,color:C.text}}>Settings</div>
-      </Row>
-      <div style={{background:C.card,borderRadius:12,overflow:'hidden',border:`1px solid ${C.borderCard}`,marginBottom:16}}>
-        {settings.map((s,i)=>(
-          <div key={i} style={{padding:'14px 16px',borderBottom:i<settings.length-1?`1px solid ${C.borderCard}`:'none'}}>
-            <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:4}}>{s.label}</div>
-            <div style={{...sans,fontSize:14,color:C.textCard}}>{s.value}</div>
-          </div>
-        ))}
-      </div>
+      {prodTab==='Products'&&(
+        products.length===0?(
+          <EmptyState icon="coffee" title="No products yet" body="Click 'Add' to create your first product."/>
+        ):products.map(p=>(
+          <Card key={p.id} style={{marginBottom:8,padding:0,overflow:'hidden'}} onClick={()=>{setForm({...p,price:String(p.price),stock:String(p.stock),qty:p.qty?String(p.qty):'',unit:p.unit||'g',images:p.images||(p.image?[p.image]:[])});setSheet({type:'edit',data:p});}}>
+            {(p.images?.[0]||p.image)&&(
+              <img src={p.images?.[0]||p.image} alt={p.name} style={{width:'100%',height:120,objectFit:'cover'}}/>
+            )}
+            <div style={{padding:'12px 14px'}}>
+              <RowBetween style={{marginBottom:4}}>
+                <span style={{...sans,fontSize:14,fontWeight:700,color:C.textCard}}>{p.name}</span>
+                <span style={{...mono,fontSize:13,fontWeight:700,color:C.orange}}>৳{p.price}</span>
+              </RowBetween>
+              <div style={{...sans,fontSize:12,color:C.mutedCard,marginBottom:4}}>{p.description||'—'}</div>
+              <div style={{...sans,fontSize:11,color:C.mutedCard}}>Stock: {p.stock}{p.qty&&p.unit?` · ${p.qty}${p.unit}`:''} · {p.status}{p.images?.length>1?` · ${p.images.length} photos`:''}</div>
+            </div>
+          </Card>
+        ))
+      )}
+
+      {prodTab==='Packages'&&(
+        packages.length===0?(
+          <EmptyState icon="package" title="No packages yet" body="Click 'Package' to create a bundle."/>
+        ):packages.map(pkg=>{
+          const included=products.filter(p=>pkg.productIds.includes(p.id));
+          const mrp=mrpOf(pkg);
+          const saving=mrp-pkg.price;
+          return(
+            <Card key={pkg.id} style={{marginBottom:8}} onClick={()=>{setPkgForm({...pkg,price:String(pkg.price),quantities:{...(pkg.quantities||{})}});setPkgSheet({type:'edit',data:pkg});}}>
+              <RowBetween style={{marginBottom:6}}>
+                <span style={{...sans,fontSize:14,fontWeight:700,color:C.textCard}}>{pkg.name}</span>
+                <span style={{...mono,fontSize:13,fontWeight:700,color:C.orange}}>৳{pkg.price}</span>
+              </RowBetween>
+              <div style={{...sans,fontSize:12,color:C.mutedCard,marginBottom:6}}>{pkg.description||'—'}</div>
+              <div style={{display:'flex',flexWrap:'wrap',gap:4,marginBottom:6}}>
+                {included.map(p=><span key={p.id} style={{...mono,fontSize:10,background:'rgba(247,227,201,0.08)',color:C.mutedCard,padding:'2px 7px',borderRadius:99}}>{p.name}{(pkg.quantities?.[p.id]||1)>1?` ×${pkg.quantities[p.id]}`:''}</span>)}
+              </div>
+              {saving>0&&<div style={{...sans,fontSize:11,color:C.green}}>Save ৳{saving} vs buying individually</div>}
+            </Card>
+          );
+        })
+      )}
+
       <div style={{height:100}}/>
+      <input ref={fileRef} type="file" accept="image/*" style={{display:'none'}} onChange={handleImageChange}/>
+
+      {sheet&&(
+        <BottomSheet onClose={()=>setSheet(null)} title={sheet.type==='add'?'Add Product':'Edit Product'}>
+          {!confirmDelete?(
+            <Col style={{gap:10}}>
+              <div>
+                <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:8}}>
+                  Product Images <span style={{color:C.red}}>*</span>
+                </div>
+                <div style={{display:'flex',gap:8,overflowX:'auto',paddingBottom:4,scrollbarWidth:'none'}}>
+                  {(form.images||[]).map((img,idx)=>(
+                    <div key={idx} style={{position:'relative',flexShrink:0,width:72,height:72}}>
+                      <img src={img} alt={`img${idx+1}`} style={{width:72,height:72,objectFit:'cover',borderRadius:10,border:'1px solid rgba(247,227,201,0.15)'}}/>
+                      {idx===0&&<span style={{position:'absolute',bottom:0,left:0,right:0,background:'rgba(0,0,0,0.55)',color:'#fff',fontSize:8,textAlign:'center',padding:'2px 0',borderRadius:'0 0 10px 10px'}}>Main</span>}
+                      <button onClick={()=>setForm(f=>({...f,images:f.images.filter((_,i)=>i!==idx)}))}
+                        style={{position:'absolute',top:-6,right:-6,width:18,height:18,borderRadius:'50%',background:C.red,border:'none',color:'#fff',fontSize:11,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',padding:0,lineHeight:1}}>×</button>
+                    </div>
+                  ))}
+                  {(form.images||[]).length<5&&(
+                    <button onClick={()=>{activeImgIdx.current=(form.images||[]).length;fileRef.current?.click();}}
+                      style={{flexShrink:0,width:72,height:72,borderRadius:10,border:'2px dashed rgba(247,227,201,0.2)',
+                        background:C.cardAlt,cursor:'pointer',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:4}}>
+                      <Ic n="plus" size={18} color='rgba(247,227,201,0.3)'/>
+                      <span style={{...mono,fontSize:8,color:'rgba(247,227,201,0.3)'}}>{(form.images||[]).length===0?'Required':'Add'}</span>
+                    </button>
+                  )}
+                </div>
+                {(form.images||[]).length===0&&<div style={{...sans,fontSize:11,color:C.red,marginTop:6}}>At least 1 image is required.</div>}
+              </div>
+              <DarkInput value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="Product name *"/>
+              <DarkInput value={form.description} onChange={e=>setForm(f=>({...f,description:e.target.value}))} placeholder="Description"/>
+              <Row style={{gap:8}}>
+                <div style={{flex:1}}>
+                  <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Price (৳) *</div>
+                  <DarkInput value={form.price} onChange={e=>setForm(f=>({...f,price:e.target.value}))} placeholder="25"/>
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Stock</div>
+                  <DarkInput value={form.stock} onChange={e=>setForm(f=>({...f,stock:e.target.value}))} placeholder="100"/>
+                </div>
+              </Row>
+              <Row style={{gap:8}}>
+                <div style={{flex:1}}>
+                  <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Qty (integer)</div>
+                  <input type="number" min="1" step="1" value={form.qty} onChange={e=>setForm(f=>({...f,qty:e.target.value}))} placeholder="e.g. 100"
+                    style={{width:'100%',background:C.cardAlt,border:'1px solid rgba(247,227,201,0.15)',borderRadius:8,padding:'12px 14px',
+                      color:C.textCard,...mono,fontSize:14,outline:'none'}}/>
+                </div>
+                <div style={{flexShrink:0}}>
+                  <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Unit</div>
+                  <select value={form.unit} onChange={e=>setForm(f=>({...f,unit:e.target.value}))}
+                    style={{background:C.cardAlt,border:'1px solid rgba(247,227,201,0.15)',borderRadius:8,padding:'12px 10px',
+                      color:C.textCard,...mono,fontSize:14,outline:'none',cursor:'pointer'}}>
+                    {['g','kg','ml','L','pcs','sachets','pack'].map(u=><option key={u}>{u}</option>)}
+                  </select>
+                </div>
+              </Row>
+              <div>
+                <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:8}}>Status</div>
+                <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                  {PROD_STATUSES.map(s=><Pill key={s} label={s} active={form.status===s} onClick={()=>setForm(f=>({...f,status:s}))}/>)}
+                </div>
+              </div>
+              <OrangeBtn full onClick={saveProduct} disabled={!form.name||!form.price||!(form.images?.length)}>{sheet.type==='add'?'Add Product':'Save Changes'}</OrangeBtn>
+              {sheet.type==='edit'&&(
+                <GhostBtn full onClick={()=>setConfirmDelete(sheet.data)} style={{color:C.red,borderColor:'rgba(229,115,115,0.3)'}}>
+                  <Ic n="trash" size={14} color={C.red}/>Delete Product
+                </GhostBtn>
+              )}
+              <GhostBtn full onClick={()=>setSheet(null)}>Cancel</GhostBtn>
+            </Col>
+          ):(
+            <>
+              <div style={{...sans,fontSize:15,fontWeight:700,color:C.textCard,marginBottom:8}}>Delete "{confirmDelete.name}"?</div>
+              <div style={{...sans,fontSize:13,color:C.mutedCard,marginBottom:20,lineHeight:1.5}}>
+                This product will be permanently removed. Packages containing it will lose this item.
+              </div>
+              <Col style={{gap:8}}>
+                <GhostBtn full onClick={async()=>{try{await window.mpApi.fetch(`/admin/products/${confirmDelete.id}`,{method:'DELETE'});}catch(_){}setProducts(prev=>prev.filter(p=>p.id!==confirmDelete.id));setConfirmDelete(null);setSheet(null);}} style={{color:C.red,borderColor:'rgba(229,115,115,0.3)'}}>Yes, Delete</GhostBtn>
+                <GhostBtn full onClick={()=>setConfirmDelete(null)}>Keep Product</GhostBtn>
+              </Col>
+            </>
+          )}
+        </BottomSheet>
+      )}
+
+      {pkgSheet&&(
+        <BottomSheet onClose={()=>setPkgSheet(null)} title={pkgSheet.type==='add'?'Create Package':'Edit Package'}>
+          <Col style={{gap:10}}>
+            <DarkInput value={pkgForm.name} onChange={e=>setPkgForm(f=>({...f,name:e.target.value}))} placeholder="Package name *"/>
+            <DarkInput value={pkgForm.description} onChange={e=>setPkgForm(f=>({...f,description:e.target.value}))} placeholder="Description"/>
+            <div>
+              <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:8}}>Include Products</div>
+              {products.length===0?(
+                <div style={{...sans,fontSize:12,color:C.mutedCard}}>No products yet. Add products first.</div>
+              ):products.map(p=>{
+                const checked=pkgForm.productIds.includes(p.id);
+                const qty=pkgForm.quantities?.[p.id]||1;
+                return(
+                  <div key={p.id} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 0',borderBottom:`1px solid ${C.borderCard}`}}>
+                    <input type="checkbox" checked={checked} onChange={()=>toggleProdInPkg(p.id)} style={{accentColor:C.orange,width:16,height:16,flexShrink:0}}/>
+                    <span style={{...sans,fontSize:13,color:C.textCard,flex:1}}>{p.name}</span>
+                    {checked&&(
+                      <input type="number" min="1" value={qty} onChange={e=>setPkgForm(f=>({...f,quantities:{...f.quantities,[p.id]:Math.max(1,parseInt(e.target.value)||1)}}))}
+                        style={{width:48,background:'rgba(247,227,201,0.1)',border:'1px solid rgba(247,227,201,0.2)',borderRadius:6,padding:'4px 6px',color:C.textCard,fontFamily:'inherit',fontSize:13,textAlign:'center',outline:'none'}}/>
+                    )}
+                    <span style={{...mono,fontSize:11,color:C.mutedCard,flexShrink:0}}>৳{p.price}{checked&&qty>1?`×${qty}`:''}</span>
+                  </div>
+                );
+              })}
+            </div>
+            {pkgForm.productIds.length>0&&(
+              <div style={{background:'rgba(255,145,0,0.1)',border:'1px solid rgba(255,145,0,0.2)',borderRadius:8,padding:'10px 14px'}}>
+                <div style={{...mono,fontSize:9,color:C.mutedCard,marginBottom:4}}>Individual total (MRP)</div>
+                <div style={{...mono,fontSize:16,fontWeight:700,color:C.orange}}>৳{mrpOf(pkgForm)}</div>
+              </div>
+            )}
+            <Row style={{gap:8}}>
+              <div style={{flex:1}}>
+                <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Bundle Price (৳) *</div>
+                <DarkInput value={pkgForm.price} onChange={e=>setPkgForm(f=>({...f,price:e.target.value}))} placeholder="0"/>
+              </div>
+              <div style={{flex:1}}>
+                <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Status</div>
+                <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
+                  {['Active','New','Coming Soon'].map(s=><Pill key={s} label={s} active={pkgForm.status===s} onClick={()=>setPkgForm(f=>({...f,status:s}))}/>)}
+                </div>
+              </div>
+            </Row>
+            <OrangeBtn full onClick={savePkg} disabled={!pkgForm.name||!pkgForm.price}>{pkgSheet.type==='add'?'Create Package':'Save Package'}</OrangeBtn>
+            {pkgSheet.type==='edit'&&(
+              <GhostBtn full onClick={()=>{setPackages(prev=>prev.filter(p=>p.id!==pkgSheet.data.id));setPkgSheet(null);}} style={{color:C.red,borderColor:'rgba(229,115,115,0.3)'}}>Delete Package</GhostBtn>
+            )}
+            <GhostBtn full onClick={()=>setPkgSheet(null)}>Cancel</GhostBtn>
+          </Col>
+        </BottomSheet>
+      )}
     </div>
   );
 }
 
 function AdminMoreTab({setTab,onLogout}){
-  const [logoutSheet,setLogoutSheet]=useState(false);
-  const items=[
+  const moreLinks=[
     {label:'Customers',icon:'customers',tab:'customers'},
     {label:'Subscriptions',icon:'repeat',tab:'subscriptions'},
-    {label:'Redemptions',icon:'star',tab:'redemptions'},
-    {label:'Financials',icon:'wallet',tab:'financials'},
+    {label:'Points & Redemptions',icon:'star',tab:'redemptions'},
+    {label:'Influencers',icon:'bolt',tab:'influencers'},
+    {label:'Products',icon:'coffee',tab:'products'},
+    {label:'Financials',icon:'bar',tab:'financials'},
     {label:'Settings',icon:'settings',tab:'settings'},
   ];
   return(
-    <div style={{position:'relative',height:'100%'}}>
-      <div style={{padding:'24px 16px 8px'}}>
-        <div style={{...sans,fontSize:16,fontWeight:700,color:C.text}}>More</div>
-      </div>
-      <div style={{padding:'0 16px'}}>
-        {items.map((item,i)=>(
-          <div key={i} onClick={()=>setTab(item.tab)}
-            style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'16px 0',
-              borderBottom:`1px solid ${C.borderBg}`,cursor:'pointer'}}>
-            <Row>
-              <Ic n={item.icon} size={20} color={C.muted}/>
-              <span style={{...sans,fontSize:15,color:C.text}}>{item.label}</span>
-            </Row>
-            <Ic n="chevright" size={16} color={C.muted}/>
-          </div>
+    <div style={{padding:'24px 16px 0'}}>
+      <div style={{...sans,fontSize:20,fontWeight:700,color:C.text,marginBottom:20}}>More</div>
+      <Card style={{padding:0,overflow:'hidden',marginBottom:16}}>
+        {moreLinks.map((l,i)=>(
+          <button key={l.tab} onClick={()=>setTab(l.tab)} style={{width:'100%',display:'flex',alignItems:'center',gap:14,padding:'14px 16px',
+            background:'none',border:'none',cursor:'pointer',borderBottom:i<moreLinks.length-1?`1px solid ${C.borderCard}`:'none',
+            WebkitTapHighlightColor:'transparent'}}>
+            <Ic n={l.icon} size={20} color={C.mutedCard}/>
+            <span style={{...sans,fontSize:14,color:C.textCard,flex:1,textAlign:'left'}}>{l.label}</span>
+            <Ic n="chevright" size={16} color={C.mutedCard}/>
+          </button>
         ))}
-        <div onClick={()=>setLogoutSheet(true)}
-          style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'16px 0',cursor:'pointer'}}>
-          <Row>
-            <Ic n="x" size={20} color={C.red}/>
-            <span style={{...sans,fontSize:15,color:C.red}}>Log Out</span>
-          </Row>
-          <Ic n="chevright" size={16} color={C.muted}/>
-        </div>
-      </div>
-      {logoutSheet&&(
-        <BottomSheet onClose={()=>setLogoutSheet(false)} title="Log out?">
-          <div style={{...sans,fontSize:14,color:C.mutedCard,lineHeight:1.6,marginBottom:20}}>You'll be signed out of the admin panel.</div>
-          <Col>
-            <OrangeBtn full onClick={onLogout}>Log Out</OrangeBtn>
-            <GhostBtn full onClick={()=>setLogoutSheet(false)}>Cancel</GhostBtn>
-          </Col>
-        </BottomSheet>
-      )}
+      </Card>
+      <GhostBtn full onClick={onLogout} style={{color:C.red,borderColor:'rgba(229,115,115,0.3)'}}>Sign Out</GhostBtn>
+      <div style={{height:100}}/>
     </div>
   );
 }
@@ -1660,7 +1995,8 @@ function AdminMoreTab({setTab,onLogout}){
 
 function UserDashboard({onLogout}){
   const [tab,setTab]=useState('home');
-  const isCrew=true;
+  const ctx=useContext(MobileCtx);
+  const isCrew=ctx.user?.role==='crew';
   const content={
     home:<UserHomeTab setTab={setTab} isCrew={isCrew}/>,
     orders:<UserOrdersTab/>,
@@ -1673,13 +2009,13 @@ function UserDashboard({onLogout}){
 
 function CrewDashboard({onLogout}){
   const [tab,setTab]=useState('crew');
-  const isCrew=true;
+  const ctx=useContext(MobileCtx);
   const content={
-    home:<UserHomeTab setTab={setTab} isCrew={isCrew}/>,
+    home:<UserHomeTab setTab={setTab} isCrew={true}/>,
     orders:<UserOrdersTab/>,
     crew:<CrewTab/>,
     points:<UserPointsTab/>,
-    account:<UserAccountTab isCrew={isCrew} onLogout={onLogout}/>,
+    account:<UserAccountTab isCrew={true} onLogout={onLogout}/>,
   };
   return{tab,setTab,content,role:'crew'};
 }
@@ -1701,14 +2037,16 @@ function AdminDashboard({onLogout}){
   const content={
     overview:<AdminOverviewTab setTab={setTab}/>,
     orders:<AdminOrdersTab/>,
+    products:<AdminProductsTab setTab={setTab}/>,
     crew:<AdminCrewTab/>,
     coupons:<AdminCouponsTab/>,
     more:<AdminMoreTab setTab={setTab} onLogout={onLogout}/>,
     customers:<AdminCustomersTab setTab={setTab}/>,
-    subscriptions:<AdminSubscriptionsTab setTab={setTab}/>,
-    redemptions:<AdminRedemptionsTab setTab={setTab}/>,
-    financials:<AdminFinancialsTab setTab={setTab}/>,
-    settings:<AdminSettingsTab setTab={setTab}/>,
+    subscriptions:<AdminSubscriptionsTab/>,
+    redemptions:<AdminRedemptionsTab/>,
+    financials:<AdminFinancialsTab/>,
+    settings:<AdminSettingsTab/>,
+    influencers:<AdminInfluencersTab/>,
   };
   return{tab,setTab,content,role:'admin'};
 }
@@ -1727,180 +2065,119 @@ function useIsMobile(){
   return m;
 }
 
-/* ── Login Screen ───────────────────────────────────────── */
-function LoginScreen({onLogin,isMobile}){
-  const [email,setEmail]=useState('');
-  const [password,setPassword]=useState('');
-  const [showPw,setShowPw]=useState(false);
-  const [error,setError]=useState('');
-  const [hints,setHints]=useState(false);
-  const [loading,setLoading]=useState(false);
-
-  function attempt(){
-    setError('');
-    const match=DEMO_ACCOUNTS.find(d=>d.email===email.trim().toLowerCase()&&d.password===password);
-    if(match){
-      setLoading(true);
-      setTimeout(()=>onLogin(match.role),600);
-    } else {
-      setError('Incorrect email or password.');
-    }
-  }
-
-  function fill(d){setEmail(d.email);setPassword(d.password);setError('');setHints(false);}
-
-  const inputStyle={
-    width:'100%',background:C.cardAlt,border:`1px solid rgba(247,227,201,0.15)`,
-    borderRadius:10,padding:'13px 14px',color:C.textCard,...sans,fontSize:14,
-    outline:'none',WebkitAppearance:'none',
-  };
-
-  return(
-    <div style={{flex:1,display:'flex',flexDirection:'column',overflowY:'auto',background:C.bg,
-      WebkitOverflowScrolling:'touch'}}>
-      {/* Brand header */}
-      <div style={{padding:'52px 32px 36px',textAlign:'center'}}>
-        <div style={{display:'inline-flex',alignItems:'center',justifyContent:'center',
-          width:56,height:56,background:C.card,borderRadius:16,marginBottom:20,
-          boxShadow:'0 4px 20px rgba(44,24,16,0.15)'}}>
-          <Ic n="coffee" size={28} color={C.orange}/>
-        </div>
-        <div style={{...mono,fontSize:10,color:C.muted,letterSpacing:'0.25em',textTransform:'uppercase',marginBottom:10}}>Midnight Pick</div>
-        <div style={{...sans,fontSize:26,fontWeight:700,color:C.text,lineHeight:1.15,marginBottom:6}}>Welcome back.</div>
-        <div style={{...sans,fontSize:14,color:C.muted}}>Sign in to your dashboard</div>
-      </div>
-
-      {/* Form */}
-      <div style={{padding:'0 20px',flex:1}}>
-        <div style={{background:C.card,borderRadius:20,padding:20,marginBottom:12,
-          boxShadow:'0 2px 20px rgba(44,24,16,0.1)'}}>
-
-          {/* Email */}
-          <div style={{marginBottom:14}}>
-            <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.2em',textTransform:'uppercase',marginBottom:8}}>Email</div>
-            <input type="email" value={email} placeholder="your@email.com" autoComplete="email"
-              onChange={e=>{setEmail(e.target.value);setError('');}}
-              onKeyDown={e=>e.key==='Enter'&&attempt()}
-              style={{...inputStyle}}/>
-          </div>
-
-          {/* Password */}
-          <div style={{marginBottom:error?12:20}}>
-            <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.2em',textTransform:'uppercase',marginBottom:8}}>Password</div>
-            <div style={{position:'relative'}}>
-              <input type={showPw?'text':'password'} value={password} placeholder="••••••••" autoComplete="current-password"
-                onChange={e=>{setPassword(e.target.value);setError('');}}
-                onKeyDown={e=>e.key==='Enter'&&attempt()}
-                style={{...inputStyle,paddingRight:44}}/>
-              <button onClick={()=>setShowPw(v=>!v)}
-                style={{position:'absolute',right:12,top:'50%',transform:'translateY(-50%)',
-                  background:'none',border:'none',cursor:'pointer',color:C.mutedCard,
-                  display:'flex',alignItems:'center',lineHeight:0}}>
-                <Ic n={showPw?'chevup':'chevdown'} size={16} color={C.mutedCard}/>
-              </button>
-            </div>
-          </div>
-
-          {/* Error */}
-          {error&&<div style={{...sans,fontSize:13,color:C.red,marginBottom:16,display:'flex',alignItems:'center',gap:6}}>
-            <Ic n="alert" size={14} color={C.red}/>{error}
-          </div>}
-
-          {/* Submit */}
-          <OrangeBtn full onClick={attempt} disabled={loading}>
-            {loading?<Ic n="loader" size={16} color={C.card}/>:null}
-            {loading?'Signing in…':'Sign In'}
-          </OrangeBtn>
-        </div>
-
-        {/* Demo credentials */}
-        <div style={{background:C.card,borderRadius:16,overflow:'hidden',marginBottom:32,
-          boxShadow:'0 2px 12px rgba(44,24,16,0.06)'}}>
-          <button onClick={()=>setHints(v=>!v)}
-            style={{width:'100%',padding:'14px 16px',background:'none',border:'none',cursor:'pointer',
-              display:'flex',alignItems:'center',justifyContent:'space-between',
-              WebkitTapHighlightColor:'transparent'}}>
-            <Row>
-              <Ic n="alert" size={16} color={C.orange}/>
-              <span style={{...sans,fontSize:13,fontWeight:600,color:C.textCard}}>Demo credentials</span>
-            </Row>
-            <Ic n={hints?'chevup':'chevdown'} size={16} color={C.mutedCard}/>
-          </button>
-          {hints&&(
-            <div style={{borderTop:`1px solid ${C.borderCard}`}}>
-              {DEMO_ACCOUNTS.map((d,i)=>(
-                <button key={i} onClick={()=>fill(d)}
-                  style={{width:'100%',padding:'12px 16px',background:'none',border:'none',cursor:'pointer',
-                    borderBottom:i<DEMO_ACCOUNTS.length-1?`1px solid ${C.borderCard}`:'none',
-                    textAlign:'left',WebkitTapHighlightColor:'transparent',display:'block'}}>
-                  <div style={{...sans,fontSize:13,fontWeight:600,color:C.textCard,marginBottom:3}}>{d.label}</div>
-                  <div style={{...mono,fontSize:11,color:C.mutedCard}}>{d.email}</div>
-                  <div style={{...mono,fontSize:11,color:'rgba(247,227,201,0.4)'}}>password: {d.password}</div>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function App(){
-  const [role,setRole]=useState(()=>sessionStorage.getItem('mp_role')||null);
+  const storedUser=localStorage.getItem('mp_user');
+  const initUser=storedUser?JSON.parse(storedUser):null;
+  const role=initUser?.role||null;
+
+  const [adminProducts,setAdminProducts]=useState([]);
+  const [adminInfluencers,setAdminInfluencers]=useState([]);
+  const [ctxData,setCtxData]=useState({
+    user:initUser,orders:[],addresses:[],paymentMethods:[],pointsHistory:[],
+    adminStats:null,adminOrders:[],adminCustomers:[],
+  });
+
+  useEffect(()=>{
+    if(!role)return;
+    if(role==='admin'){
+      Promise.all([
+        window.mpApi.fetch('/admin/stats').catch(()=>null),
+        window.mpApi.fetch('/admin/orders?limit=50').catch(()=>null),
+        window.mpApi.fetch('/admin/customers?limit=50').catch(()=>null),
+        window.mpApi.fetch('/me').catch(()=>null),
+        window.mpApi.fetch('/admin/influencers').catch(()=>null),
+        window.mpApi.fetch('/admin/products').catch(()=>null),
+      ]).then(([statsRes,ordersRes,cusRes,meRes,infRes,prodsRes])=>{
+        setCtxData(d=>({
+          ...d,
+          user:meRes?.data||d.user,
+          adminStats:statsRes?.data||null,
+          adminOrders:ordersRes?.data?.orders||[],
+          adminCustomers:cusRes?.data?.customers||[],
+        }));
+        setAdminInfluencers(infRes?.data?.influencers||[]);
+        setAdminProducts(prodsRes?.data?.products||[]);
+      });
+    } else {
+      Promise.all([
+        window.mpApi.fetch('/me').catch(()=>null),
+        window.mpApi.fetch('/orders?limit=20').catch(()=>null),
+        window.mpApi.fetch('/me/addresses').catch(()=>null),
+        window.mpApi.fetch('/me/payment-methods').catch(()=>null),
+        window.mpApi.fetch('/me/points-history?limit=20').catch(()=>null),
+      ]).then(([meRes,ordersRes,addrRes,pmRes,ptsRes])=>{
+        setCtxData(d=>({
+          ...d,
+          user:meRes?.data||d.user,
+          orders:ordersRes?.data?.orders||[],
+          addresses:Array.isArray(addrRes?.data)?addrRes.data:[],
+          paymentMethods:Array.isArray(pmRes?.data)?pmRes.data:[],
+          pointsHistory:Array.isArray(ptsRes?.data)?ptsRes.data:[],
+        }));
+      });
+    }
+  },[role]);
+
+  function handleLogout(){window.mpApi.signOut();}
+
   const isMobile=useIsMobile();
 
-  function handleLogout(){sessionStorage.removeItem('mp_role');window.location.replace('index.html');}
-
-  // All four dashboard hooks called unconditionally — order never changes
+  // All four dashboard hooks called unconditionally
   const userD=UserDashboard({onLogout:handleLogout});
   const crewD=CrewDashboard({onLogout:handleLogout});
   const inflD=InfluencerDashboard({onLogout:handleLogout});
   const adminD=AdminDashboard({onLogout:handleLogout});
+
   const dashMap={user:userD,crew:crewD,influencer:inflD,admin:adminD};
   const dash=role?dashMap[role]:null;
+  const tabContent=role?(
+    <div key={dash.tab} style={{animation:'fadeIn 150ms ease',minHeight:'100%'}}>{dash.content[dash.tab]}</div>
+  ):null;
 
-  // Active tab content
-  const tabContent=role
-    ? <div key={dash.tab} style={{animation:'fadeIn 150ms ease',minHeight:'100%'}}>{dash.content[dash.tab]}</div>
-    : null;
-
-  /* ── MOBILE: fill entire screen ── */
   if(isMobile){
     return(
-      <div style={{
-        position:'relative',width:'100%',flex:1,
-        display:'flex',flexDirection:'column',
-        background:C.bg,overflow:'hidden',
-        paddingTop:'env(safe-area-inset-top,0px)',
-      }}>
-        {role&&(
-          <>
-            <div style={{flex:1,overflowY:'auto',overflowX:'hidden',minHeight:0,WebkitOverflowScrolling:'touch'}}>
-              {tabContent}
+      <MobileCtx.Provider value={{...ctxData,adminProducts,setAdminProducts,adminInfluencers,setAdminInfluencers}}>
+        <div style={{
+          position:'relative',width:'100%',flex:1,
+          display:'flex',flexDirection:'column',
+          background:C.bg,overflow:'hidden',
+          paddingTop:'env(safe-area-inset-top,0px)',
+        }}>
+          {role&&(
+            <>
+              <div style={{flex:1,overflowY:'auto',overflowX:'hidden',minHeight:0,WebkitOverflowScrolling:'touch'}}>
+                {tabContent}
+              </div>
+              <BottomNav role={dash.role} tab={dash.tab} setTab={dash.setTab} mobile/>
+            </>
+          )}
+          {!role&&(
+            <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100%',flexDirection:'column',gap:16}}>
+              <img src="assets/logo.png" alt="Midnight Pick" style={{width:48,opacity:.6}}/>
+              <div style={{...sans,fontSize:13,color:C.muted}}>Redirecting…</div>
             </div>
-            <BottomNav role={dash.role} tab={dash.tab} setTab={dash.setTab} mobile/>
-          </>
-        )}
-      </div>
+          )}
+        </div>
+      </MobileCtx.Provider>
     );
   }
 
-  /* ── DESKTOP: 390×844 phone frame ── */
   return(
-    <div style={{display:'flex',alignItems:'center',justifyContent:'center'}}>
-      <div style={{
-        width:390,height:844,borderRadius:40,overflow:'hidden',
-        boxShadow:'0 0 0 8px #3a1a0a, 0 32px 64px rgba(0,0,0,0.6)',
-        display:'flex',flexDirection:'column',position:'relative',background:C.bg,
-      }}>
-        {role&&<StatusBar/>}
-        <div style={{flex:1,overflowY:'auto',overflowX:'hidden',background:C.bg,minHeight:0}}>
-          {role&&tabContent}
+    <MobileCtx.Provider value={ctxData}>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'center'}}>
+        <div style={{
+          width:390,height:844,borderRadius:40,overflow:'hidden',
+          boxShadow:'0 0 0 8px #3a1a0a, 0 32px 64px rgba(0,0,0,0.6)',
+          display:'flex',flexDirection:'column',position:'relative',background:C.bg,
+        }}>
+          {role&&<StatusBar/>}
+          <div style={{flex:1,overflowY:'auto',overflowX:'hidden',background:C.bg,minHeight:0}}>
+            {role&&tabContent}
+          </div>
+          {role&&<BottomNav role={dash.role} tab={dash.tab} setTab={dash.setTab}/>}
         </div>
-        {role&&<BottomNav role={dash.role} tab={dash.tab} setTab={dash.setTab}/>}
       </div>
-    </div>
+    </MobileCtx.Provider>
   );
 }
 

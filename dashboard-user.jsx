@@ -1,97 +1,28 @@
 // Midnight Pick — User Dashboard
 
-const { useState, useRef, useEffect } = React;
+const { useState, useRef, useEffect, useContext, createContext } = React;
 
-// ── Mock Data ──────────────────────────────────────────
-const USER = {
-  name: "Rafi",
-  phone: "01712-345678",
-  email: "rafi@example.com",
-  points: 3200,
-  pointsThreshold: 4400,
-  lifetimeEarned: 8750,
-  lifetimeRedeemed: 5550,
-  isCrew: true,
-  crewCode: "RAFI15",
-};
+const DashCtx = createContext(null);
 
-const SUBSCRIPTION = {
-  plan: "Night Shift",
-  price: 210,
-  contents: "10× Midnight Black sachets",
-  status: "active",
-  nextDelivery: "May 23, 2026",
-  nextCharge: "May 23, 2026",
-  countdown: 7,
-  cancelBefore: "May 20, 2026",
-};
+function fmtDate(iso) {
+  if (!iso) return "";
+  return new Date(iso).toLocaleDateString("en-BD", { day: "numeric", month: "short", year: "numeric" });
+}
 
-const ORDERS = [
-  {
-    id: "MP-1042", date: "May 14, 2026",
-    items: "Midnight Black ×5, Midnight Blend 100g",
-    total: 324, status: "Shipped",
-    address: "Flat 3B, House 14, Road 7, Mirpur-10, Dhaka",
-    payment: "bKash — 01712-345678",
-    coupon: "RAFI15 (15% off — saved ৳57)",
-    pointsEarned: 160,
-    itemList: [
-      { name: "Midnight Black Sachet", qty: 5, price: 25 },
-      { name: "Midnight Blend 100g", qty: 1, price: 199 },
-    ],
-  },
-  {
-    id: "MP-1038", date: "May 3, 2026",
-    items: "Midnight Black ×10",
-    total: 250, status: "Delivered",
-    address: "Flat 3B, House 14, Road 7, Mirpur-10, Dhaka",
-    payment: "bKash — 01712-345678",
-    coupon: null,
-    pointsEarned: 125,
-    itemList: [{ name: "Midnight Black Sachet", qty: 10, price: 25 }],
-  },
-  {
-    id: "MP-1021", date: "Apr 20, 2026",
-    items: "Trial Pack ×1",
-    total: 99, status: "Delivered",
-    address: "Flat 3B, House 14, Road 7, Mirpur-10, Dhaka",
-    payment: "Nagad — 01712-345678",
-    coupon: "WELCOME10 (10% off — saved ৳11)",
-    pointsEarned: 50,
-    itemList: [{ name: "Trial Pack", qty: 1, price: 99 }],
-  },
-  {
-    id: "MP-1010", date: "Mar 31, 2026",
-    items: "Midnight Black ×5",
-    total: 125, status: "Cancelled",
-    address: "Room 214, Hall A, University of Dhaka",
-    payment: "bKash — 01712-345678",
-    coupon: null,
-    pointsEarned: 0,
-    itemList: [{ name: "Midnight Black Sachet", qty: 5, price: 25 }],
-  },
-];
+function fmtStatus(s) {
+  if (!s) return "";
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
 
-const ADDRESSES = [
-  { id: 1, label: "Home", line1: "Flat 3B, House 14, Road 7", line2: "Mirpur-10, Dhaka", isDefault: true },
-  { id: 2, label: "Hostel", line1: "Room 214, Hall A", line2: "University of Dhaka, Ramna", isDefault: false },
-];
+function orderSummary(items) {
+  if (!items || !items.length) return "";
+  return items.map(i => `${i.name} ×${i.qty}`).join(", ");
+}
 
-const POINTS_HISTORY = [
-  { date: "May 14", desc: "Order #MP-1042", points: 160, type: "earned" },
-  { date: "May 3",  desc: "Order #MP-1038", points: 125, type: "earned" },
-  { date: "Apr 28", desc: "Referral: order placed", points: 500, type: "earned" },
-  { date: "Apr 22", desc: "Redeemed for 1 sachet", points: 1000, type: "spent" },
-  { date: "Apr 20", desc: "Order #MP-1021", points: 50, type: "earned" },
-  { date: "Apr 15", desc: "Referral: subscription started", points: 2000, type: "earned" },
-  { date: "Mar 31", desc: "Order #MP-1010 (cancelled — reversed)", points: 0, type: "neutral" },
-  { date: "Mar 14", desc: "Referral: order placed", points: 500, type: "earned" },
-];
-
-const PAYMENT_METHODS = [
-  { id: 1, type: "bKash", number: "01712-345678", isDefault: true },
-  { id: 2, type: "Nagad", number: "01712-345678", isDefault: false },
-];
+function addrString(snap) {
+  if (!snap) return "";
+  return [snap.line1, snap.line2, snap.city, snap.district].filter(Boolean).join(", ");
+}
 
 // ── Status badge helper ──────────────────────────────
 function StatusBadge({ status }) {
@@ -125,15 +56,21 @@ function Sheet({ title, body, onConfirm, confirmLabel = "Confirm", onClose }) {
 
 // ── Tab: Home ────────────────────────────────────────
 function HomeTab({ setTab }) {
-  const pct = Math.min(100, Math.round((USER.points / USER.pointsThreshold) * 100));
-  const toNext = USER.pointsThreshold - USER.points;
-  const lastOrder = ORDERS[0];
+  const { user, orders } = useContext(DashCtx);
+  const pts      = user?.points_balance || 0;
+  const threshold = 4400;
+  const pct      = Math.min(100, Math.round((pts / threshold) * 100));
+  const toNext   = Math.max(0, threshold - pts);
+  const lastOrder = orders[0];
+  const isCrew   = user?.role === "crew";
+  const now      = new Date();
+  const greeting = now.getHours() < 12 ? "Good morning" : now.getHours() < 18 ? "Good afternoon" : "Good evening";
 
   return (
     <div>
       <div className="greeting-card">
-        <div className="greeting-name">Good evening, {USER.name}.</div>
-        <div className="greeting-date">Friday, 16 May 2026</div>
+        <div className="greeting-name">{greeting}, {user?.name || "there"}.</div>
+        <div className="greeting-date">{now.toLocaleDateString("en-BD", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</div>
       </div>
 
       {/* Points balance card */}
@@ -141,7 +78,7 @@ function HomeTab({ setTab }) {
         <div className="eyebrow">Midnight Points</div>
         <div className="row mb12" style={{ alignItems: "baseline", gap: 6 }}>
           <span style={{ fontSize: 38, fontWeight: 700, color: "var(--orange)", lineHeight: 1 }}>
-            {USER.points.toLocaleString()}
+            {pts.toLocaleString()}
           </span>
           <span className="text-muted text-sm">pts</span>
         </div>
@@ -153,37 +90,33 @@ function HomeTab({ setTab }) {
         </div>
       </div>
 
-      {/* Active subscription strip */}
-      <div className="card mb12 row-between" style={{ cursor: "pointer" }} onClick={() => setTab("subscription")}>
-        <div>
-          <div className="text-xs text-muted mb4">SUBSCRIPTION</div>
-          <div style={{ fontWeight: 600, fontSize: 14 }}>{SUBSCRIPTION.plan}</div>
-          <div className="text-xs text-muted mt4">Next delivery: {SUBSCRIPTION.nextDelivery}</div>
-        </div>
-        <span className="badge badge-green">Active</span>
-      </div>
-
       {/* Last order strip */}
-      <div className="card mb12" style={{ cursor: "pointer" }} onClick={() => setTab("orders")}>
-        <div className="row-between mb8">
-          <span className="text-xs text-muted">LAST ORDER</span>
-          <StatusBadge status={lastOrder.status} />
+      {lastOrder ? (
+        <div className="card mb12" style={{ cursor: "pointer" }} onClick={() => setTab("orders")}>
+          <div className="row-between mb8">
+            <span className="text-xs text-muted">LAST ORDER</span>
+            <StatusBadge status={fmtStatus(lastOrder.status)} />
+          </div>
+          <div style={{ fontSize: 13, fontWeight: 600 }} className="mb4">{orderSummary(lastOrder.items)}</div>
+          <div className="row-between">
+            <span style={{ color: "var(--orange)", fontWeight: 700 }}>৳{lastOrder.total}</span>
+            <button className="btn-link" onClick={e => { e.stopPropagation(); setTab("orders"); }}>
+              View all orders →
+            </button>
+          </div>
         </div>
-        <div style={{ fontSize: 13, fontWeight: 600 }} className="mb4">{lastOrder.items}</div>
-        <div className="row-between">
-          <span style={{ color: "var(--orange)", fontWeight: 700 }}>৳{lastOrder.total}</span>
-          <button className="btn-link" onClick={e => { e.stopPropagation(); setTab("orders"); }}>
-            View all orders →
-          </button>
+      ) : (
+        <div className="card mb12">
+          <div className="text-sm text-muted" style={{ textAlign: "center", padding: "12px 0" }}>No orders yet. Place your first order!</div>
         </div>
-      </div>
+      )}
 
       {/* Quick actions */}
       <div className="col-gap mb12">
         <a href="shop.html" className="btn btn-primary btn-full">
           <i className="fa fa-coffee" /> Shop Now
         </a>
-        {USER.isCrew && (
+        {isCrew && (
           <a href="dashboard-crew.html" className="btn btn-ghost btn-full">
             <i className="fa fa-share-alt" /> Refer a Friend
           </a>
@@ -191,7 +124,7 @@ function HomeTab({ setTab }) {
       </div>
 
       {/* Crew banner if not crew */}
-      {!USER.isCrew && (
+      {!isCrew && (
         <div className="card" style={{ background: "var(--orange-faint)", borderColor: "rgba(255,145,0,.25)" }}>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>
             Earn points by spreading the word.
@@ -208,24 +141,25 @@ function HomeTab({ setTab }) {
 
 // ── Tab: Orders ──────────────────────────────────────
 function OrdersTab() {
-  const [filter, setFilter]   = useState("All");
+  const { orders } = useContext(DashCtx);
+  const [filter, setFilter]     = useState("All");
   const [expanded, setExpanded] = useState(null);
 
-  const filters = ["All", "Processing", "Shipped", "Delivered", "Cancelled"];
+  const filters = ["All", "Confirmed", "Processing", "Packed", "Shipped", "Delivered", "Cancelled"];
 
   const visible = filter === "All"
-    ? ORDERS
-    : ORDERS.filter(o => o.status === filter);
+    ? orders
+    : orders.filter(o => fmtStatus(o.status) === filter);
 
-  function whatsAppLink(orderId) {
-    const msg = encodeURIComponent(`Hi Midnight Pick! I need help with order ${orderId}.`);
+  function whatsAppLink(ref) {
+    const msg = encodeURIComponent(`Hi Midnight Pick! I need help with order ${ref}.`);
     return `https://wa.me/8801XXXXXXXXX?text=${msg}`;
   }
 
   return (
     <div>
       <div className="page-title">Your Orders</div>
-      <div className="page-sub">{ORDERS.length} orders total</div>
+      <div className="page-sub">{orders.length} orders total</div>
 
       <div className="filter-row">
         {filters.map(f => (
@@ -246,16 +180,16 @@ function OrdersTab() {
         <div key={order.id} className="accordion">
           <div className="accordion-hd" onClick={() => setExpanded(expanded === order.id ? null : order.id)}>
             <div className="row-between mb8">
-              <span className="mono text-muted text-xs">{order.id}</span>
-              <span className="text-xs text-muted">{order.date}</span>
+              <span className="mono text-muted text-xs">{order.order_ref}</span>
+              <span className="text-xs text-muted">{fmtDate(order.created_at)}</span>
             </div>
             <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 8, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {order.items}
+              {orderSummary(order.items)}
             </div>
             <div className="row-between">
               <span style={{ color: "var(--orange)", fontWeight: 700 }}>৳{order.total}</span>
               <div className="row" style={{ gap: 8 }}>
-                <StatusBadge status={order.status} />
+                <StatusBadge status={fmtStatus(order.status)} />
                 <i className="fa fa-chevron-down text-muted" style={{ fontSize: 11, transform: expanded === order.id ? "rotate(180deg)" : "none", transition: "transform .2s" }} />
               </div>
             </div>
@@ -265,44 +199,38 @@ function OrdersTab() {
             <div className="accordion-bd" onClick={e => e.stopPropagation()}>
               <div className="eyebrow mb12">Order Details</div>
 
-              {/* Item list */}
-              {order.itemList.map((item, i) => (
+              {(order.items || []).map((item, i) => (
                 <div key={i} className="row-between mb8" style={{ fontSize: 13 }}>
                   <span>{item.name} ×{item.qty}</span>
-                  <span className="text-muted">৳{item.price * item.qty}</span>
+                  <span className="text-muted">৳{item.unit_price * item.qty}</span>
                 </div>
               ))}
               <div className="divider" />
 
               <div className="row-between mb8 text-sm">
                 <span className="text-muted">Delivery</span>
-                <span>{order.address}</span>
+                <span>{addrString(order.address_snapshot)}</span>
               </div>
               <div className="row-between mb8 text-sm">
                 <span className="text-muted">Payment</span>
-                <span>{order.payment}</span>
+                <span style={{ textTransform: "capitalize" }}>{order.payment_type}</span>
               </div>
-              {order.coupon && (
+              {order.coupon_code && (
                 <div className="row-between mb8 text-sm">
                   <span className="text-muted">Coupon</span>
-                  <span style={{ color: "var(--green)" }}>{order.coupon}</span>
+                  <span style={{ color: "var(--green)" }}>{order.coupon_code} (saved ৳{order.discount_amount})</span>
                 </div>
               )}
-              {order.pointsEarned > 0 && (
+              {order.points_earned > 0 && (
                 <div className="row-between mb12 text-sm">
                   <span className="text-muted">Points earned</span>
-                  <span style={{ color: "var(--orange)" }}>+{order.pointsEarned} pts</span>
+                  <span style={{ color: "var(--orange)" }}>+{order.points_earned} pts</span>
                 </div>
               )}
               <div className="divider" />
 
               <div className="row" style={{ gap: 8 }}>
-                {order.status !== "Cancelled" && (
-                  <button className="btn btn-primary btn-sm">
-                    <i className="fa fa-redo" style={{ fontSize: 11 }} /> Reorder
-                  </button>
-                )}
-                <a href={whatsAppLink(order.id)} target="_blank" rel="noreferrer" className="btn btn-ghost btn-sm">
+                <a href={whatsAppLink(order.order_ref)} target="_blank" rel="noreferrer" className="btn btn-ghost btn-sm">
                   <i className="fab fa-whatsapp" style={{ fontSize: 13 }} /> Help
                 </a>
               </div>
@@ -317,7 +245,7 @@ function OrdersTab() {
 // ── Tab: Subscription ────────────────────────────────
 function SubscriptionTab() {
   const [sheet, setSheet] = useState(null);
-  const sub = SUBSCRIPTION;
+  const sub = null; // subscriptions backend coming soon
 
   if (!sub) {
     return (
@@ -409,16 +337,15 @@ function SubscriptionTab() {
 
 // ── Tab: Points ──────────────────────────────────────
 function PointsTab() {
+  const { user, pointsHistory } = useContext(DashCtx);
   const [sheet, setSheet] = useState(null);
+  const pts = user?.points_balance || 0;
 
   const rewards = [
     { id: "sachet", label: "1 Free Sachet", pts: 1000, worth: "৳25" },
     { id: "bkash",  label: "৳100 bKash Credit", pts: 5000, worth: "৳100" },
     { id: "month",  label: "One Free Month — Night Shift", pts: 10000, worth: "৳210" },
   ];
-
-  const sheetBody = (r) =>
-    `Redeem ${r.pts.toLocaleString()} points for "${r.label}"? This cannot be undone.`;
 
   return (
     <div>
@@ -427,21 +354,16 @@ function PointsTab() {
         <div className="eyebrow">Midnight Points</div>
         <div className="row mb8" style={{ alignItems: "baseline", gap: 8 }}>
           <span style={{ fontSize: 44, fontWeight: 700, color: "var(--orange)", lineHeight: 1 }}>
-            {USER.points.toLocaleString()}
+            {pts.toLocaleString()}
           </span>
           <span className="text-muted">pts</span>
-        </div>
-        <div className="text-xs text-muted">
-          Lifetime earned: <strong style={{ color: "var(--text)" }}>{USER.lifetimeEarned.toLocaleString()}</strong>
-          &nbsp;&nbsp;·&nbsp;&nbsp;
-          Redeemed: <strong style={{ color: "var(--text)" }}>{USER.lifetimeRedeemed.toLocaleString()}</strong>
         </div>
       </div>
 
       {/* Redeem section */}
       <div className="eyebrow mb12">Redeem Points</div>
       {rewards.map(r => {
-        const canRedeem = USER.points >= r.pts;
+        const canRedeem = pts >= r.pts;
         return (
           <div key={r.id} className="redeem-card">
             <div>
@@ -464,17 +386,19 @@ function PointsTab() {
       {/* History */}
       <div className="mt16 mb8 eyebrow">History</div>
       <div className="card">
-        {POINTS_HISTORY.filter(p => p.points !== 0).map((p, i) => (
+        {pointsHistory.length === 0 ? (
+          <div className="text-sm text-muted" style={{ padding: "12px 0", textAlign: "center" }}>No points activity yet.</div>
+        ) : pointsHistory.map((p, i) => (
           <div key={i} className="pts-row">
             <div>
-              <div style={{ fontSize: 12, fontWeight: 500 }}>{p.desc}</div>
-              <div className="text-xs text-muted mt4">{p.date}</div>
+              <div style={{ fontSize: 12, fontWeight: 500 }}>{p.description}</div>
+              <div className="text-xs text-muted mt4">{fmtDate(p.created_at)}</div>
             </div>
             <span style={{
               fontWeight: 700, fontSize: 13,
-              color: p.type === "earned" ? "var(--green)" : "var(--red)"
+              color: p.type === "earned" || p.type === "bonus" ? "var(--green)" : "var(--red)"
             }}>
-              {p.type === "earned" ? "+" : "−"}{p.points} pts
+              {p.type === "earned" || p.type === "bonus" ? "+" : "−"}{Math.abs(p.points)} pts
             </span>
           </div>
         ))}
@@ -483,7 +407,7 @@ function PointsTab() {
       {sheet && (
         <Sheet
           title={`Redeem ${sheet.pts.toLocaleString()} points?`}
-          body={sheetBody(sheet)}
+          body={`Redeem ${sheet.pts.toLocaleString()} points for "${sheet.label}"? This cannot be undone.`}
           confirmLabel="Yes, Redeem"
           onConfirm={() => setSheet(null)}
           onClose={() => setSheet(null)}
@@ -495,14 +419,46 @@ function PointsTab() {
 
 // ── Tab: Account ─────────────────────────────────────
 function AccountTab() {
-  const [profile, setProfile] = useState({ name: USER.name, email: USER.email });
+  const { user, addresses, paymentMethods, reload } = useContext(DashCtx);
+  const [profile, setProfile] = useState({ name: user?.name || "", email: user?.email || "" });
   const [edited, setEdited]   = useState(false);
+  const [saving, setSaving]   = useState(false);
   const [sheet, setSheet]     = useState(null);
 
-  function handleChange(field, val) {
-    setProfile(p => ({ ...p, [field]: val }));
-    setEdited(true);
+  useEffect(() => {
+    setProfile({ name: user?.name || "", email: user?.email || "" });
+  }, [user]);
+
+  async function saveProfile() {
+    setSaving(true);
+    try {
+      await mpApi.fetch("/me", {
+        method: "PATCH",
+        body: JSON.stringify({ name: profile.name, email: profile.email || undefined }),
+      });
+      setEdited(false);
+      reload();
+    } finally {
+      setSaving(false);
+    }
   }
+
+  async function handleLogout() {
+    const token   = localStorage.getItem("mp_access_token");
+    const refresh = localStorage.getItem("mp_refresh_token");
+    await fetch("http://localhost:3000/api/v1/auth/logout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ refresh_token: refresh }),
+    }).catch(() => {});
+    localStorage.clear();
+    window.location.href = "index.html";
+  }
+
+  const pmLabel = (type) => {
+    const map = { bkash: "bK", nagad: "NG", rocket: "RK", card: "CRD", cod: "COD" };
+    return map[type] || type?.slice(0,2).toUpperCase() || "?";
+  };
 
   return (
     <div>
@@ -513,37 +469,39 @@ function AccountTab() {
         <div className="eyebrow mb12">Profile</div>
         <div className="input-group">
           <label className="input-label">Name</label>
-          <input className="input" value={profile.name} onChange={e => handleChange("name", e.target.value)} />
+          <input className="input" value={profile.name} onChange={e => { setProfile(p => ({ ...p, name: e.target.value })); setEdited(true); }} />
         </div>
         <div className="input-group">
           <label className="input-label">Phone</label>
-          <input className="input" value={USER.phone} readOnly style={{ opacity: .7 }} />
+          <input className="input" value={user?.phone || ""} readOnly style={{ opacity: .7 }} />
           <div className="input-note">Requires OTP to change — contact support.</div>
         </div>
         <div className="input-group" style={{ marginBottom: 0 }}>
           <label className="input-label">Email</label>
-          <input className="input" value={profile.email} onChange={e => handleChange("email", e.target.value)} />
+          <input className="input" value={profile.email} onChange={e => { setProfile(p => ({ ...p, email: e.target.value })); setEdited(true); }} />
         </div>
         {edited && (
-          <button className="btn btn-primary btn-full mt16" onClick={() => setEdited(false)}>
-            Save Changes
+          <button className="btn btn-primary btn-full mt16" disabled={saving} onClick={saveProfile}>
+            {saving ? "Saving…" : "Save Changes"}
           </button>
         )}
       </div>
 
       {/* Addresses */}
       <div className="eyebrow mb8 mt16">Saved Addresses</div>
-      {ADDRESSES.map(addr => (
+      {addresses.length === 0 ? (
+        <div className="text-sm text-muted mb12" style={{ textAlign: "center" }}>No saved addresses yet.</div>
+      ) : addresses.map(addr => (
         <div key={addr.id} className="addr-card">
           <div>
             <div className="row mb4" style={{ gap: 8 }}>
               <span style={{ fontSize: 13, fontWeight: 700 }}>{addr.label}</span>
-              {addr.isDefault && <span className="badge badge-orange">Default</span>}
+              {addr.is_default && <span className="badge badge-orange">Default</span>}
             </div>
             <div className="text-sm text-muted">{addr.line1}</div>
-            <div className="text-sm text-muted">{addr.line2}</div>
+            {addr.line2 && <div className="text-sm text-muted">{addr.line2}</div>}
+            {addr.city && <div className="text-sm text-muted">{addr.city}</div>}
           </div>
-          <button className="text-xs text-muted" style={{ textDecoration: "underline", flexShrink: 0 }}>Edit</button>
         </div>
       ))}
       <button className="btn btn-ghost btn-full btn-sm mb16">
@@ -552,18 +510,19 @@ function AccountTab() {
 
       {/* Payment methods */}
       <div className="eyebrow mb8">Payment Methods</div>
-      {PAYMENT_METHODS.map(pm => (
+      {paymentMethods.length === 0 ? (
+        <div className="text-sm text-muted mb12" style={{ textAlign: "center" }}>No payment methods saved.</div>
+      ) : paymentMethods.map(pm => (
         <div key={pm.id} className="pay-card">
           <div className="row" style={{ gap: 10 }}>
-            <div className="pay-icon">{pm.type === "bKash" ? "bK" : "NG"}</div>
+            <div className="pay-icon">{pmLabel(pm.type)}</div>
             <div>
-              <div style={{ fontSize: 13, fontWeight: 600 }}>{pm.type}</div>
+              <div style={{ fontSize: 13, fontWeight: 600, textTransform: "capitalize" }}>{pm.type}</div>
               <div className="text-xs text-muted">{pm.number}</div>
             </div>
           </div>
           <div className="row" style={{ gap: 8 }}>
-            {pm.isDefault && <span className="badge badge-orange">Default</span>}
-            <button className="text-xs text-muted" style={{ textDecoration: "underline" }}>Remove</button>
+            {pm.is_default && <span className="badge badge-orange">Default</span>}
           </div>
         </div>
       ))}
@@ -572,13 +531,12 @@ function AccountTab() {
       </button>
 
       {/* Crew status */}
-      {USER.isCrew && (
+      {user?.role === "crew" && (
         <div className="card mb16" style={{ background: "var(--orange-faint)", borderColor: "rgba(255,145,0,.25)" }}>
           <div className="row mb8" style={{ gap: 10 }}>
             <i className="fa fa-fire text-orange" style={{ fontSize: 18 }} />
             <span style={{ fontWeight: 700, fontSize: 15 }}>Midnight Crew Member</span>
           </div>
-          <div className="text-sm text-muted mb12">Your referral code: <strong style={{ color: "var(--orange)" }}>{USER.crewCode}</strong></div>
           <a href="dashboard-crew.html" className="btn btn-primary btn-sm">Go to Crew Dashboard</a>
         </div>
       )}
@@ -601,7 +559,7 @@ function AccountTab() {
           title="Log out?"
           body="You'll be signed out of your Midnight Pick account on this device."
           confirmLabel="Log Out"
-          onConfirm={() => { window.location.href = "index.html"; }}
+          onConfirm={handleLogout}
           onClose={() => setSheet(null)}
         />
       )}
@@ -620,6 +578,8 @@ function AccountTab() {
 
 // ── Sidebar ──────────────────────────────────────────
 function Sidebar({ tab, setTab, onLogout }) {
+  const { user } = useContext(DashCtx);
+  const isCrew   = user?.role === "crew";
   const links = [
     { id: "home",         icon: "fa-home",          label: "Home" },
     { id: "orders",       icon: "fa-box",            label: "Orders" },
@@ -639,7 +599,7 @@ function Sidebar({ tab, setTab, onLogout }) {
             <span>{l.label}</span>
           </div>
         ))}
-        {USER.isCrew && (
+        {isCrew && (
           <>
             <div className="sidebar-section-label">Crew</div>
             <a href="dashboard-crew.html" className="sidebar-link">
@@ -651,10 +611,10 @@ function Sidebar({ tab, setTab, onLogout }) {
       </nav>
       <div className="sidebar-footer">
         <div className="sidebar-user" style={{ marginBottom: 10 }}>
-          <div className="sidebar-avatar">{USER.name[0]}</div>
+          <div className="sidebar-avatar">{(user?.name || "?")[0].toUpperCase()}</div>
           <div>
-            <div className="sidebar-user-name">{USER.name}</div>
-            <div className="sidebar-user-role">{USER.isCrew ? "Midnight Crew" : "Member"}</div>
+            <div className="sidebar-user-name">{user?.name || "—"}</div>
+            <div className="sidebar-user-role">{isCrew ? "Midnight Crew" : "Member"}</div>
           </div>
         </div>
         <button className="sidebar-link" style={{ width: "100%", borderLeft: "3px solid transparent", color: "var(--cream-65)" }} onClick={onLogout}>
@@ -665,26 +625,53 @@ function Sidebar({ tab, setTab, onLogout }) {
   );
 }
 
+// ── Loading screen ───────────────────────────────────
+function LoadingScreen() {
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh" }}>
+      <div style={{ textAlign: "center" }}>
+        <i className="fa fa-circle-notch fa-spin" style={{ fontSize: 28, color: "var(--orange)" }} />
+        <div className="text-muted text-sm" style={{ marginTop: 12 }}>Loading…</div>
+      </div>
+    </div>
+  );
+}
+
 // ── App ──────────────────────────────────────────────
 function UserDashboard() {
-  const [tab, setTab] = useState("home");
+  const [tab, setTab]           = useState("home");
   const [logoutOpen, setLogoutOpen] = useState(false);
+  const [data, setData]         = useState({
+    user: null, orders: [], addresses: [], paymentMethods: [], pointsHistory: [], loading: true,
+  });
 
-  const tabs = [
-    { id: "home",         icon: "fa-home",          label: "Home" },
-    { id: "orders",       icon: "fa-box",            label: "Orders" },
-    { id: "subscription", icon: "fa-calendar-check", label: "Sub" },
-    { id: "points",       icon: "fa-star",           label: "Points" },
-    { id: "account",      icon: "fa-user",           label: "Account" },
-  ];
+  async function loadData() {
+    const [me, ordersRes, addrsRes, pmsRes, ptsRes] = await Promise.all([
+      mpApi.fetch("/me"),
+      mpApi.fetch("/orders?limit=20"),
+      mpApi.fetch("/me/addresses"),
+      mpApi.fetch("/me/payment-methods"),
+      mpApi.fetch("/me/points/history?limit=30"),
+    ]);
+    setData({
+      user:           me?.data    || null,
+      orders:         ordersRes?.data?.orders || [],
+      addresses:      addrsRes?.data || [],
+      paymentMethods: pmsRes?.data  || [],
+      pointsHistory:  ptsRes?.data?.transactions || [],
+      loading: false,
+      reload: loadData,
+    });
+  }
 
-  const tabTitles = {
-    home:         "Midnight Pick",
-    orders:       "Orders",
-    subscription: "Subscription",
-    points:       "Points",
-    account:      "Account",
-  };
+  useEffect(() => {
+    if (!mpApi.guard(["user", "crew", "influencer"])) return;
+    loadData();
+  }, []);
+
+  if (data.loading) return <LoadingScreen />;
+
+  const ctxValue = { ...data, reload: loadData };
 
   function renderTab() {
     switch (tab) {
@@ -697,8 +684,20 @@ function UserDashboard() {
     }
   }
 
+  async function handleLogout() {
+    const token   = localStorage.getItem("mp_access_token");
+    const refresh = localStorage.getItem("mp_refresh_token");
+    await fetch("http://localhost:3000/api/v1/auth/logout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ refresh_token: refresh }),
+    }).catch(() => {});
+    localStorage.clear();
+    window.location.href = "index.html";
+  }
+
   return (
-    <>
+    <DashCtx.Provider value={ctxValue}>
       <div className="dash-layout">
         <Sidebar tab={tab} setTab={setTab} onLogout={() => setLogoutOpen(true)} />
         <div className="dash-main">
@@ -712,11 +711,11 @@ function UserDashboard() {
           title="Log out?"
           body="You'll be signed out of your Midnight Pick account on this device."
           confirmLabel="Log Out"
-          onConfirm={() => { window.location.href = "index.html"; }}
+          onConfirm={handleLogout}
           onClose={() => setLogoutOpen(false)}
         />
       )}
-    </>
+    </DashCtx.Provider>
   );
 }
 

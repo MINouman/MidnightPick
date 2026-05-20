@@ -823,6 +823,48 @@ function TrackOrderModal({ open, onClose }) {
 // AUTH MODAL (Login / Sign Up)
 // ─────────────────────────────────────────────
 
+// Module-level: the open modal registers its setServerError here so the GSI callback
+// can surface errors back into React state.
+let _gsiErrorReporter = null;
+
+async function _handleGoogleCredential(response) {
+  try {
+    const res  = await fetch(`${API_BASE}/auth/google`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ credential: response.credential }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error?.message || "Google sign-in failed.");
+    localStorage.setItem("mp_access_token",  data.data.access_token);
+    localStorage.setItem("mp_refresh_token", data.data.refresh_token);
+    localStorage.setItem("mp_user",          JSON.stringify(data.data.user));
+    window.location.href = ROLE_ROUTES[data.data.user.role] || ROLE_ROUTES.user;
+  } catch (err) {
+    if (_gsiErrorReporter) _gsiErrorReporter(err.message);
+    _gsiErrorReporter = null;
+  }
+}
+
+function _initGsi() {
+  const clientId = window.MP_CONFIG?.googleClientId;
+  if (!clientId || !window.google?.accounts?.id) return;
+  window.google.accounts.id.initialize({
+    client_id:             clientId,
+    callback:              _handleGoogleCredential,
+    auto_select:           false,
+    cancel_on_tap_outside: false,
+  });
+}
+
+// Register as the GSI library's own ready hook so the timing is guaranteed
+// regardless of whether GSI or Babel finishes loading first.
+window._gsiInit = _initGsi;
+if (window._gsiReady || window.google?.accounts?.id) {
+  _initGsi();
+  window._gsiReady = false;
+}
+
 const GoogleIcon = ({ size = 18 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
     <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
@@ -849,12 +891,7 @@ const EyeIcon = ({ size = 16, open = true }) => (
   </svg>
 );
 
-const DEMO_ACCOUNTS = [
-  { email: "rafi@midnightpick.com",  password: "coffee123", role: "user" },
-  { email: "crew@midnightpick.com",  password: "crew123",   role: "crew" },
-  { email: "tanha@midnightpick.com", password: "tanha123",  role: "influencer" },
-  { email: "admin@midnightpick.com", password: "admin123",  role: "admin" },
-];
+const API_BASE = "http://localhost:3000/api/v1";
 
 const ROLE_ROUTES = {
   user:       "dashboard-user.html",
@@ -872,23 +909,20 @@ function AuthModal({ open, onClose }) {
   const [submitting, setSubmitting] = React.useState(false);
   const [form, setForm] = React.useState({ name: "", email: "", password: "", password2: "" });
   const [errors, setErrors] = React.useState({});
-  const [googleMsg,    setGoogleMsg]    = React.useState(false);
-  const [forgotEmail,  setForgotEmail]  = React.useState("");
-  const [forgotStatus, setForgotStatus] = React.useState("idle");
+  const [serverError, setServerError] = React.useState("");
 
   React.useEffect(() => {
     if (open) {
-      const remembered = localStorage.getItem("mp_remembered_email");
       setTab("login"); setPhase("splash");
-      setForm({ name: "", email: remembered || "", password: "", password2: "" });
-      setErrors({}); setSubmitting(false);
-      setShowPass(false); setShowPass2(false); setRemember(!!remembered);
-      setGoogleMsg(false); setForgotEmail(""); setForgotStatus("idle");
+      setForm({ name: "", email: "", password: "", password2: "" });
+      setErrors({}); setSubmitting(false); setServerError("");
+      setShowPass(false); setShowPass2(false); setRemember(false);
     }
   }, [open]);
 
   React.useEffect(() => {
     document.body.style.overflow = open ? "hidden" : "";
+    if (!open) { _gsiErrorReporter = null; window.google?.accounts?.id?.cancel(); }
     return () => { document.body.style.overflow = ""; };
   }, [open]);
 
@@ -896,15 +930,14 @@ function AuthModal({ open, onClose }) {
 
   const set = (field) => (e) => {
     setForm((prev) => ({ ...prev, [field]: e.target.value }));
-    setErrors((prev) => ({ ...prev, [field]: undefined, server: undefined }));
+    if (errors[field]) setErrors((prev) => ({ ...prev, [field]: undefined }));
   };
 
   const switchTab = (t) => {
     setTab(t);
-    setErrors({});
+    setErrors({}); setServerError("");
     setForm({ name: "", email: "", password: "", password2: "" });
     setShowPass(false); setShowPass2(false);
-    setGoogleMsg(false);
   };
 
   const validate = () => {
@@ -918,222 +951,176 @@ function AuthModal({ open, onClose }) {
     return e;
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     const errs = validate();
     if (Object.keys(errs).length) { setErrors(errs); return; }
     setSubmitting(true);
-    setTimeout(() => {
-      if (tab === "login") {
-        const account = DEMO_ACCOUNTS.find(
-          (a) => a.email === form.email.trim().toLowerCase() && a.password === form.password
-        );
-        if (account) {
-          if (remember) {
-            localStorage.setItem("mp_remembered_email", form.email.trim().toLowerCase());
-          } else {
-            localStorage.removeItem("mp_remembered_email");
-          }
-          sessionStorage.setItem("mp_role", account.role);
-          window.location.href = window.innerWidth < 768
-            ? "dashboard-mobile.html"
-            : ROLE_ROUTES[account.role];
-        } else {
-          setSubmitting(false);
-          setErrors({ server: "Invalid email or password." });
-        }
-      } else {
-        sessionStorage.setItem("mp_role", "user");
-        window.location.href = window.innerWidth < 768
-          ? "dashboard-mobile.html"
-          : ROLE_ROUTES["user"];
-      }
-    }, 800);
+    setServerError("");
+    try {
+      const endpoint = tab === "login" ? "/auth/login" : "/auth/register";
+      const body = tab === "login"
+        ? { email: form.email, password: form.password }
+        : { name: form.name.trim(), email: form.email, password: form.password };
+      const res  = await fetch(`${API_BASE}${endpoint}`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error?.message || "Something went wrong.");
+      localStorage.setItem("mp_access_token",  data.data.access_token);
+      localStorage.setItem("mp_refresh_token", data.data.refresh_token);
+      localStorage.setItem("mp_user",          JSON.stringify(data.data.user));
+      const role = data.data.user.role;
+      window.location.href = ROLE_ROUTES[role] || ROLE_ROUTES.user;
+    } catch (err) {
+      setServerError(err.message);
+      setSubmitting(false);
+    }
   };
 
   const formPane = (
-    <div className={`auth-form-pane${(phase === "form" || phase === "forgot") ? " auth-form-pane--visible" : ""}`}>
+    <div className={`auth-form-pane${phase === "form" ? " auth-form-pane--visible" : ""}`}>
       <button className="auth-close-btn" onClick={onClose} aria-label="Close">
         <CloseIcon size={16} />
       </button>
-      {(phase === "form" || phase === "forgot") && (
-        <button className="auth-back-btn" onClick={() => setPhase(phase === "forgot" ? "form" : "splash")} aria-label="Back">
+      {phase === "form" && (
+        <button className="auth-back-btn" onClick={() => setPhase("splash")} aria-label="Back">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <polyline points="15 18 9 12 15 6"/>
           </svg>
         </button>
       )}
 
-      {phase === "forgot" ? (
-        forgotStatus === "sent" ? (
-          <div style={{ textAlign: "center", padding: "16px 0" }}>
-            <i className="fa-solid fa-circle-check" style={{ fontSize: 32, color: "#4CAF84", marginBottom: 12, display: "block" }} aria-hidden="true" />
-            <h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 8 }}>Check your inbox</h3>
-            <p style={{ fontSize: 13, color: "rgba(87,31,41,.65)", lineHeight: 1.5 }}>
-              If <strong>{forgotEmail}</strong> is registered, a reset link is on its way.
-            </p>
-            <button className="auth-submit-btn" style={{ marginTop: 20 }} onClick={() => setPhase("form")}>
-              Back to Login
+      <div className="auth-tabs">
+        <button className={`auth-tab-btn${tab === "login" ? " active" : ""}`} onClick={() => switchTab("login")}>Login</button>
+        <button className={`auth-tab-btn${tab === "signup" ? " active" : ""}`} onClick={() => switchTab("signup")}>Sign Up</button>
+      </div>
+
+      <button className="auth-google-btn" type="button" onClick={() => {
+        setServerError("");
+        if (!window.google?.accounts?.id) {
+          setServerError("Google Sign-In is not loaded yet — please refresh the page.");
+          return;
+        }
+        _gsiErrorReporter = setServerError;
+        window.google.accounts.id.prompt((note) => {
+          if (note.isNotDisplayed()) {
+            const reason = note.getNotDisplayedReason();
+            const msg = {
+              opt_out_or_no_session:  "No Google session found. Please sign in to Google first, then try again.",
+              suppressed_by_user:     "Google sign-in was suppressed. Try again or allow pop-ups for this site.",
+              unregistered_origin:    "This site is not yet authorised in Google Cloud Console.",
+              browser_not_supported:  "Your browser does not support Google One Tap.",
+            }[reason] || `Google sign-in unavailable (${reason}).`;
+            if (_gsiErrorReporter) _gsiErrorReporter(msg);
+            _gsiErrorReporter = null;
+          } else if (note.isSkippedMoment() || note.isDismissedMoment()) {
+            _gsiErrorReporter = null;
+          }
+        });
+      }}>
+        <GoogleIcon size={18} />
+        <span>Continue with Google</span>
+      </button>
+
+      <div className="auth-divider"><span>or</span></div>
+
+      <form className="auth-form" onSubmit={handleSubmit} noValidate>
+        {tab === "signup" && (
+          <div className="auth-field">
+            <label className="auth-label">Full Name</label>
+            <div className="auth-input-wrap">
+              <i className="fa-solid fa-user auth-input-icon" aria-hidden="true" />
+              <input className={`auth-input${errors.name ? " error" : ""}`} type="text" placeholder="Your full name" value={form.name} onChange={set("name")} autoComplete="name" />
+            </div>
+            {errors.name && <span className="auth-field-err">{errors.name}</span>}
+          </div>
+        )}
+
+        <div className="auth-field">
+          <label className="auth-label">Email Address</label>
+          <div className="auth-input-wrap">
+            <i className="fa-solid fa-envelope auth-input-icon" aria-hidden="true" />
+            <input className={`auth-input${errors.email ? " error" : ""}`} type="email" placeholder="Enter your email address" value={form.email} onChange={set("email")} autoComplete="email" />
+          </div>
+          {errors.email && <span className="auth-field-err">{errors.email}</span>}
+        </div>
+
+        <div className="auth-field">
+          <label className="auth-label">Password</label>
+          <div className="auth-input-wrap">
+            <i className="fa-solid fa-lock auth-input-icon" aria-hidden="true" />
+            <input
+              className={`auth-input auth-input--pass${errors.password ? " error" : ""}`}
+              type={showPass ? "text" : "password"}
+              placeholder="Enter your password"
+              value={form.password}
+              onChange={set("password")}
+              autoComplete={tab === "login" ? "current-password" : "new-password"}
+            />
+            <button type="button" className="auth-eye-btn" onClick={() => setShowPass((v) => !v)} aria-label={showPass ? "Hide password" : "Show password"}>
+              <EyeIcon size={15} open={showPass} />
             </button>
           </div>
-        ) : (
-          <>
-            <div className="auth-tabs" style={{ marginBottom: 4 }}>
-              <span style={{ fontWeight: 700, fontSize: 15 }}>Reset Password</span>
+          {errors.password && <span className="auth-field-err">{errors.password}</span>}
+        </div>
+
+        {tab === "signup" && (
+          <div className="auth-field">
+            <label className="auth-label">Confirm Password</label>
+            <div className="auth-input-wrap">
+              <i className="fa-solid fa-lock auth-input-icon" aria-hidden="true" />
+              <input
+                className={`auth-input auth-input--pass${errors.password2 ? " error" : ""}`}
+                type={showPass2 ? "text" : "password"}
+                placeholder="Repeat your password"
+                value={form.password2}
+                onChange={set("password2")}
+                autoComplete="new-password"
+              />
+              <button type="button" className="auth-eye-btn" onClick={() => setShowPass2((v) => !v)} aria-label={showPass2 ? "Hide password" : "Show password"}>
+                <EyeIcon size={15} open={showPass2} />
+              </button>
             </div>
-            <p style={{ fontSize: 13, color: "rgba(87,31,41,.65)", margin: "0 0 20px", lineHeight: 1.5 }}>
-              Enter your email and we'll send a reset link.
-            </p>
-            <div className="auth-field">
-              <label className="auth-label">Email Address</label>
-              <div className="auth-input-wrap">
-                <i className="fa-solid fa-envelope auth-input-icon" aria-hidden="true" />
-                <input
-                  className="auth-input"
-                  type="email"
-                  placeholder="Enter your email address"
-                  value={forgotEmail}
-                  onChange={(e) => setForgotEmail(e.target.value)}
-                  autoComplete="email"
-                  autoFocus
-                />
-              </div>
-            </div>
-            <button
-              className={`auth-submit-btn${forgotStatus === "loading" ? " loading" : ""}`}
-              disabled={forgotStatus === "loading" || !forgotEmail.trim()}
-              onClick={() => { setForgotStatus("loading"); setTimeout(() => setForgotStatus("sent"), 1000); }}
-            >
-              {forgotStatus === "loading" ? <span className="sub-spinner" aria-hidden="true" /> : "Send Reset Link"}
-            </button>
-          </>
-        )
-      ) : (
-        <>
-          <div className="auth-tabs">
-            <button className={`auth-tab-btn${tab === "login" ? " active" : ""}`} onClick={() => switchTab("login")}>Login</button>
-            <button className={`auth-tab-btn${tab === "signup" ? " active" : ""}`} onClick={() => switchTab("signup")}>Sign Up</button>
+            {errors.password2 && <span className="auth-field-err">{errors.password2}</span>}
           </div>
+        )}
 
-          <button className="auth-google-btn" type="button" onClick={() => setGoogleMsg(true)}>
-            <GoogleIcon size={18} />
-            <span>Continue with Google</span>
-          </button>
-          {googleMsg && (
-            <p style={{ fontSize: 12, color: "rgba(87,31,41,.6)", margin: "-4px 0 8px", textAlign: "center" }}>
-              Google sign-in coming soon.
-            </p>
-          )}
+        {tab === "login" && (
+          <div className="auth-meta-row">
+            <label className="auth-remember-label">
+              <button
+                type="button"
+                role="checkbox"
+                aria-checked={remember}
+                className={`auth-checkbox${remember ? " checked" : ""}`}
+                onClick={() => setRemember((v) => !v)}
+              >
+                {remember && <i className="fa-solid fa-check" style={{ fontSize: 8 }} aria-hidden="true" />}
+              </button>
+              Remember Me
+            </label>
+            <a href="#" className="auth-forgot-link">Forgot Password?</a>
+          </div>
+        )}
 
-          <div className="auth-divider"><span>or</span></div>
+        {serverError && <p className="auth-server-err">{serverError}</p>}
 
-          <form className="auth-form" onSubmit={handleSubmit} noValidate>
-            {tab === "signup" && (
-              <div className="auth-field">
-                <label className="auth-label">Full Name</label>
-                <div className="auth-input-wrap">
-                  <i className="fa-solid fa-user auth-input-icon" aria-hidden="true" />
-                  <input className={`auth-input${errors.name ? " error" : ""}`} type="text" placeholder="Your full name" value={form.name} onChange={set("name")} autoComplete="name" />
-                </div>
-                {errors.name && <span className="auth-field-err">{errors.name}</span>}
-              </div>
-            )}
+        <button type="submit" className={`auth-submit-btn${submitting ? " loading" : ""}`} disabled={submitting}>
+          {submitting
+            ? <span className="sub-spinner" aria-hidden="true" />
+            : tab === "login" ? "Login" : "Create Account"}
+        </button>
+      </form>
 
-            <div className="auth-field">
-              <label className="auth-label">Email Address</label>
-              <div className="auth-input-wrap">
-                <i className="fa-solid fa-envelope auth-input-icon" aria-hidden="true" />
-                <input className={`auth-input${errors.email ? " error" : ""}`} type="email" placeholder="Enter your email address" value={form.email} onChange={set("email")} autoComplete="email" />
-              </div>
-              {errors.email && <span className="auth-field-err">{errors.email}</span>}
-            </div>
-
-            <div className="auth-field">
-              <label className="auth-label">Password</label>
-              <div className="auth-input-wrap">
-                <i className="fa-solid fa-lock auth-input-icon" aria-hidden="true" />
-                <input
-                  className={`auth-input auth-input--pass${errors.password ? " error" : ""}`}
-                  type={showPass ? "text" : "password"}
-                  placeholder="Enter your password"
-                  value={form.password}
-                  onChange={set("password")}
-                  autoComplete={tab === "login" ? "current-password" : "new-password"}
-                />
-                <button type="button" className="auth-eye-btn" onClick={() => setShowPass((v) => !v)} aria-label={showPass ? "Hide password" : "Show password"}>
-                  <EyeIcon size={15} open={showPass} />
-                </button>
-              </div>
-              {errors.password && <span className="auth-field-err">{errors.password}</span>}
-            </div>
-
-            {tab === "signup" && (
-              <div className="auth-field">
-                <label className="auth-label">Confirm Password</label>
-                <div className="auth-input-wrap">
-                  <i className="fa-solid fa-lock auth-input-icon" aria-hidden="true" />
-                  <input
-                    className={`auth-input auth-input--pass${errors.password2 ? " error" : ""}`}
-                    type={showPass2 ? "text" : "password"}
-                    placeholder="Repeat your password"
-                    value={form.password2}
-                    onChange={set("password2")}
-                    autoComplete="new-password"
-                  />
-                  <button type="button" className="auth-eye-btn" onClick={() => setShowPass2((v) => !v)} aria-label={showPass2 ? "Hide password" : "Show password"}>
-                    <EyeIcon size={15} open={showPass2} />
-                  </button>
-                </div>
-                {errors.password2 && <span className="auth-field-err">{errors.password2}</span>}
-              </div>
-            )}
-
-            {tab === "login" && (
-              <div className="auth-meta-row">
-                <label className="auth-remember-label">
-                  <button
-                    type="button"
-                    role="checkbox"
-                    aria-checked={remember}
-                    className={`auth-checkbox${remember ? " checked" : ""}`}
-                    onClick={() => setRemember((v) => !v)}
-                  >
-                    {remember && <i className="fa-solid fa-check" style={{ fontSize: 8 }} aria-hidden="true" />}
-                  </button>
-                  Remember Me
-                </label>
-                <a
-                  href="#"
-                  className="auth-forgot-link"
-                  onClick={(e) => { e.preventDefault(); setPhase("forgot"); setForgotEmail(form.email || ""); setForgotStatus("idle"); }}
-                >
-                  Forgot Password?
-                </a>
-              </div>
-            )}
-
-            {errors.server && (
-              <div className="auth-server-err">
-                <i className="fa-solid fa-circle-exclamation" aria-hidden="true" style={{ marginRight: 6 }} />
-                {errors.server}
-              </div>
-            )}
-
-            <button type="submit" className={`auth-submit-btn${submitting ? " loading" : ""}`} disabled={submitting}>
-              {submitting
-                ? <span className="sub-spinner" aria-hidden="true" />
-                : tab === "login" ? "Login" : "Create Account"}
-            </button>
-          </form>
-
-          <p className="auth-switch-row">
-            {tab === "login" ? "Don't have an account?" : "Already have an account?"}{" "}
-            <button className="auth-switch-link" onClick={() => switchTab(tab === "login" ? "signup" : "login")}>
-              {tab === "login" ? "Sign Up" : "Login"}
-            </button>
-          </p>
-        </>
-      )}
+      <p className="auth-switch-row">
+        {tab === "login" ? "Don't have an account?" : "Already have an account?"}{" "}
+        <button className="auth-switch-link" onClick={() => switchTab(tab === "login" ? "signup" : "login")}>
+          {tab === "login" ? "Sign Up" : "Login"}
+        </button>
+      </p>
     </div>
   );
 

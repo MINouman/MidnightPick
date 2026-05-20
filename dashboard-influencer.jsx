@@ -1,50 +1,15 @@
 // Midnight Pick — Influencer Dashboard
 
-const { useState, useRef } = React;
+const { useState, useRef, useEffect, useContext, createContext } = React;
 
-// ── Mock Data ──────────────────────────────────────────
-const USER = {
-  name: "Sadia",
-  phone: "01811-567890",
-  email: "sadia@example.com",
-  influencerCode: "SADIA20",
-  discountPct: 20,
-  bkashNumber: "01811-567890",
-};
+const DashCtx = createContext(null);
 
-const COMMISSION_HISTORY = [
-  { date: "May 14, 2026", orderValue: 450,  rate: 10, commission: 45  },
-  { date: "May 10, 2026", orderValue: 1260, rate: 10, commission: 126 },
-  { date: "May 6, 2026",  orderValue: 324,  rate: 10, commission: 32  },
-  { date: "May 2, 2026",  orderValue: 650,  rate: 10, commission: 65  },
-  { date: "Apr 30, 2026", orderValue: 980,  rate: 10, commission: 98  },
-  { date: "Apr 22, 2026", orderValue: 210,  rate: 10, commission: 21  },
-  { date: "Apr 15, 2026", orderValue: 1440, rate: 10, commission: 144 },
-  { date: "Apr 8, 2026",  orderValue: 374,  rate: 10, commission: 37  },
-];
-
-const PAYOUT_HISTORY = [
-  { month: "April 2026", amount: 300, bkash: "01811-567890", status: "paid", date: "May 5, 2026" },
-  { month: "March 2026", amount: 420, bkash: "01811-567890", status: "paid", date: "Apr 5, 2026" },
-  { month: "February 2026", amount: 185, bkash: "01811-567890", status: "paid", date: "Mar 5, 2026" },
-];
-
-const THIS_MONTH = COMMISSION_HISTORY.filter(r => r.date.startsWith("May"));
-const ordersThisMonth = THIS_MONTH.length;
-const commissionThisMonth = THIS_MONTH.reduce((s, r) => s + r.commission, 0);
-const pendingPayout = commissionThisMonth;
-
-const ORDERS = [
-  { id: "MP-1055", date: "May 14, 2026", items: "Midnight Blend 100g ×2, Midnight Black ×5", total: 573, status: "Delivered" },
-  { id: "MP-1048", date: "May 6, 2026",  items: "Night Shift Subscription",               total: 210, status: "Delivered" },
-];
-const SUBSCRIPTION = { plan: "Night Shift", price: 210, contents: "10× Midnight Black sachets", status: "active", nextDelivery: "May 23, 2026", nextCharge: "May 23, 2026", countdown: 7, cancelBefore: "May 20, 2026" };
-const POINTS_HISTORY = [
-  { date: "May 14", desc: "Order #MP-1055", points: 280, type: "earned" },
-  { date: "May 6",  desc: "Order #MP-1048", points: 105, type: "earned" },
-];
-const ADDRESSES = [{ id: 1, label: "Home", line1: "Flat 5A, Road 12", line2: "Gulshan-2, Dhaka", isDefault: true }];
-const PAYMENT_METHODS = [{ id: 1, type: "bKash", number: USER.bkashNumber, isDefault: true }];
+function fmtDate(iso) {
+  if (!iso) return "";
+  return new Date(iso).toLocaleDateString("en-BD", { day: "numeric", month: "short", year: "numeric" });
+}
+function fmtStatus(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : ""; }
+function orderSummary(items) { return (items || []).map(i => `${i.name} ×${i.qty}`).join(", "); }
 
 // ── Helpers ────────────────────────────────────────────
 function StatusBadge({ status }) {
@@ -70,27 +35,34 @@ function Sheet({ title, body, onConfirm, confirmLabel = "Confirm", onClose }) {
 
 // ── User Tabs ──────────────────────────────────────────
 function HomeTab({ setTab }) {
+  const { user, orders } = useContext(DashCtx);
+  const now = new Date();
+  const greeting = now.getHours() < 12 ? "Good morning" : now.getHours() < 18 ? "Good afternoon" : "Good evening";
+  const lastOrder = orders[0];
   return (
     <div>
       <div className="greeting-card">
-        <div className="greeting-name">Good evening, {USER.name}.</div>
-        <div className="greeting-date">Friday, 16 May 2026</div>
+        <div className="greeting-name">{greeting}, {user?.name || "there"}.</div>
+        <div className="greeting-date">{now.toLocaleDateString("en-BD", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</div>
       </div>
       <div className="stat-row mb12">
-        <div className="stat-card"><div className="stat-label">Orders This Month</div><div className="stat-value">{ordersThisMonth}</div></div>
-        <div className="stat-card"><div className="stat-label">Commission (May)</div><div className="stat-value">৳{commissionThisMonth}</div></div>
-        <div className="stat-card"><div className="stat-label">Pending Payout</div><div className="stat-value">৳{pendingPayout}</div></div>
+        <div className="stat-card"><div className="stat-label">Orders</div><div className="stat-value">{orders.length}</div></div>
+        <div className="stat-card"><div className="stat-label">Points</div><div className="stat-value">{(user?.points_balance || 0).toLocaleString()}</div></div>
+        <div className="stat-card"><div className="stat-label">Commission</div><div className="stat-value text-xs text-muted" style={{ fontSize: 12 }}>Coming soon</div></div>
       </div>
-      <div className="card mb12" style={{ cursor: "pointer" }} onClick={() => setTab("subscription")}>
-        <div className="row-between">
-          <div>
-            <div className="text-xs text-muted mb4">SUBSCRIPTION</div>
-            <div style={{ fontWeight: 600, fontSize: 14 }}>{SUBSCRIPTION.plan}</div>
-            <div className="text-xs text-muted mt4">Next: {SUBSCRIPTION.nextDelivery}</div>
+      {lastOrder ? (
+        <div className="card mb12" style={{ cursor: "pointer" }} onClick={() => setTab("orders")}>
+          <div className="row-between mb8">
+            <span className="text-xs text-muted">LAST ORDER</span>
+            <StatusBadge status={fmtStatus(lastOrder.status)} />
           </div>
-          <span className="badge badge-green">Active</span>
+          <div style={{ fontSize: 13, fontWeight: 600 }} className="mb4">{orderSummary(lastOrder.items)}</div>
+          <div className="row-between">
+            <span style={{ color: "var(--orange)", fontWeight: 700 }}>৳{lastOrder.total}</span>
+            <button className="btn-link">View all →</button>
+          </div>
         </div>
-      </div>
+      ) : null}
       <div className="col-gap">
         <a href="shop.html" className="btn btn-primary btn-full"><i className="fa fa-coffee" /> Shop Now</a>
         <button className="btn btn-ghost btn-full" onClick={() => setTab("performance")}><i className="fa fa-chart-bar" /> View Performance</button>
@@ -100,33 +72,33 @@ function HomeTab({ setTab }) {
 }
 
 function OrdersTab() {
+  const { orders } = useContext(DashCtx);
   const [expanded, setExpanded] = useState(null);
   return (
     <div>
       <div className="page-title">Your Orders</div>
-      <div className="page-sub">{ORDERS.length} orders</div>
-      {ORDERS.map(order => (
+      <div className="page-sub">{orders.length} orders</div>
+      {orders.length === 0 ? (
+        <div className="empty-state"><div className="empty-icon"><i className="fa fa-box-open" /></div><h3>No orders yet.</h3><a href="shop.html" className="btn btn-primary">Shop Now</a></div>
+      ) : orders.map(order => (
         <div key={order.id} className="accordion">
           <div className="accordion-hd" onClick={() => setExpanded(expanded === order.id ? null : order.id)}>
             <div className="row-between mb8">
-              <span className="mono text-muted text-xs">{order.id}</span>
-              <span className="text-xs text-muted">{order.date}</span>
+              <span className="mono text-muted text-xs">{order.order_ref}</span>
+              <span className="text-xs text-muted">{fmtDate(order.created_at)}</span>
             </div>
-            <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 8, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{order.items}</div>
+            <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 8, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{orderSummary(order.items)}</div>
             <div className="row-between">
               <span style={{ color: "var(--orange)", fontWeight: 700 }}>৳{order.total}</span>
               <div className="row" style={{ gap: 8 }}>
-                <StatusBadge status={order.status} />
+                <StatusBadge status={fmtStatus(order.status)} />
                 <i className="fa fa-chevron-down text-muted" style={{ fontSize: 11, transform: expanded === order.id ? "rotate(180deg)" : "none", transition: "transform .2s" }} />
               </div>
             </div>
           </div>
           {expanded === order.id && (
             <div className="accordion-bd" onClick={e => e.stopPropagation()}>
-              <div className="row" style={{ gap: 8 }}>
-                <button className="btn btn-primary btn-sm"><i className="fa fa-redo" style={{ fontSize: 11 }} /> Reorder</button>
-                <button className="btn btn-ghost btn-sm"><i className="fab fa-whatsapp" style={{ fontSize: 13 }} /> Help</button>
-              </div>
+              <button className="btn btn-ghost btn-sm"><i className="fab fa-whatsapp" style={{ fontSize: 13 }} /> Help</button>
             </div>
           )}
         </div>
@@ -136,91 +108,86 @@ function OrdersTab() {
 }
 
 function SubscriptionTab() {
-  const [sheet, setSheet] = useState(null);
-  const sub = SUBSCRIPTION;
   return (
     <div>
       <div className="page-title">Subscription</div>
-      <div className="card mb12">
-        <div className="row-between mb12">
-          <div><div style={{ fontSize: 18, fontWeight: 700 }}>{sub.plan}</div><div className="text-muted text-sm mt4">{sub.contents}</div></div>
-          <span className="badge badge-green">Active</span>
-        </div>
-        <div style={{ fontSize: 22, fontWeight: 700, color: "var(--orange)" }}>৳{sub.price}<span className="text-muted text-sm" style={{ fontWeight: 400 }}>/mo</span></div>
+      <div className="empty-state">
+        <div className="empty-icon"><i className="fa fa-calendar-check" /></div>
+        <h3>Subscribe &amp; Save.</h3>
+        <p>Subscription management is coming soon.</p>
+        <a href="shop.html" className="btn btn-primary">Shop Now</a>
       </div>
-      <div className="card mb12">
-        <div className="eyebrow">Next Delivery</div>
-        <div style={{ fontSize: 17, fontWeight: 700 }} className="mb4">{sub.nextDelivery}</div>
-        <div className="text-muted text-sm">In {sub.countdown} days</div>
-      </div>
-      <div className="card mb16">
-        <div className="eyebrow">Billing</div>
-        <div className="row-between mb8 text-sm"><span className="text-muted">Next charge</span><span style={{ fontWeight: 600 }}>৳{sub.price} on {sub.nextCharge}</span></div>
-        <div className="text-xs text-muted" style={{ fontStyle: "italic" }}>Cancel before {sub.cancelBefore} to skip.</div>
-      </div>
-      <div className="col-gap mb20">
-        {["Pause Next Delivery", "Skip This Month", "Change Plan", "Update Address"].map(a => (
-          <button key={a} className="btn btn-ghost btn-full" onClick={() => setSheet(a)}>{a}</button>
-        ))}
-      </div>
-      <div style={{ textAlign: "center" }}><button className="btn-link" style={{ color: "var(--red)" }} onClick={() => setSheet("cancel")}>Cancel Subscription</button></div>
-      {sheet && <Sheet title="Confirm" body="Are you sure?" confirmLabel="Confirm" onConfirm={() => setSheet(null)} onClose={() => setSheet(null)} />}
     </div>
   );
 }
 
 function AccountTab({ setTab }) {
-  const [profile, setProfile] = useState({ name: USER.name, email: USER.email });
+  const { user, addresses } = useContext(DashCtx);
+  const [profile, setProfile] = useState({ name: user?.name || "", email: user?.email || "" });
   const [edited, setEdited] = useState(false);
   const [sheet, setSheet] = useState(null);
+  useEffect(() => { setProfile({ name: user?.name || "", email: user?.email || "" }); }, [user]);
+
+  async function handleLogout() {
+    const token   = localStorage.getItem("mp_access_token");
+    const refresh = localStorage.getItem("mp_refresh_token");
+    await fetch("http://localhost:3000/api/v1/auth/logout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ refresh_token: refresh }),
+    }).catch(() => {});
+    localStorage.clear();
+    window.location.href = "index.html";
+  }
+
   return (
     <div>
       <div className="page-title">Account</div>
       <div className="card mb12">
         <div className="eyebrow mb12">Profile</div>
         <div className="input-group"><label className="input-label">Name</label><input className="input" value={profile.name} onChange={e => { setProfile(p => ({ ...p, name: e.target.value })); setEdited(true); }} /></div>
-        <div className="input-group"><label className="input-label">Phone</label><input className="input" value={USER.phone} readOnly style={{ opacity: .7 }} /><div className="input-note">Requires OTP to change.</div></div>
+        <div className="input-group"><label className="input-label">Phone</label><input className="input" value={user?.phone || ""} readOnly style={{ opacity: .7 }} /><div className="input-note">Requires OTP to change.</div></div>
         <div className="input-group" style={{ marginBottom: 0 }}><label className="input-label">Email</label><input className="input" value={profile.email} onChange={e => { setProfile(p => ({ ...p, email: e.target.value })); setEdited(true); }} /></div>
         {edited && <button className="btn btn-primary btn-full mt16" onClick={() => setEdited(false)}>Save Changes</button>}
       </div>
       <div className="eyebrow mb8 mt16">Addresses</div>
-      {ADDRESSES.map(a => (
+      {addresses.length === 0 ? <div className="text-sm text-muted mb12" style={{ textAlign: "center" }}>No addresses saved.</div> : addresses.map(a => (
         <div key={a.id} className="addr-card">
-          <div><div className="row mb4" style={{ gap: 8 }}><span style={{ fontSize: 13, fontWeight: 700 }}>{a.label}</span>{a.isDefault && <span className="badge badge-orange">Default</span>}</div><div className="text-sm text-muted">{a.line1}</div><div className="text-sm text-muted">{a.line2}</div></div>
-          <button className="text-xs text-muted" style={{ textDecoration: "underline", flexShrink: 0 }}>Edit</button>
+          <div><div className="row mb4" style={{ gap: 8 }}><span style={{ fontSize: 13, fontWeight: 700 }}>{a.label}</span>{a.is_default && <span className="badge badge-orange">Default</span>}</div><div className="text-sm text-muted">{a.line1}</div>{a.line2 && <div className="text-sm text-muted">{a.line2}</div>}</div>
         </div>
       ))}
       <div className="card mb16 mt8" style={{ background: "var(--orange-faint)", borderColor: "rgba(255,145,0,.25)" }}>
         <div className="row mb8" style={{ gap: 10 }}><i className="fa fa-bolt text-orange" style={{ fontSize: 18 }} /><span style={{ fontWeight: 700, fontSize: 15 }}>Influencer Partner</span></div>
-        <div className="text-sm text-muted mb12">Code: <strong style={{ color: "var(--orange)" }}>{USER.influencerCode}</strong></div>
         <button className="btn btn-primary btn-sm" onClick={() => setTab("performance")}>View Performance</button>
       </div>
       <div className="divider" />
       <div className="col-gap">
         <button className="btn btn-ghost btn-full" onClick={() => setSheet("logout")}><i className="fa fa-sign-out-alt" style={{ fontSize: 13 }} /> Log Out</button>
-        <div style={{ textAlign: "center" }}><button className="btn-link" style={{ color: "var(--red)", fontSize: 12 }}>Delete Account</button></div>
       </div>
-      {sheet === "logout" && <Sheet title="Log out?" body="You'll be signed out." confirmLabel="Log Out" onConfirm={() => { window.location.href = "index.html"; }} onClose={() => setSheet(null)} />}
+      {sheet === "logout" && <Sheet title="Log out?" body="You'll be signed out." confirmLabel="Log Out" onConfirm={handleLogout} onClose={() => setSheet(null)} />}
     </div>
   );
 }
 
 // ── Performance Tab ────────────────────────────────────
 function PerformanceTab() {
+  const { user } = useContext(DashCtx);
   const [perfTab, setPerfTab] = useState("overview");
   const [copied, setCopied] = useState(false);
-  const codeTimerRef = useRef(null);
-  const [newCode, setNewCode] = useState(USER.influencerCode);
+  const [newCode, setNewCode] = useState("");
   const [avail, setAvail] = useState(null);
   const codeRef = useRef(null);
 
+  const influencerCode = user?.influencer_code || "—";
+  const discountPct    = user?.influencer_discount || 20;
+
   function copy() {
-    navigator.clipboard.writeText(USER.influencerCode).catch(() => {});
+    navigator.clipboard.writeText(influencerCode).catch(() => {});
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
 
-  const waText = encodeURIComponent(`☕ Try Midnight Pick — premium instant coffee. Use my code ${USER.influencerCode} for ${USER.discountPct}% off: https://midnightpick.com`);
+  const waText = encodeURIComponent(`☕ Try Midnight Pick — premium instant coffee. Use my code ${influencerCode} for ${discountPct}% off: https://midnightpick.com`);
 
   const subtabs = [
     { id: "overview",  label: "Overview" },
@@ -233,12 +200,12 @@ function PerformanceTab() {
     setNewCode(val.toUpperCase().replace(/[^A-Z0-9]/g, ""));
     setAvail(null);
     if (codeRef.current) clearTimeout(codeRef.current);
-    if (val.length >= 4 && val !== USER.influencerCode) {
+    if (val.length >= 4) {
       codeRef.current = setTimeout(() => setAvail(val === "MIDNIGHT" ? "taken" : "available"), 400);
     }
   }
 
-  const isCodeValid = newCode.length >= 4 && newCode.length <= 8 && newCode !== USER.influencerCode && avail === "available";
+  const isCodeValid = newCode.length >= 4 && newCode.length <= 8 && avail === "available";
 
   return (
     <div>
@@ -251,14 +218,12 @@ function PerformanceTab() {
 
       {perfTab === "overview" && (
         <div>
-          <div className="stat-row mb12">
-            <div className="stat-card"><div className="stat-label">Orders (May)</div><div className="stat-value">{ordersThisMonth}</div></div>
-            <div className="stat-card"><div className="stat-label">Earned (May)</div><div className="stat-value">৳{commissionThisMonth}</div></div>
-            <div className="stat-card"><div className="stat-label">Pending Payout</div><div className="stat-value">৳{pendingPayout}</div></div>
+          <div className="card mb12">
+            <div className="text-sm text-muted" style={{ textAlign: "center", padding: "12px 0" }}>Commission tracking coming soon.</div>
           </div>
           <div className="code-display-wrap">
-            <div className="code-display">{USER.influencerCode}</div>
-            <div className="text-muted text-sm mt8">Customers get {USER.discountPct}% off with your code</div>
+            <div className="code-display">{influencerCode}</div>
+            <div className="text-muted text-sm mt8">Customers get {discountPct}% off with your code</div>
           </div>
           <div className="row" style={{ gap: 8 }}>
             <button className="btn btn-ghost" style={{ flex: 1 }} onClick={copy}>
@@ -272,70 +237,22 @@ function PerformanceTab() {
       )}
 
       {perfTab === "breakdown" && (
-        <div>
-          <div className="card mb12">
-            <div className="table-wrap">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th>Order Value</th>
-                    <th>Rate</th>
-                    <th>Earned</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {COMMISSION_HISTORY.filter(r => r.date.startsWith("May")).map((r, i) => (
-                    <tr key={i}>
-                      <td className="muted">{r.date}</td>
-                      <td>৳{r.orderValue}</td>
-                      <td className="muted">{r.rate}%</td>
-                      <td style={{ color: "var(--orange)", fontWeight: 700 }}>৳{r.commission}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="divider" />
-            <div className="row-between" style={{ fontWeight: 700 }}>
-              <span className="text-muted text-sm">This month's total</span>
-              <span style={{ color: "var(--orange)" }}>৳{commissionThisMonth}</span>
-            </div>
-          </div>
+        <div className="card">
+          <div className="text-sm text-muted" style={{ textAlign: "center", padding: "20px 0" }}>Commission breakdown coming soon.</div>
         </div>
       )}
 
       {perfTab === "payouts" && (
-        <div>
-          {/* Pending row */}
-          <div className="card mb12" style={{ background: "var(--orange-faint)", borderColor: "rgba(255,145,0,.25)" }}>
-            <div className="row-between mb6">
-              <span style={{ fontWeight: 700, fontSize: 15 }}>May 2026</span>
-              <span className="badge badge-orange">Pending</span>
-            </div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "var(--orange)" }}>৳{pendingPayout}</div>
-            <div className="text-xs text-muted mt8">Estimated payment: June 5, 2026</div>
-          </div>
-
-          <div className="eyebrow mb10">Past Payouts</div>
-          {PAYOUT_HISTORY.map((p, i) => (
-            <div key={i} className="card mb8">
-              <div className="row-between mb6">
-                <span style={{ fontWeight: 600, fontSize: 14 }}>{p.month}</span>
-                <span className="badge badge-green">Paid</span>
-              </div>
-              <div style={{ fontSize: 20, fontWeight: 700, color: "var(--orange)" }}>৳{p.amount}</div>
-              <div className="text-xs text-muted mt6">Paid to bKash {p.bkash} · {p.date}</div>
-            </div>
-          ))}
+        <div className="card">
+          <div className="text-sm text-muted" style={{ textAlign: "center", padding: "20px 0" }}>Payout history coming soon.</div>
         </div>
       )}
 
       {perfTab === "code" && (
         <div>
           <div className="code-display-wrap mb12">
-            <div className="code-display">{USER.influencerCode}</div>
-            <div className="text-muted text-sm mt8">{USER.discountPct}% off for customers</div>
+            <div className="code-display">{influencerCode}</div>
+            <div className="text-muted text-sm mt8">{discountPct}% off for customers</div>
           </div>
           <div className="row mb16" style={{ gap: 8 }}>
             <button className="btn btn-ghost" style={{ flex: 1 }} onClick={copy}>
@@ -359,18 +276,7 @@ function PerformanceTab() {
               </div>
               <div className="input-note">4–8 characters, letters and numbers only.</div>
             </div>
-            <div className="card mb12" style={{ background: "rgba(229,92,92,.08)", borderColor: "rgba(229,92,92,.25)" }}>
-              <div className="text-xs" style={{ color: "var(--red)", lineHeight: 1.55 }}>
-                <i className="fa fa-exclamation-triangle" style={{ marginRight: 6 }} />
-                Changing your code will not affect commission already earned. Your old code stops working immediately.
-              </div>
-            </div>
             <button className="btn btn-primary btn-full" disabled={!isCodeValid}>Save New Code</button>
-          </div>
-          <div className="card">
-            <div className="eyebrow mb12">Code Stats</div>
-            <div className="row-between mb8 text-sm"><span className="text-muted">Total uses</span><span style={{ fontWeight: 700 }}>{COMMISSION_HISTORY.length}</span></div>
-            <div className="row-between text-sm"><span className="text-muted">Uses this month</span><span style={{ fontWeight: 700 }}>{ordersThisMonth}</span></div>
           </div>
         </div>
       )}
@@ -380,6 +286,7 @@ function PerformanceTab() {
 
 // ── Sidebar ────────────────────────────────────────────
 function Sidebar({ tab, setTab, onLogout }) {
+  const { user } = useContext(DashCtx);
   const links = [
     { id: "home",         icon: "fa-home",          label: "Home" },
     { id: "orders",       icon: "fa-box",            label: "Orders" },
@@ -402,8 +309,8 @@ function Sidebar({ tab, setTab, onLogout }) {
       </nav>
       <div className="sidebar-footer">
         <div className="sidebar-user" style={{ marginBottom: 10 }}>
-          <div className="sidebar-avatar" style={{ background: "rgba(90,165,232,.2)", color: "var(--blue)" }}>{USER.name[0]}</div>
-          <div><div className="sidebar-user-name">{USER.name}</div><div className="sidebar-user-role">Influencer Partner</div></div>
+          <div className="sidebar-avatar" style={{ background: "rgba(90,165,232,.2)", color: "var(--blue)" }}>{(user?.name || "?")[0].toUpperCase()}</div>
+          <div><div className="sidebar-user-name">{user?.name || "—"}</div><div className="sidebar-user-role">Influencer Partner</div></div>
         </div>
         <button className="sidebar-link" style={{ width: "100%", borderLeft: "3px solid transparent", color: "var(--cream-65)" }} onClick={onLogout}>
           <i className="fa fa-sign-out-alt s-icon" /><span>Log Out</span>
@@ -415,18 +322,45 @@ function Sidebar({ tab, setTab, onLogout }) {
 
 // ── App ────────────────────────────────────────────────
 function InfluencerDashboard() {
-  const [tab, setTab] = useState("performance");
+  const [tab, setTab]       = useState("performance");
   const [logoutOpen, setLogoutOpen] = useState(false);
+  const [data, setData]     = useState({ user: null, orders: [], addresses: [], paymentMethods: [], loading: true });
 
-  const tabs = [
-    { id: "home",        icon: "fa-home",     label: "Home" },
-    { id: "orders",      icon: "fa-box",      label: "Orders" },
-    { id: "account",     icon: "fa-user",     label: "Account" },
-    { id: "subscription",icon: "fa-calendar-check", label: "Sub" },
-    { id: "performance", icon: "fa-chart-bar",label: "Performance" },
-  ];
+  useEffect(() => {
+    if (!mpApi.guard(["influencer"])) return;
+    Promise.all([
+      mpApi.fetch("/me"),
+      mpApi.fetch("/orders?limit=20"),
+      mpApi.fetch("/me/addresses"),
+      mpApi.fetch("/me/payment-methods"),
+    ]).then(([me, ordersRes, addrsRes, pmsRes]) => {
+      setData({
+        user:           me?.data    || null,
+        orders:         ordersRes?.data?.orders || [],
+        addresses:      addrsRes?.data || [],
+        paymentMethods: pmsRes?.data  || [],
+        loading: false,
+      });
+    }).catch(() => setData(d => ({ ...d, loading: false })));
+  }, []);
 
-  const titles = { home: "Midnight Pick", orders: "Orders", subscription: "Subscription", account: "Account", performance: "Performance" };
+  if (data.loading) return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh" }}>
+      <i className="fa fa-circle-notch fa-spin" style={{ fontSize: 28, color: "var(--orange)" }} />
+    </div>
+  );
+
+  async function handleLogout() {
+    const token   = localStorage.getItem("mp_access_token");
+    const refresh = localStorage.getItem("mp_refresh_token");
+    await fetch("http://localhost:3000/api/v1/auth/logout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ refresh_token: refresh }),
+    }).catch(() => {});
+    localStorage.clear();
+    window.location.href = "index.html";
+  }
 
   function render() {
     switch (tab) {
@@ -440,7 +374,7 @@ function InfluencerDashboard() {
   }
 
   return (
-    <>
+    <DashCtx.Provider value={data}>
       <div className="dash-layout">
         <Sidebar tab={tab} setTab={setTab} onLogout={() => setLogoutOpen(true)} />
         <div className="dash-main">
@@ -452,11 +386,11 @@ function InfluencerDashboard() {
           title="Log out?"
           body="You'll be signed out of your Midnight Pick account on this device."
           confirmLabel="Log Out"
-          onConfirm={() => { window.location.href = "index.html"; }}
+          onConfirm={handleLogout}
           onClose={() => setLogoutOpen(false)}
         />
       )}
-    </>
+    </DashCtx.Provider>
   );
 }
 
