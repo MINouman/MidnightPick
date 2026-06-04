@@ -252,14 +252,14 @@ function Collection({ onAdd }) {
           <div className="coll-product-list">
             {PRODUCTS.map((p) => <ProductRow key={p.id} p={p} onAdd={onAdd} />)}
           </div>
-          <div className="coll-cta-row">
-            <a className="hero-cta coll-shop-shake" href="shop.html">
-              Shop Now <ArrowRight size={14} />
-            </a>
-          </div>
         </div>
         <div className="coll-imgs">
           <div className="coll-img ci-0"><img src="assets/product_95g.png" alt="Midnight Blend 95g pouch" /></div>
+        </div>
+        <div className="coll-cta-row">
+          <a className="hero-cta coll-shop-shake" href="shop.html">
+            Shop Now <ArrowRight size={14} />
+          </a>
         </div>
       </div>
     </section>);
