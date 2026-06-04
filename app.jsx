@@ -35,7 +35,7 @@ function CartNavBtn({ count, onClick }) {
 }
 
 // ----------------- nav -----------------
-function Nav({ cartCount, onShop, onSubscribe, onSignIn }) {
+function Nav({ cartCount, onShop, onSignIn }) {
   const [scrolled, setScrolled] = useState(false);
   const [active, setActive] = useState("home");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -78,7 +78,16 @@ function Nav({ cartCount, onShop, onSubscribe, onSignIn }) {
   return (
     <>
       <nav className={"nav" + (scrolled ? " scrolled" : "")}>
+        <div className="nav-announcement">
+          <a href="shop.html" className="nav-announcement-link">
+            95g of Premium Freeze-Dried Coffee · ৳669 · Cash on Delivery across Bangladesh
+            <ArrowRight size={13} />
+          </a>
+        </div>
         <div className="nav-inner">
+          <a href="#home" onClick={jump("home", "home")} aria-label="Midnight Pick — home" className="nav-logo-link">
+            <Logo variant="dark" height={96} />
+          </a>
           <div className="nav-links">
             <a href="#home" className={active === "home" ? "active" : ""} onClick={jump("home", "home")}>Home</a>
             <a href="#collection" className={active === "product" ? "active" : ""} onClick={jump("collection", "product")}>Product</a>
@@ -86,21 +95,15 @@ function Nav({ cartCount, onShop, onSubscribe, onSignIn }) {
             <a href="#journal" className={active === "blog" ? "active" : ""} onClick={jump("journal", "blog")}>Blog</a>
             <a href="#faq" className={active === "contact" ? "active" : ""} onClick={jump("faq", "contact")}>Contact</a>
           </div>
-          <a href="#home" onClick={jump("home", "home")} aria-label="Midnight Pick — home" className="nav-logo-link">
-            <Logo variant="dark" height={174} />
-          </a>
           <div className="nav-right">
-            <button className="nav-patreon-btn" onClick={onSubscribe} aria-label="Support on Patreon">
-                <i className="fa-brands fa-patreon" aria-hidden="true" />
-              </button>
-            <a href="shop.html" className="nav-shop-btn">
-              <i className="fa-solid fa-bag-shopping" aria-hidden="true" />
-              Shop
-            </a>
             <button className="nav-signin-btn" onClick={onSignIn}>
               <i className="fa-solid fa-right-to-bracket" aria-hidden="true" />
               Sign In
             </button>
+            <a href="shop.html" className="nav-shop-btn">
+              <i className="fa-solid fa-bag-shopping" aria-hidden="true" />
+              Shop
+            </a>
             <CartNavBtn count={cartCount} onClick={onShop} />
             <button
               className={"mob-menu-btn" + (menuOpen ? " is-open" : "")}
@@ -142,28 +145,27 @@ function Hero({ headline, showMountain }) {
         <h1>
           {headline.split(/(stronger)/i).map((part, i) =>
             /^stronger$/i.test(part)
-              ? <span key={i} style={{ color: "#FF9100" }}>{part}</span>
+              ? <span key={i} className="hero-stronger">{part}</span>
               : part
           )}
         </h1>
-        <p className="sub">Freeze-dried instant coffee from Colombian highlands. Carefully preserved aroma and character in every sip. The same gentle low-temperature process that premium imported jars use — at a fraction of the per-gram price. Sachets from ৳25. Free delivery above ৳499.</p>
+        <p className="sub">Freeze-dried instant coffee from Colombian highlands. Carefully preserved aroma and character in every sip. The same gentle low-temperature process that premium imported jars use, at a fraction of the per-gram price.</p>
         <a className="hero-cta" href="shop.html">
-          Try the ৳99 Trial Pack
+          Try the Pouch at ৳669 <span style={{whiteSpace:"nowrap"}}>(~45 cups)</span>
           <ArrowUpRight size={16} />
         </a>
       </div>
       <div className="hero-marquee" aria-hidden="true">
         <div className="track">
           <span>Freeze-Dried <span className="dot">●</span></span>
-          <span>100% Colombian <span className="dot">●</span></span>
+          <span>95g · ~45 Cups <span className="dot">●</span></span>
           <span>Robusta 65 · Arabica 35 <span className="dot">●</span></span>
           <span>Cash on Delivery <span className="dot">●</span></span>
-          <span>Free Shipping Over ৳499 <span className="dot">●</span></span>
+          <span>৳669 Per Pouch <span className="dot">●</span></span>
+          <span>Delivered Nationwide <span className="dot">●</span></span>
           <span>Freeze-Dried <span className="dot">●</span></span>
-          <span>100% Colombian <span className="dot">●</span></span>
+          <span>95g · ~45 Cups <span className="dot">●</span></span>
           <span>Robusta 65 · Arabica 35 <span className="dot">●</span></span>
-          <span>Cash on Delivery <span className="dot">●</span></span>
-          <span>Free Shipping Over ৳499 <span className="dot">●</span></span>
         </div>
       </div>
     </section>);
@@ -200,33 +202,13 @@ function Story() {
 const PRODUCTS = [
 {
   id: "blend",
-  name: "Midnight Blend — 100g",
+  name: "Midnight Blend — 95g",
   badge: "BEST VALUE",
-  price: "৳349",
-  old: "৳449",
+  price: "৳669",
+  old: null,
   rating: 4.8, reviews: 640,
-  desc: "Resealable pouch. ~50 cups of pure freeze-dried coffee. Roughly ৳7 a cup.",
-  specs: "MEDIUM ROAST · 100g"
-},
-{
-  id: "black",
-  name: "Midnight Black — 10g",
-  badge: null,
-  price: "৳25",
-  old: null,
-  rating: 4.7, reviews: 412,
-  desc: "Single-sachet, pure black coffee. 65% Robusta, 35% Arabica. No sugar, no creamer.",
-  specs: "SINGLE SACHET · 10g"
-},
-{
-  id: "trial",
-  name: "Trial Pack — 3 Sachets",
-  badge: "START HERE",
-  price: "৳99",
-  old: null,
-  rating: 4.9, reviews: 203,
-  desc: "Three Midnight Black sachets. The simplest way to try freeze-dried before committing to a pouch.",
-  specs: "3 × 10g SACHETS"
+  desc: "Resealable pouch. ~47 cups of pure freeze-dried Colombian coffee.",
+  specs: "MEDIUM ROAST · 95g"
 }];
 
 
@@ -259,7 +241,7 @@ function Collection({ onAdd }) {
       <div className="coll-words" aria-hidden="true">
         <span className="cw cw-1">MIDNIGHT</span>
         <span className="cw cw-2">BLEND</span>
-        <span className="cw cw-3">TRIAL</span>
+        <span className="cw cw-3">95G</span>
       </div>
       <div className="coll-layout">
         <div className="coll-left">
@@ -270,20 +252,14 @@ function Collection({ onAdd }) {
           <div className="coll-product-list">
             {PRODUCTS.map((p) => <ProductRow key={p.id} p={p} onAdd={onAdd} />)}
           </div>
-        </div>
-        <div className="coll-imgs">
-          <div className="coll-img ci-0"><img src="assets/product-real.png" alt="Midnight Blend pouch" /></div>
-          <div className="coll-img ci-1"><img src="assets/product-real.png" alt="Midnight Black sachet" /></div>
-          <div className="coll-img ci-2"><img src="assets/product-real.png" alt="Midnight Pick Trial Pack" /></div>
-        </div>
-        <div className="coll-right">
-          <p>Premium freeze-dried Colombian coffee — roughly ৳7 a cup from the 100g pouch. No machine needed. Tear, pour, stir. One clear hour ahead.</p>
           <div className="coll-cta-row">
-            <a className="hero-cta" href="shop.html">
+            <a className="hero-cta coll-shop-shake" href="shop.html">
               Shop Now <ArrowRight size={14} />
             </a>
-            <span className="coll-tag">3 products · Free shipping over ৳499</span>
           </div>
+        </div>
+        <div className="coll-imgs">
+          <div className="coll-img ci-0"><img src="assets/product_95g.png" alt="Midnight Blend 95g pouch" /></div>
         </div>
       </div>
     </section>);
@@ -344,7 +320,7 @@ function Promo({ onShop }) {
           '--dur': st.dur, '--delay': st.delay,
         }}><SteamSvg /></span>
       ))}
-      <h3>Get 20% off your first order.</h3>
+      <h3>Get 10% off your first order.</h3>
       <button className="shop-btn" onClick={onShop}>Shop Now <ArrowRight size={14} /></button>
     </section>);
 
@@ -902,18 +878,16 @@ function Footer({ onTrack }) {
         <div>
           <h5>Product</h5>
           <ul>
-            <li><a href="#collection">Midnight Black</a></li>
-            <li><a href="#collection">Midnight Blend 50g</a></li>
-            <li><a href="#collection">Midnight Blend</a></li>
-            <li><a href="#collection">Trial Pack — ৳99</a></li>
+            <li><a href="#collection">Midnight Blend — 95g</a></li>
+            <li><a href="shop.html">Shop Now</a></li>
           </ul>
         </div>
         <div>
           <h5>Company</h5>
           <ul>
-            <li><a href="#story">Our story</a></li>
+            <li><a href="#story">Our Story</a></li>
             <li><a href="#why">Sourcing</a></li>
-            <li><a href="#">Wholesale</a></li>
+            <li><a href="#journal">Blog</a></li>
           </ul>
         </div>
         <div>
@@ -922,20 +896,21 @@ function Footer({ onTrack }) {
             <li><button className="footer-text-btn" onClick={onTrack}>Track your order</button></li>
             <li><a href="#">Return policy</a></li>
             <li><a href="https://wa.me/8801829531588">WhatsApp support</a></li>
+            <li><a href="#faq">FAQ</a></li>
           </ul>
         </div>
         <div>
           <h5>Contact</h5>
           <ul>
             <li><a href="mailto:hello@midnightpick.com">hello@midnightpick.com</a></li>
-            <li><a href="https://wa.me/">WhatsApp · +880 1829-531588</a></li>
+            <li><a href="https://wa.me/8801829531588">WhatsApp · +880 1829-531588</a></li>
             <li>Open 7 days · 9am – 9pm</li>
             <li>Dhaka, Bangladesh</li>
           </ul>
         </div>
       </div>
       <div className="footer-bottom">
-        <span>© 2025 Midnight Pick. All rights reserved.</span>
+        <span>© 2026 Midnight Pick. All rights reserved.</span>
         <div className="links">
           <a href="#">Privacy</a>
           <a href="#">Terms of Use</a>
@@ -1013,7 +988,7 @@ function App() {
       <TheJournal />
       <Why />
       <Howto />
-      <Pricing onSubscribe={() => setModalOpen(true)} />
+      {/* <Pricing onSubscribe={() => setModalOpen(true)} /> */}
       <FAQ onTrack={() => setTrackOpen(true)} />
       <Footer onTrack={() => setTrackOpen(true)} />
       <StickyCart cartCount={cart.length} onShop={onShop} />
