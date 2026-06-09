@@ -39,10 +39,12 @@ function ShopHeader({ cartCount, onSignIn, onCart }) {
         Home
       </a>
       <div className="shop-header-actions">
+        {/* Sign In button — commented out for now
         <button className="nav-signin-btn" onClick={onSignIn}>
           <i className="fa-solid fa-right-to-bracket" aria-hidden="true" />
           Sign In
         </button>
+        */}
         <button className="nav-cart-btn" onClick={onCart} aria-label={`Cart -  ${cartCount} item${cartCount !== 1 ? "s" : ""}`}>
           <CartIcon size={19} />
           <span className="nav-cart-badge">{cartCount}</span>
@@ -769,7 +771,7 @@ function ShopPage() {
   });
   const [toasts, setToasts] = useState([]);
   const [addedAnim, setAddedAnim] = useState(false);
-  const [authOpen, setAuthOpen] = useState(false);
+  // const [authOpen, setAuthOpen] = useState(false); // commented out for now
   const [cartOpen, setCartOpen] = useState(false);
   const [buySheetOpen, setBuySheetOpen] = useState(false);
   const [orderModalOpen, setOrderModalOpen] = useState(false);
@@ -869,7 +871,7 @@ function ShopPage() {
   if (productLoading) {
     return (
       <div className="shop-page">
-        <ShopHeader cartCount={cart.length} onSignIn={() => setAuthOpen(true)} onCart={() => setCartOpen(true)} />
+        <ShopHeader cartCount={cart.length} onCart={() => setCartOpen(true)} />
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "60vh", flexDirection: "column", gap: 16 }}>
           <i className="fa-solid fa-spinner fa-spin" style={{ fontSize: 32, color: "#571F29", opacity: 0.5 }} aria-hidden="true" />
           <span style={{ fontFamily: "var(--font-body)", color: "rgba(87,31,41,.5)", fontSize: 14 }}>Loading product…</span>
@@ -880,7 +882,7 @@ function ShopPage() {
 
   return (
     <div className="shop-page">
-      <ShopHeader cartCount={cart.length} onSignIn={() => setAuthOpen(true)} onCart={() => setCartOpen(true)} />
+      <ShopHeader cartCount={cart.length} onCart={() => setCartOpen(true)} />
 
       <div className="shop-layout">
 
@@ -1015,12 +1017,15 @@ function ShopPage() {
 
       </div>
 
-      {/* Reviews */}
+      {/* Reviews — commented out for now
       <ReviewsSection productSlug="midnight-blend" onStats={setReviewStats} />
+      */}
 
       <ShopToastStack toasts={toasts} />
       {cartOpen && <CartPanel cart={cart} onClose={() => setCartOpen(false)} />}
+      {/* AuthModal — commented out for now
       <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} />
+      */}
       <BuySheet
         open={buySheetOpen}
         onClose={() => setBuySheetOpen(false)}

@@ -96,10 +96,12 @@ function Nav({ cartCount, onShop, onSignIn }) {
             <a href="#faq" className={active === "contact" ? "active" : ""} onClick={jump("faq", "contact")}>Contact</a>
           </div>
           <div className="nav-right">
+            {/* Sign In button — commented out for now
             <button className="nav-signin-btn" onClick={onSignIn}>
               <i className="fa-solid fa-right-to-bracket" aria-hidden="true" />
               Sign In
             </button>
+            */}
             <a href="shop.html" className="nav-shop-btn">
               <i className="fa-solid fa-bag-shopping" aria-hidden="true" />
               Shop
@@ -125,9 +127,11 @@ function Nav({ cartCount, onShop, onSignIn }) {
           <a href="#faq" className={active === "contact" ? "active" : ""} onClick={jump("faq", "contact")}>Contact</a>
         </nav>
         <div className="mob-menu-footer">
+          {/* Account button — commented out for now
           <button className="mob-menu-account-btn" onClick={onSignIn} aria-label="Account">
             <UserIcon size={18} /> Account
           </button>
+          */}
         </div>
       </div>
     </>
@@ -242,6 +246,7 @@ function Collection({ onAdd }) {
             old: null,
             desc: p.description || "",
             specs: p.qty && p.unit ? `${p.unit.toUpperCase()} · ${p.qty}g` : "",
+            images: p.images || [],
           }));
           setProducts(mapped);
         }
@@ -970,7 +975,7 @@ function App() {
   const [toasts, setToasts] = useState([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [trackOpen, setTrackOpen] = useState(false);
-  const [authOpen,  setAuthOpen]  = useState(false);
+  // const [authOpen,  setAuthOpen]  = useState(false); // commented out for now
 
   useEffect(() => {applyPalette(t.palette);}, [t.palette]);
   useEffect(() => { sessionStorage.setItem("mp_cart", JSON.stringify(cart)); }, [cart]);
@@ -995,7 +1000,7 @@ function App() {
 
   return (
     <>
-      <Nav cartCount={cart.length} onShop={onShop} onSubscribe={() => setModalOpen(true)} onSignIn={() => setAuthOpen(true)} />
+      <Nav cartCount={cart.length} onShop={onShop} onSubscribe={() => setModalOpen(true)} />
       <Hero headline={t.headline} showMountain={t.showMountain} />
       <Story />
       <Collection onAdd={addToCart} />
@@ -1010,7 +1015,9 @@ function App() {
       <ToastStack toasts={toasts} />
       <SubscribeModal open={modalOpen} onClose={() => setModalOpen(false)} />
       <TrackOrderModal open={trackOpen} onClose={() => setTrackOpen(false)} />
+      {/* AuthModal — commented out for now
       <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} />
+      */}
 
       <TweaksPanel title="Tweaks">
         <TweakSection label="Theme">
