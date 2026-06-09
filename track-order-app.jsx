@@ -1,6 +1,23 @@
 // midnight pick — track order page
 const { useState, useRef } = React;
 
+const API_BASE = 'http://localhost:3000/api/v1';
+
+const STATUS_TO_STEP = {
+  processing: 'confirmed',
+  packed:     'packed',
+  shipped:    'shipped',
+  delivered:  'delivered',
+};
+
+function formatTs(iso) {
+  if (!iso) return null;
+  return new Date(iso).toLocaleString('en-BD', {
+    day: 'numeric', month: 'short', year: 'numeric',
+    hour: 'numeric', minute: '2-digit', hour12: true,
+  });
+}
+
 const STEPS = [
   { id: "confirmed", label: "Order Confirmed", detail: "Your order has been received and confirmed." },
   { id: "packed",    label: "Packed & Ready",  detail: "Your order has been packed and is awaiting courier pickup." },
@@ -12,28 +29,21 @@ const STEP_INDEX = { confirmed: 0, packed: 1, shipped: 2, delivered: 3 };
 
 const WA_NUMBER = "8801829531588";
 
-// TODO: Replace with real delivery API call.
-// Should return: { orderId, currentStep: "confirmed"|"packed"|"shipped"|"delivered",
-//   steps: { confirmed?: {timestamp,detail}, packed?: {...}, shipped?: {...}, delivered?: {...} } }
-// On not found: throw { code: "not_found" }
 async function fetchOrderStatus(orderId) {
-  await new Promise(r => setTimeout(r, 900)); // simulate network delay
+  const res  = await fetch(`${API_BASE}/track/${encodeURIComponent(orderId.trim().toUpperCase())}`);
+  const json = await res.json();
 
-  // Demo order — remove when real API is wired
-  if (orderId.toUpperCase() === "MP-1024") {
-    return {
-      orderId: "MP-1024",
-      currentStep: "shipped",
-      steps: {
-        confirmed: { timestamp: "15 May 2026, 10:30 AM", detail: "Order placed via midnightpick.com" },
-        packed:    { timestamp: "15 May 2026, 3:15 PM",  detail: "Packed and ready for courier pickup." },
-        shipped:   { timestamp: "16 May 2026, 9:00 AM",  detail: "Picked up by Pathao Courier. Est. delivery: 17 May." },
-        delivered: null,
-      },
-    };
+  if (!json.ok) throw { code: 'not_found' };
+
+  const d           = json.data;
+  const currentStep = STATUS_TO_STEP[d.status] ?? 'confirmed';
+
+  const steps = {};
+  for (const [key, val] of Object.entries(d.steps)) {
+    steps[key] = val ? { timestamp: formatTs(val.at), detail: val.detail } : null;
   }
 
-  throw { code: "not_found" };
+  return { orderId: d.order_ref, currentStep, steps };
 }
 
 function TrackNav() {

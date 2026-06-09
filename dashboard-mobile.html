@@ -1225,10 +1225,16 @@ function AdminCrewTab(){
 function AdminCouponsTab(){
   const ctx=useContext(MobileCtx);
   const [tab,setTab]=useState('Festival');
-  const [coupons,setCoupons]=useState([]);
+  const [festCoupons,setFestCoupons]=useState([]);
+  const [festLoading,setFestLoading]=useState(false);
   const [showForm,setShowForm]=useState(false);
-  const emptyForm={code:'',type:'Percentage',value:'',minOrder:'',cap:'',perAccount:'1',expiry:''};
+  const [savingCoupon,setSavingCoupon]=useState(false);
+  const emptyForm={code:'',type:'Percentage',value:'',minOrder:'',cap:'',expiry:''};
   const [form,setForm]=useState(emptyForm);
+  const [editSheet,setEditSheet]=useState(null);
+  const [editForm,setEditForm]=useState({});
+  const [savingEdit,setSavingEdit]=useState(false);
+  const [deleteConfirm,setDeleteConfirm]=useState(null);
 
   useEffect(()=>{
     if((ctx.adminInfluencers||[]).length>0)return;
@@ -1237,8 +1243,82 @@ function AdminCouponsTab(){
     }).catch(()=>{});
   },[]);
 
+  useEffect(()=>{
+    if(tab!=='Festival')return;
+    setFestLoading(true);
+    window.mpApi.fetch('/admin/coupons?type=festival').then(res=>{
+      setFestCoupons(res?.data?.coupons||[]);
+    }).catch(()=>{}).finally(()=>setFestLoading(false));
+  },[tab]);
+
+  async function createCoupon(){
+    if(!form.code||!form.value)return;
+    setSavingCoupon(true);
+    try{
+      const res=await window.mpApi.fetch('/admin/coupons',{
+        method:'POST',
+        body:JSON.stringify({
+          code:form.code,
+          type:'festival',
+          discount_type:form.type==='Percentage'?'pct':'flat',
+          discount_value:parseFloat(form.value),
+          min_order:parseFloat(form.minOrder)||0,
+          max_uses:form.cap?parseInt(form.cap):undefined,
+          expires_at:form.expiry||undefined,
+        }),
+      });
+      if(res?.ok){setFestCoupons(prev=>[res.data,...prev]);setForm(emptyForm);setShowForm(false);}
+      else{alert(res?.error?.message||'Failed to create coupon.');}
+    }catch(e){alert(e?.message||'Failed to create coupon.');}
+    finally{setSavingCoupon(false);}
+  }
+
+  async function toggleCoupon(code){
+    const res=await window.mpApi.fetch(`/admin/coupons/${code}/toggle`,{method:'PATCH'}).catch(()=>null);
+    if(res?.ok){setFestCoupons(prev=>prev.map(c=>c.code===code?{...c,is_active:res.data.is_active}:c));}
+    else{alert(res?.error?.message||'Failed to toggle coupon.');}
+  }
+
+  async function deleteCoupon(code){
+    const res=await window.mpApi.fetch(`/admin/coupons/${code}`,{method:'DELETE'}).catch(()=>null);
+    if(res?.ok){setFestCoupons(prev=>prev.filter(c=>c.code!==code));}
+    else{alert(res?.error?.message||'Failed to delete coupon.');}
+    setDeleteConfirm(null);
+  }
+
+  function startEdit(c){
+    setEditForm({
+      type:c.discount_type==='pct'?'Percentage':'Flat amount',
+      value:String(c.discount_value),
+      minOrder:String(c.min_order||0),
+      cap:c.max_uses!=null?String(c.max_uses):'',
+      expiry:c.expires_at?c.expires_at.slice(0,10):'',
+    });
+    setEditSheet(c);
+  }
+
+  async function saveEdit(){
+    if(!editForm.value)return;
+    setSavingEdit(true);
+    try{
+      const res=await window.mpApi.fetch(`/admin/coupons/${editSheet.code}`,{
+        method:'PATCH',
+        body:JSON.stringify({
+          discount_type:editForm.type==='Percentage'?'pct':'flat',
+          discount_value:parseFloat(editForm.value),
+          min_order:parseFloat(editForm.minOrder)||0,
+          max_uses:editForm.cap?parseInt(editForm.cap):null,
+          expires_at:editForm.expiry||null,
+        }),
+      });
+      if(res?.ok){setFestCoupons(prev=>prev.map(c=>c.code===editSheet.code?res.data:c));setEditSheet(null);}
+      else{alert(res?.error?.message||'Failed to save changes.');}
+    }catch(e){alert(e?.message||'Failed to save changes.');}
+    finally{setSavingEdit(false);}
+  }
+
   async function toggleInfluencerCoupon(code){
-    const res=await window.mpApi.fetch(`/admin/coupons/${code}/toggle`,{method:'PATCH'});
+    const res=await window.mpApi.fetch(`/admin/coupons/${code}/toggle`,{method:'PATCH'}).catch(()=>null);
     if(res?.ok&&res?.data){
       ctx.setAdminInfluencers(prev=>prev.map(c=>c.code===code?{...c,is_active:res.data.is_active}:c));
     }else if(res){
@@ -1247,7 +1327,7 @@ function AdminCouponsTab(){
   }
 
   return(
-    <div style={{padding:'24px 16px 0'}}>
+    <div style={{padding:'24px 16px 0',position:'relative'}}>
       <div style={{...sans,fontSize:20,fontWeight:700,color:C.text,marginBottom:16}}>Coupons</div>
       <div style={{display:'flex',gap:8,marginBottom:16}}>
         {['Festival','Crew','Influencer'].map(t=><Pill key={t} label={t} active={tab===t} onClick={()=>setTab(t)}/>)}
@@ -1272,16 +1352,10 @@ function AdminCouponsTab(){
               </div>
               <DarkInput value={form.value} onChange={e=>setForm(f=>({...f,value:e.target.value}))} placeholder={form.type==='Percentage'?'Discount % (e.g. 15)':'Flat amount (৳)'}/>
               <DarkInput value={form.minOrder} onChange={e=>setForm(f=>({...f,minOrder:e.target.value}))} placeholder="Min order (৳)"/>
-              <Row style={{gap:8}}>
-                <div style={{flex:1}}>
-                  <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Usage Cap</div>
-                  <DarkInput value={form.cap} onChange={e=>setForm(f=>({...f,cap:e.target.value}))} placeholder="e.g. 100"/>
-                </div>
-                <div style={{flex:1}}>
-                  <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Per-account Limit</div>
-                  <DarkInput value={form.perAccount} onChange={e=>setForm(f=>({...f,perAccount:e.target.value}))} placeholder="1"/>
-                </div>
-              </Row>
+              <div>
+                <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Usage Cap</div>
+                <DarkInput value={form.cap} onChange={e=>setForm(f=>({...f,cap:e.target.value}))} placeholder="e.g. 100"/>
+              </div>
               <div>
                 <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Expiry Date</div>
                 <input type="date" value={form.expiry} onChange={e=>setForm(f=>({...f,expiry:e.target.value}))}
@@ -1289,35 +1363,34 @@ function AdminCouponsTab(){
                     padding:'12px 14px',color:C.textCard,fontFamily:'inherit',fontSize:14,outline:'none'}}/>
               </div>
               <Row style={{gap:8}}>
-                <OrangeBtn onClick={()=>{
-                  if(!form.code||!form.value)return;
-                  setCoupons(prev=>[...prev,{...form,used:0,active:true}]);
-                  setForm(emptyForm);setShowForm(false);
-                }}>Create</OrangeBtn>
+                <OrangeBtn onClick={createCoupon} disabled={savingCoupon||!form.code||!form.value}>{savingCoupon?'Saving…':'Create'}</OrangeBtn>
                 <GhostBtn onClick={()=>setShowForm(false)}>Cancel</GhostBtn>
               </Row>
             </Col>
           )}
         </Card>
-        {coupons.length===0?(
+        {festLoading?(
+          <div style={{...sans,fontSize:13,color:C.mutedCard,textAlign:'center',padding:'24px 0'}}>Loading…</div>
+        ):festCoupons.length===0?(
           <EmptyState icon="tag" title="No coupons yet" body="Create your first festival coupon above."/>
-        ):coupons.map((c,i)=>(
-          <Card key={i} style={{marginBottom:8}}>
+        ):festCoupons.map((c,i)=>(
+          <Card key={c.code||i} style={{marginBottom:8}}>
             <RowBetween style={{marginBottom:6}}>
               <span style={{...mono,fontSize:16,fontWeight:700,color:C.orange,letterSpacing:2}}>{c.code}</span>
-              <span style={{...mono,fontSize:9,background:c.active?C.greenFaint:'rgba(247,227,201,0.1)',color:c.active?C.green:C.mutedCard,padding:'3px 8px',borderRadius:99}}>{c.active?'ACTIVE':'INACTIVE'}</span>
+              <span style={{...mono,fontSize:9,background:c.is_active?C.greenFaint:'rgba(247,227,201,0.1)',color:c.is_active?C.green:C.mutedCard,padding:'3px 8px',borderRadius:99}}>{c.is_active?'ACTIVE':'INACTIVE'}</span>
             </RowBetween>
             <div style={{...sans,fontSize:12,color:C.mutedCard,marginBottom:10}}>
-              {c.type==='Percentage'?`${c.value}% off`:`৳${c.value} off`}
-              {c.minOrder?` · Min ৳${c.minOrder}`:''}
-              {c.cap?` · Cap ${c.used||0}/${c.cap}`:''}
-              {c.expiry?` · Exp ${c.expiry}`:''}
+              {c.discount_type==='pct'?`${c.discount_value}% off`:`৳${c.discount_value} off`}
+              {c.min_order?` · Min ৳${c.min_order}`:''}
+              {c.max_uses?` · Cap ${c.used_count||0}/${c.max_uses}`:''}
+              {c.expires_at?` · Exp ${new Date(c.expires_at).toLocaleDateString('en-GB')}`:''}
             </div>
             <Row style={{gap:8}}>
-              <GhostBtn onClick={()=>setCoupons(prev=>prev.map((x,j)=>j===i?{...x,active:!x.active}:x))} style={{flex:1,padding:'8px 0',fontSize:12}}>
-                {c.active?'Deactivate':'Activate'}
+              <GhostBtn onClick={()=>startEdit(c)} style={{flex:1,padding:'8px 0',fontSize:12}}>Edit</GhostBtn>
+              <GhostBtn onClick={()=>toggleCoupon(c.code)} style={{flex:1,padding:'8px 0',fontSize:12}}>
+                {c.is_active?'Deactivate':'Activate'}
               </GhostBtn>
-              <GhostBtn onClick={()=>setCoupons(prev=>prev.filter((_,j)=>j!==i))} style={{flex:1,padding:'8px 0',fontSize:12,color:C.red,borderColor:'rgba(229,115,115,0.3)'}}>Delete</GhostBtn>
+              <GhostBtn onClick={()=>setDeleteConfirm(c.code)} style={{flex:1,padding:'8px 0',fontSize:12,color:C.red,borderColor:'rgba(229,115,115,0.3)'}}>Delete</GhostBtn>
             </Row>
           </Card>
         ))}
@@ -1344,6 +1417,55 @@ function AdminCouponsTab(){
         ))
       )}
       <div style={{height:100}}/>
+
+      {editSheet&&(
+        <BottomSheet onClose={()=>setEditSheet(null)} title={`Edit: ${editSheet.code}`}>
+          <Col style={{gap:10}}>
+            <div>
+              <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:8}}>Type</div>
+              <div style={{display:'flex',gap:6}}>
+                {['Percentage','Flat amount'].map(t=>(
+                  <Pill key={t} label={t} active={editForm.type===t} onClick={()=>setEditForm(f=>({...f,type:t}))}/>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>
+                Value {editForm.type==='Percentage'?'(%)':'(৳)'}
+              </div>
+              <DarkInput value={editForm.value} onChange={e=>setEditForm(f=>({...f,value:e.target.value}))} placeholder={editForm.type==='Percentage'?'15':'100'}/>
+            </div>
+            <div>
+              <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Min Order (৳)</div>
+              <DarkInput value={editForm.minOrder} onChange={e=>setEditForm(f=>({...f,minOrder:e.target.value}))} placeholder="0"/>
+            </div>
+            <div>
+              <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Usage Cap</div>
+              <DarkInput value={editForm.cap} onChange={e=>setEditForm(f=>({...f,cap:e.target.value}))} placeholder="e.g. 100"/>
+            </div>
+            <div>
+              <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Expiry Date</div>
+              <input type="date" value={editForm.expiry} onChange={e=>setEditForm(f=>({...f,expiry:e.target.value}))}
+                style={{width:'100%',background:C.cardAlt,border:'1px solid rgba(247,227,201,0.15)',borderRadius:8,
+                  padding:'12px 14px',color:C.textCard,fontFamily:'inherit',fontSize:14,outline:'none'}}/>
+            </div>
+            <OrangeBtn full onClick={saveEdit} disabled={savingEdit||!editForm.value}>{savingEdit?'Saving…':'Save Changes'}</OrangeBtn>
+            <GhostBtn full onClick={()=>setEditSheet(null)}>Cancel</GhostBtn>
+          </Col>
+        </BottomSheet>
+      )}
+
+      {deleteConfirm&&(
+        <BottomSheet onClose={()=>setDeleteConfirm(null)} title="Delete coupon?">
+          <div style={{...sans,fontSize:13,color:C.mutedCard,marginBottom:20,lineHeight:1.5}}>
+            "{deleteConfirm}" will be permanently removed and cannot be undone.
+          </div>
+          <Col style={{gap:8}}>
+            <GhostBtn full onClick={()=>deleteCoupon(deleteConfirm)} style={{color:C.red,borderColor:'rgba(229,115,115,0.3)'}}>Yes, Delete</GhostBtn>
+            <GhostBtn full onClick={()=>setDeleteConfirm(null)}>Keep Coupon</GhostBtn>
+          </Col>
+        </BottomSheet>
+      )}
     </div>
   );
 }
@@ -1687,6 +1809,23 @@ function AdminInfluencersTab(){
 }
 
 const PROD_STATUSES=['Active','New','Coming Soon','Stock Out','Featured','Discontinued'];
+const BEAN_VARIETIES=['Robusta','Arabica','Liberica','Excelsa'];
+const ROAST_OPTIONS=['Light Roast','Medium Roast','Dark Roast'];
+const PROCESS_OPTIONS=['Freeze Dried','Spray Dried'];
+
+function parseBlend(str){
+  if(!str||!str.trim())return[{variety:'Robusta',pct:''}];
+  const parsed=str.split('·').map(s=>s.trim()).filter(Boolean).map(p=>{
+    const m=p.match(/^(.+?)\s+(\d+)%$/);
+    return m?{variety:m[1].trim(),pct:m[2]}:null;
+  }).filter(Boolean);
+  return parsed.length?parsed:[{variety:'Robusta',pct:''}];
+}
+
+function serializeBlend(parts){
+  const valid=parts.filter(p=>p.variety&&parseInt(p.pct)>0);
+  return valid.length?valid.map(p=>`${p.variety} ${p.pct}%`).join(' · '):'';
+}
 
 function AdminProductsTab(){
   const {adminProducts:products,setAdminProducts:setProducts}=useContext(MobileCtx);
@@ -1695,20 +1834,37 @@ function AdminProductsTab(){
   const [sheet,setSheet]=useState(null);
   const [pkgSheet,setPkgSheet]=useState(null);
   const [confirmDelete,setConfirmDelete]=useState(null);
-  const emptyProd={name:'',description:'',price:'',stock:'',qty:'',unit:'g',status:'Active',images:[]};
+  const emptyProd={name:'',description:'',price:'',stock:'',qty:'',unit:'g',status:'Active',images:[],category:'',badge:'',roast:'',origin:''};
   const emptyPkg={name:'',description:'',price:'',status:'Active',productIds:[],quantities:{}};
   const [form,setForm]=useState(emptyProd);
   const [pkgForm,setPkgForm]=useState(emptyPkg);
   const fileRef=useRef(null);
   const activeImgIdx=useRef(0);
+  const [blendMode,setBlendMode]=useState('single');
+  const [singleVariety,setSingleVariety]=useState('Robusta');
+  const [blendParts,setBlendParts]=useState([{variety:'Robusta',pct:''}]);
+  const [processVal,setProcessVal]=useState('');
 
   function handleImageChange(e){
     const file=e.target.files[0];
     if(!file){e.target.value='';return;}
     const idx=activeImgIdx.current;
-    const reader=new FileReader();
-    reader.onload=ev=>setForm(f=>{const imgs=[...(f.images||[])];imgs[idx]=ev.target.result;return{...f,images:imgs};});
-    reader.readAsDataURL(file);e.target.value='';
+    e.target.value='';
+    const objectUrl=URL.createObjectURL(file);
+    const img=new window.Image();
+    img.onload=()=>{
+      URL.revokeObjectURL(objectUrl);
+      const MAX=900;
+      let w=img.naturalWidth,h=img.naturalHeight;
+      if(w>MAX){h=Math.round(h*MAX/w);w=MAX;}
+      if(h>MAX){w=Math.round(w*MAX/h);h=MAX;}
+      const canvas=document.createElement('canvas');
+      canvas.width=w;canvas.height=h;
+      canvas.getContext('2d').drawImage(img,0,0,w,h);
+      const compressed=canvas.toDataURL('image/webp',0.82)||canvas.toDataURL('image/jpeg',0.82);
+      setForm(f=>{const imgs=[...(f.images||[])];imgs[idx]=compressed;return{...f,images:imgs};});
+    };
+    img.src=objectUrl;
   }
 
   async function saveProduct(){
@@ -1724,6 +1880,13 @@ function AdminProductsTab(){
     const qtyVal=parseInt(form.qty);
     if(qtyVal>0)body.qty=qtyVal;
     if(form.unit)body.unit=form.unit;
+    if(form.category)body.category=form.category;
+    if(form.badge)body.badge=form.badge;
+    if(form.roast)body.roast=form.roast;
+    if(form.origin)body.origin=form.origin;
+    const blendStr=blendMode==='single'?singleVariety:serializeBlend(blendParts);
+    if(blendStr)body.blend=blendStr;
+    if(processVal)body.process=processVal;
     try{
       let res;
       if(sheet.type==='add'){
@@ -1761,7 +1924,7 @@ function AdminProductsTab(){
       <RowBetween style={{marginBottom:12}}>
         <div style={{...sans,fontSize:20,fontWeight:700,color:C.text}}>Products</div>
         <OrangeBtn onClick={()=>{
-          if(prodTab==='Products'){setForm(emptyProd);setSheet({type:'add'});}
+          if(prodTab==='Products'){setForm(emptyProd);setBlendMode('single');setSingleVariety('Robusta');setBlendParts([{variety:'Robusta',pct:''}]);setProcessVal('');setSheet({type:'add'});}
           else{setPkgForm(emptyPkg);setPkgSheet({type:'add'});}
         }} style={{padding:'8px 14px',fontSize:12}}>
           <Ic n="plus" size={14} color={C.card}/>{prodTab==='Products'?'Add':'Package'}
@@ -1776,7 +1939,15 @@ function AdminProductsTab(){
         products.length===0?(
           <EmptyState icon="coffee" title="No products yet" body="Click 'Add' to create your first product."/>
         ):products.map(p=>(
-          <Card key={p.id} style={{marginBottom:8,padding:0,overflow:'hidden'}} onClick={()=>{setForm({...p,price:String(p.price),stock:String(p.stock),qty:p.qty?String(p.qty):'',unit:p.unit||'g',images:p.images||(p.image?[p.image]:[])});setSheet({type:'edit',data:p});}}>
+          <Card key={p.id} style={{marginBottom:8,padding:0,overflow:'hidden'}} onClick={()=>{
+            setForm({...p,price:String(p.price),stock:String(p.stock),qty:p.qty?String(p.qty):'',unit:p.unit||'g',images:p.images||(p.image?[p.image]:[]),category:p.category||'',badge:p.badge||'',roast:p.roast||'',origin:p.origin||''});
+            const mode=p.blend&&p.blend.includes('%')?'blend':'single';
+            setBlendMode(mode);
+            if(mode==='single'){setSingleVariety(p.blend||'Robusta');setBlendParts([{variety:'Robusta',pct:''}]);}
+            else{setSingleVariety('Robusta');setBlendParts(parseBlend(p.blend));}
+            setProcessVal(p.process||'');
+            setSheet({type:'edit',data:p});
+          }}>
             {(p.images?.[0]||p.image)&&(
               <img src={p.images?.[0]||p.image} alt={p.name} style={{width:'100%',height:120,objectFit:'cover'}}/>
             )}
@@ -1879,6 +2050,93 @@ function AdminProductsTab(){
                 <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
                   {PROD_STATUSES.map(s=><Pill key={s} label={s} active={form.status===s} onClick={()=>setForm(f=>({...f,status:s}))}/>)}
                 </div>
+              </div>
+              <Row style={{gap:8}}>
+                <div style={{flex:1}}>
+                  <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Category</div>
+                  <DarkInput value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))} placeholder="e.g. Premium Coffee"/>
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Badge</div>
+                  <DarkInput value={form.badge} onChange={e=>setForm(f=>({...f,badge:e.target.value}))} placeholder="e.g. BEST VALUE"/>
+                </div>
+              </Row>
+              <div style={{...mono,fontSize:9,color:C.orange,letterSpacing:'0.15em',textTransform:'uppercase',marginBottom:0,marginTop:4}}>Specifications</div>
+              <Row style={{gap:8}}>
+                <div style={{flex:1}}>
+                  <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Roast</div>
+                  <select value={form.roast} onChange={e=>setForm(f=>({...f,roast:e.target.value}))}
+                    style={{width:'100%',background:C.cardAlt,border:'1px solid rgba(247,227,201,0.15)',borderRadius:8,padding:'12px 10px',
+                      color:C.textCard,...mono,fontSize:13,outline:'none',cursor:'pointer'}}>
+                    <option value="">— Select —</option>
+                    {ROAST_OPTIONS.map(r=><option key={r}>{r}</option>)}
+                  </select>
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Origin</div>
+                  <DarkInput value={form.origin} onChange={e=>setForm(f=>({...f,origin:e.target.value}))} placeholder="e.g. Colombia"/>
+                </div>
+              </Row>
+              <div>
+                <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Process</div>
+                <select value={processVal} onChange={e=>setProcessVal(e.target.value)}
+                  style={{width:'100%',background:C.cardAlt,border:'1px solid rgba(247,227,201,0.15)',borderRadius:8,padding:'12px 10px',
+                    color:C.textCard,...mono,fontSize:13,outline:'none',cursor:'pointer'}}>
+                  <option value="">— Select —</option>
+                  {PROCESS_OPTIONS.map(p=><option key={p}>{p}</option>)}
+                </select>
+              </div>
+              <div>
+                <div style={{...mono,fontSize:9,color:C.mutedCard,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:6}}>Bean</div>
+                {blendMode==='single'?(
+                  <>
+                    <select value={singleVariety} onChange={e=>setSingleVariety(e.target.value)}
+                      style={{width:'100%',background:C.cardAlt,border:'1px solid rgba(247,227,201,0.15)',borderRadius:8,padding:'12px 10px',
+                        color:C.textCard,...mono,fontSize:13,outline:'none',cursor:'pointer',marginBottom:8}}>
+                      {BEAN_VARIETIES.map(v=><option key={v}>{v}</option>)}
+                    </select>
+                    <button onClick={()=>{setBlendParts([{variety:singleVariety,pct:''},{variety:'Arabica',pct:''}]);setBlendMode('blend');}}
+                      style={{width:'100%',padding:'9px 0',background:'rgba(255,145,0,0.1)',border:'1px dashed rgba(255,145,0,0.4)',
+                        borderRadius:8,color:C.orange,...sans,fontSize:12,fontWeight:600,cursor:'pointer'}}>
+                      + Add Blend
+                    </button>
+                  </>
+                ):(
+                  <>
+                    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}>
+                      <button onClick={()=>{setSingleVariety(blendParts[0]?.variety||'Robusta');setBlendMode('single');}}
+                        style={{background:'none',border:'none',cursor:'pointer',color:C.mutedCard,...sans,fontSize:11,textDecoration:'underline',padding:0}}>
+                        ← Single Origin
+                      </button>
+                      {(()=>{const total=blendParts.reduce((s,p)=>s+(parseInt(p.pct)||0),0);if(!total)return null;return(
+                        <span style={{...mono,fontSize:11,fontWeight:700,color:total===100?C.green:C.red}}>{total===100?'✓ 100%':`${total}% — must be 100%`}</span>
+                      );})()}
+                    </div>
+                    {blendParts.map((part,idx)=>(
+                      <div key={idx} style={{display:'flex',gap:6,marginBottom:6,alignItems:'center'}}>
+                        <select value={part.variety} onChange={e=>setBlendParts(prev=>prev.map((p,i)=>i===idx?{...p,variety:e.target.value}:p))}
+                          style={{flex:1,background:C.cardAlt,border:'1px solid rgba(247,227,201,0.15)',borderRadius:8,padding:'10px 8px',
+                            color:C.textCard,...mono,fontSize:12,outline:'none',cursor:'pointer'}}>
+                          {BEAN_VARIETIES.map(v=><option key={v}>{v}</option>)}
+                        </select>
+                        <input type="number" min="1" max="100" placeholder="0" value={part.pct}
+                          onChange={e=>setBlendParts(prev=>prev.map((p,i)=>i===idx?{...p,pct:e.target.value}:p))}
+                          style={{width:52,background:C.cardAlt,border:'1px solid rgba(247,227,201,0.15)',borderRadius:8,padding:'10px 6px',
+                            color:C.textCard,...mono,fontSize:12,textAlign:'center',outline:'none'}}/>
+                        <span style={{...mono,fontSize:12,color:C.mutedCard}}>%</span>
+                        <button onClick={()=>{if(blendParts.length===2){setSingleVariety(blendParts[idx===0?1:0].variety);setBlendMode('single');}else{setBlendParts(prev=>prev.filter((_,i)=>i!==idx));}}}
+                          style={{background:'none',border:'none',cursor:'pointer',color:C.red,fontSize:16,padding:'0 4px',lineHeight:1}}>×</button>
+                      </div>
+                    ))}
+                    {blendParts.length<4&&(
+                      <button onClick={()=>setBlendParts(prev=>[...prev,{variety:'Arabica',pct:''}])}
+                        style={{padding:'7px 14px',background:'rgba(255,145,0,0.08)',border:'1px dashed rgba(255,145,0,0.35)',
+                          borderRadius:8,color:C.orange,...sans,fontSize:11,fontWeight:600,cursor:'pointer',marginTop:4}}>
+                        + Add variety
+                      </button>
+                    )}
+                  </>
+                )}
               </div>
               <OrangeBtn full onClick={saveProduct} disabled={!form.name||!form.price||!(form.images?.length)}>{sheet.type==='add'?'Add Product':'Save Changes'}</OrangeBtn>
               {sheet.type==='edit'&&(

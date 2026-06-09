@@ -20,9 +20,67 @@ const PRODUCT_DEFAULT = {
 
 
 const API_BASE = window.MIDNIGHT_API_BASE || "http://localhost:3000/api/v1";
+const THUMB_LABELS = ["Front", "Back"];
+
+// ── Bangladesh city → area map ────────────────────────────────────────────────
+const BD_AREAS = {
+  "Dhaka": [
+    "Adabor","Airport","Azimpur","Badda","Banani","Bangshal","Baridhara","Bashundhara",
+    "Cantonment","Chawkbazar","Demra","Dhanmondi","Farmgate","Gulshan","Hatirjheel",
+    "Hazaribagh","Jatrabari","Kafrul","Kamrangirchar","Karwan Bazar","Khilgaon","Khilkhet",
+    "Kotwali","Lalbagh","Lalmatia","Malibagh","Mirpur","Mohammadpur","Motijheel","Mugda",
+    "Nakhalpara","Niketan","Old Dhaka","Pallabi","Paltan","Ramna","Rampura","Sabujbagh",
+    "Shahbagh","Shantinagar","Shiddheswari","Shyampur","Sutrapur","Tejgaon","Turag",
+    "Uttara","Wari",
+  ],
+  "Chattogram": [
+    "Agrabad","Anwara","Bayazid Bostami","Chandgaon","Double Mooring","GEC Circle",
+    "Halishahar","Khulshi","Kotwali","Nasirabad","Pahartali","Panchlaish","Patiya",
+    "Patenga","Sadarghat",
+  ],
+  "Gazipur": [
+    "Gazipur Sadar","Joydebpur","Kaliakair","Kapasia","Sreepur","Tongi",
+  ],
+  "Narayanganj": [
+    "Araihazar","Fatullah","Narayanganj Sadar","Rupganj","Siddhirganj","Sonargaon",
+  ],
+  "Sylhet": [
+    "Ambarkhana","Bianibazar","Golapganj","Jalalabad","Kumargaon","Shibganj","Sylhet Sadar","Zindabazar",
+  ],
+  "Rajshahi": [
+    "Boalia","Motihar","Paba","Rajpara","Rajshahi Sadar","Shah Makhdum",
+  ],
+  "Khulna": [
+    "Daulatpur","Khan Jahan Ali","Khalishpur","Khulna Sadar","Rupsha","Sonadanga",
+  ],
+  "Cumilla": [
+    "Burichang","Chandina","Cumilla Sadar","Daudkandi","Kotwali","Laksam","Muradnagar",
+  ],
+  "Mymensingh": [
+    "Mymensingh Sadar","Muktagacha","Phulbaria","Trishal",
+  ],
+  "Bogura": [
+    "Bogura Sadar","Gabtali","Shahjahanpur","Shibganj","Sonatola",
+  ],
+  "Rangpur": [
+    "Badarganj","Gangachara","Kaunia","Mithapukur","Pirganj","Rangpur Sadar",
+  ],
+  "Barishal": [
+    "Agailjhara","Barishal Sadar","Babuganj","Bakerganj","Gaurnadi","Mehendiganj",
+  ],
+  "Jessore": [
+    "Abhaynagar","Chaugachha","Jessore Sadar","Jhikargachha","Keshabpur","Manirampur",
+  ],
+  "Faridpur": [
+    "Faridpur Sadar","Alfadanga","Boalmari","Bhanga","Charbhadrasan","Madhukhali",
+  ],
+  "Tangail": [
+    "Tangail Sadar","Basail","Bhuapur","Delduar","Ghatail","Gopalpur","Kalihati","Madhupur",
+  ],
+};
 
 // ── minimal header ────────────────────────────────────────────────────────────
-function ShopHeader({ cartCount, onSignIn, onCart }) {
+function ShopHeader({ cartCount, onSignIn, onCart, productName }) {
   const [scrolled, setScrolled] = useState(false);
 
   useEffect(() => {
@@ -36,7 +94,13 @@ function ShopHeader({ cartCount, onSignIn, onCart }) {
     <header className="shop-header">
       <a href="index.html" className="shop-header-back" aria-label="Back to home">
         <i className="fa-solid fa-arrow-left" aria-hidden="true" />
-        Home
+        <span>Home</span>
+        {productName && (
+          <>
+            <span className="shop-breadcrumb-sep">/</span>
+            <span className="shop-breadcrumb-current">{productName}</span>
+          </>
+        )}
       </a>
       <div className="shop-header-actions">
         {/* Sign In button — commented out for now
@@ -151,7 +215,9 @@ function OrderModal({ open, onClose, product, qty, discount, coupon }) {
   const [step, setStep]           = useState("form"); // form | otp | loading | success | error
   const [name, setName]           = useState("");
   const [phone, setPhone]         = useState("");
-  const [address, setAddress]     = useState("");
+  const [city, setCity]           = useState("");
+  const [area, setArea]           = useState("");
+  const [street, setStreet]       = useState("");
   const [errorMsg, setErrorMsg]   = useState("");
   const [orderRef, setOrderRef]   = useState("");
   const [isBusy, setIsBusy]       = useState(false);
@@ -176,6 +242,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon }) {
       setStep("form"); setErrorMsg(""); setOrderRef("");
       setOtpDigits(["","","","","",""]); setOtpError("");
       setIsBusy(false); setTimerKey(0);
+      setCity(""); setArea(""); setStreet("");
     }
   }, [open]);
 
@@ -296,7 +363,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon }) {
         const res  = await fetch(`${API_BASE}/orders/guest`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: name.trim(), phone: phone.trim(), address: address.trim(), qty, otp: otpDigits.join(""), ...(coupon ? { coupon_code: coupon } : {}), ...(product?.id ? { product_id: product.id } : {}) }),
+          body: JSON.stringify({ name: name.trim(), phone: phone.trim(), address: composedAddress, qty, otp: otpDigits.join(""), ...(coupon ? { coupon_code: coupon } : {}), ...(product?.id ? { product_id: product.id } : {}) }),
         });
         const json = await res.json();
         if (!res.ok) {
@@ -403,9 +470,11 @@ function OrderModal({ open, onClose, product, qty, discount, coupon }) {
   }
 
   // ── Form Step ──────────────────────────────────────────────────────────────
+  const composedAddress = [street.trim(), area, city].filter(Boolean).join(", ");
+
   const handleFormSubmit = async (e) => {
     e.preventDefault();
-    if (!name.trim() || !phone.trim() || !address.trim() || isBusy) return;
+    if (!name.trim() || !phone.trim() || !city || !street.trim() || isBusy) return;
     setIsBusy(true);
     try {
       const res = await fetch(`${API_BASE}/orders/request-otp`, {
@@ -425,7 +494,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon }) {
     }
   };
 
-  const canSubmit = name.trim() && phone.trim().length >= 11 && address.trim() && !isBusy;
+  const canSubmit = name.trim() && phone.trim().length >= 11 && city && street.trim() && !isBusy;
 
   return (
     <div style={overlay} onClick={e => e.target === e.currentTarget && onClose()}>
@@ -448,10 +517,56 @@ function OrderModal({ open, onClose, product, qty, discount, coupon }) {
             <input style={field} type="tel" placeholder="01XXXXXXXXX" value={phone}
               onChange={e => setPhone(e.target.value)} required minLength={11} disabled={isBusy} />
           </div>
-          <div style={{ marginBottom: 22 }}>
+          {/* ── Delivery Address — structured ── */}
+          <div style={{ marginBottom: 14 }}>
             <label style={lbl}>Delivery Address</label>
-            <textarea style={{ ...field, resize: "vertical", minHeight: 72 }} placeholder="House, road, area, city"
-              value={address} onChange={e => setAddress(e.target.value)} required disabled={isBusy} />
+
+            {/* City + Area row */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+              {/* City */}
+              <div style={{ position: "relative" }}>
+                <select
+                  style={{ ...field, appearance: "none", WebkitAppearance: "none", paddingRight: 30, cursor: "pointer", color: city ? "#1A0A0D" : "rgba(26,10,13,.38)" }}
+                  value={city}
+                  onChange={e => { setCity(e.target.value); setArea(""); }}
+                  required
+                  disabled={isBusy}
+                >
+                  <option value="" disabled>City</option>
+                  {Object.keys(BD_AREAS).sort().map(c => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+                <i className="fa-solid fa-chevron-down" aria-hidden="true" style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", fontSize: 10, color: "rgba(87,31,41,.45)", pointerEvents: "none" }} />
+              </div>
+
+              {/* Area */}
+              <div style={{ position: "relative" }}>
+                <select
+                  style={{ ...field, appearance: "none", WebkitAppearance: "none", paddingRight: 30, cursor: city ? "pointer" : "not-allowed", color: area ? "#1A0A0D" : "rgba(26,10,13,.38)", opacity: city ? 1 : 0.55 }}
+                  value={area}
+                  onChange={e => setArea(e.target.value)}
+                  disabled={!city || isBusy}
+                >
+                  <option value="">{city ? "Select area" : "Area"}</option>
+                  {(BD_AREAS[city] || []).map(a => (
+                    <option key={a} value={a}>{a}</option>
+                  ))}
+                </select>
+                <i className="fa-solid fa-chevron-down" aria-hidden="true" style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", fontSize: 10, color: "rgba(87,31,41,.45)", pointerEvents: "none" }} />
+              </div>
+            </div>
+
+            {/* Street address */}
+            <input
+              style={field}
+              type="text"
+              placeholder="House no., road, block, building…"
+              value={street}
+              onChange={e => setStreet(e.target.value)}
+              required
+              disabled={isBusy}
+            />
           </div>
           <button type="submit" disabled={!canSubmit} style={primBtn(!canSubmit)}>
             {isBusy
@@ -469,7 +584,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon }) {
 }
 
 // ── Buy Sheet (mobile) ────────────────────────────────────────────────────────
-function BuySheet({ open, onClose, qty, setQty, coupon, setCoupon, couponStatus, setCouponStatus, discount, verifyCoupon, addToCart, addedAnim, product, onBuyNow }) {
+function BuySheet({ open, onClose, qty, setQty, coupon, setCoupon, couponStatus, setCouponStatus, couponError, discount, verifyCoupon, addToCart, addedAnim, product, onBuyNow }) {
   const finalPrice = product.price - discount;
   const totalPrice = finalPrice * qty;
 
@@ -521,7 +636,7 @@ function BuySheet({ open, onClose, qty, setQty, coupon, setCoupon, couponStatus,
           )}
           {couponStatus === "err" && (
             <span className="shop-coupon-msg shop-coupon-msg--err">
-              <i className="fa-solid fa-circle-xmark" aria-hidden="true" /> Invalid coupon code
+              <i className="fa-solid fa-circle-xmark" aria-hidden="true" /> {couponError}
             </span>
           )}
         </div>
@@ -533,7 +648,7 @@ function BuySheet({ open, onClose, qty, setQty, coupon, setCoupon, couponStatus,
             <span className="shop-qty-val">{qty}</span>
             <button className="shop-qty-btn" onClick={() => setQty(q => q + 1)} aria-label="Increase quantity">+</button>
           </div>
-          <button className="shop-add-btn" onClick={onBuyNow}>Proceed</button>
+          <button className="shop-add-btn" onClick={onBuyNow}>Order Now</button>
         </div>
       </div>
     </div>
@@ -765,6 +880,7 @@ function ShopPage() {
   const [qty, setQty] = useState(1);
   const [coupon, setCoupon] = useState("");
   const [couponStatus, setCouponStatus] = useState("idle");
+  const [couponError, setCouponError] = useState("");
   const [discount, setDiscount] = useState(0);
   const [cart, setCart] = useState(() => {
     try { return JSON.parse(sessionStorage.getItem("mp_cart") || "[]"); } catch { return []; }
@@ -776,6 +892,7 @@ function ShopPage() {
   const [buySheetOpen, setBuySheetOpen] = useState(false);
   const [orderModalOpen, setOrderModalOpen] = useState(false);
   const [reviewStats, setReviewStats] = useState({ rating: 0, count: 0 });
+  const [couponOpen, setCouponOpen] = useState(false);
 
   // Fetch product from API -  use ?id= query param or first active product
   useEffect(() => {
@@ -825,6 +942,7 @@ function ShopPage() {
   const verifyCoupon = async () => {
     if (!coupon.trim()) return;
     setCouponStatus("loading");
+    setCouponError("");
     try {
       const subtotal = product.price * qty;
       const res  = await fetch(
@@ -833,6 +951,7 @@ function ShopPage() {
       const json = await res.json();
       if (!res.ok) {
         setDiscount(0);
+        setCouponError(json?.error?.message || "Invalid coupon code.");
         setCouponStatus("err");
         return;
       }
@@ -840,6 +959,7 @@ function ShopPage() {
       setCouponStatus("ok");
     } catch {
       setDiscount(0);
+      setCouponError("Could not verify coupon. Please try again.");
       setCouponStatus("err");
     }
   };
@@ -882,11 +1002,49 @@ function ShopPage() {
 
   return (
     <div className="shop-page">
-      <ShopHeader cartCount={cart.length} onCart={() => setCartOpen(true)} />
+      <ShopHeader cartCount={cart.length} onCart={() => setCartOpen(true)} productName={product.name} />
 
       <div className="shop-layout">
 
-        {/* LEFT: product info */}
+        {/* LEFT: image */}
+        <div className="shop-visual">
+          <div className="shop-img-card">
+            <div className="shop-img-wrapper">
+              {product.badge && <span className="shop-img-badge">{product.badge}</span>}
+              {product.images.length > 0 ? (
+                <img
+                  key={imgKey}
+                  src={product.images[activeImg]}
+                  alt={`${product.name} -  image ${activeImg + 1}`}
+                  className="shop-main-img"
+                  loading="eager"
+                  decoding="async"
+                />
+              ) : (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%", minHeight: 280, color: "rgba(87,31,41,.2)" }}>
+                  <i className="fa-solid fa-image" style={{ fontSize: 56 }} aria-hidden="true" />
+                </div>
+              )}
+            </div>
+            {product.images.length > 1 && (
+              <div className="shop-thumbs">
+                {product.images.map((src, i) => (
+                  <button
+                    key={i}
+                    className={"shop-thumb" + (activeImg === i ? " active" : "")}
+                    onClick={() => switchImage(i)}
+                    aria-label={`View ${THUMB_LABELS[i] ?? `image ${i + 1}`}`}
+                  >
+                    <img src={src} alt={THUMB_LABELS[i] ?? `Image ${i + 1}`} loading="lazy" decoding="async" />
+                    <span className="shop-thumb-label">{THUMB_LABELS[i] ?? String(i + 1)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* RIGHT: product info */}
         <div className="shop-info">
           {product.category && <div className="shop-category">{product.category}</div>}
 
@@ -916,9 +1074,57 @@ function ShopPage() {
 
           <p className="shop-desc">{product.desc}</p>
 
-          {/* coupon + qty + actions -  hidden on mobile (lives in buy sheet) */}
+          {/* specs -  only render rows that have data */}
+          {(product.roast || product.origin || product.blend || product.process || product.weight) && (
+            <div className="shop-specs">
+              {product.roast   && <div className="shop-spec"><span>Roast</span><strong>{product.roast}</strong></div>}
+              {product.origin  && <div className="shop-spec"><span>Origin</span><strong>{product.origin}</strong></div>}
+              {product.blend   && <div className="shop-spec"><span>Blend</span><strong>{product.blend}</strong></div>}
+              {product.process && <div className="shop-spec"><span>Process</span><strong>{product.process}</strong></div>}
+              {product.weight  && <div className="shop-spec shop-spec--full"><span>Weight</span><strong>{product.weight}</strong></div>}
+            </div>
+          )}
+
+          {/* qty + Order Now row — hidden on mobile (lives in buy sheet / sticky CTA) */}
           <div className="shop-inline-controls">
-            {/* coupon code */}
+            <p className="shop-qty-label">Quantity</p>
+            <div className="shop-qty-row">
+              <div className="shop-qty">
+                <button className="shop-qty-btn" onClick={() => setQty(q => Math.max(1, q - 1))} aria-label="Decrease quantity">−</button>
+                <span className="shop-qty-val">{qty}</span>
+                <button className="shop-qty-btn" onClick={() => setQty(q => q + 1)} aria-label="Increase quantity">+</button>
+              </div>
+              {product.status === "coming soon" || product.status === "stock out" ? (
+                <button className="shop-buy-btn" disabled style={{ opacity: 0.45, cursor: "not-allowed" }}>
+                  {product.status === "coming soon" ? "Coming Soon" : "Out of Stock"}
+                </button>
+              ) : (
+                <button className="shop-buy-btn" onClick={buyNow}>
+                  <i className="fa-solid fa-bag-shopping" aria-hidden="true" />
+                  Order Now
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Trust row — hidden on mobile */}
+          <div className="shop-trust-row">
+            <span className="shop-trust-chip"><i className="fa-solid fa-motorcycle" aria-hidden="true" /> Cash on Delivery</span>
+            <span className="shop-trust-chip"><i className="fa-solid fa-truck-fast" aria-hidden="true" /> 1–2 Day Delivery</span>
+            <span className="shop-trust-chip"><i className="fa-solid fa-shield-halved" aria-hidden="true" /> Sealed Pack</span>
+          </div>
+
+          {/* Collapsible coupon — hidden on mobile */}
+          <button
+            className="shop-coupon-toggle"
+            onClick={() => setCouponOpen(c => !c)}
+            aria-expanded={couponOpen}
+          >
+            <i className="fa-solid fa-tag" aria-hidden="true" />
+            Have a coupon?
+            <i className={`fa-solid fa-chevron-${couponOpen ? "up" : "down"}`} aria-hidden="true" />
+          </button>
+          {couponOpen && (
             <div className="shop-coupon-row">
               <div className="shop-coupon-wrap">
                 <input
@@ -931,88 +1137,22 @@ function ShopPage() {
                   aria-label="Coupon code"
                 />
                 <button className="shop-coupon-btn" onClick={verifyCoupon} disabled={couponStatus === "loading"}>
-                  {couponStatus === "loading" ? <i className="fa-solid fa-spinner fa-spin" aria-hidden="true" /> : "Verify"}
+                  {couponStatus === "loading" ? <i className="fa-solid fa-spinner fa-spin" aria-hidden="true" /> : "Apply"}
                 </button>
               </div>
               {couponStatus === "ok" && (
                 <span className="shop-coupon-msg shop-coupon-msg--ok">
-                  <i className="fa-solid fa-circle-check" aria-hidden="true" /> Coupon applied -  ৳{discount} off
+                  <i className="fa-solid fa-circle-check" aria-hidden="true" /> Coupon applied — ৳{discount} off
                 </span>
               )}
               {couponStatus === "err" && (
                 <span className="shop-coupon-msg shop-coupon-msg--err">
-                  <i className="fa-solid fa-circle-xmark" aria-hidden="true" /> Invalid coupon code
+                  <i className="fa-solid fa-circle-xmark" aria-hidden="true" /> {couponError}
                 </span>
               )}
             </div>
-
-            {/* qty */}
-            <div className="shop-qty-row">
-              <div className="shop-qty">
-                <button className="shop-qty-btn" onClick={() => setQty(q => Math.max(1, q - 1))} aria-label="Decrease quantity">−</button>
-                <span className="shop-qty-val">{qty}</span>
-                <button className="shop-qty-btn" onClick={() => setQty(q => q + 1)} aria-label="Increase quantity">+</button>
-              </div>
-            </div>
-          </div>
-
-          {/* proceed -  visible on both mobile and desktop */}
-          {product.status === "coming soon" || product.status === "stock out" ? (
-            <button className="shop-buy-btn" disabled style={{ opacity: 0.45, cursor: "not-allowed" }}>
-              {product.status === "coming soon" ? "Coming Soon" : "Out of Stock"}
-            </button>
-          ) : (
-            <button className="shop-buy-btn" onClick={buyNow}>Proceed</button>
           )}
 
-          {/* specs -  only render rows that have data */}
-          {(product.roast || product.origin || product.blend || product.process || product.weight) && (
-            <div className="shop-specs">
-              {product.roast   && <div className="shop-spec"><span>Roast</span><strong>{product.roast}</strong></div>}
-              {product.origin  && <div className="shop-spec"><span>Origin</span><strong>{product.origin}</strong></div>}
-              {product.blend   && <div className="shop-spec"><span>Blend</span><strong>{product.blend}</strong></div>}
-              {product.process && <div className="shop-spec"><span>Process</span><strong>{product.process}</strong></div>}
-              {product.weight  && <div className="shop-spec shop-spec--full"><span>Weight</span><strong>{product.weight}</strong></div>}
-            </div>
-          )}
-        </div>
-
-        {/* RIGHT: image */}
-        <div className="shop-visual">
-          <div className="shop-img-card">
-            <div className="shop-img-wrapper">
-              {product.badge && <span className="shop-img-badge">{product.badge}</span>}
-              {product.images.length > 0 ? (
-                <img
-                  key={imgKey}
-                  src={product.images[activeImg]}
-                  alt={`${product.name} -  image ${activeImg + 1}`}
-                  className="shop-main-img"
-                  loading="eager"
-                  decoding="async"
-                />
-              ) : (
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%", minHeight: 280, color: "rgba(87,31,41,.2)" }}>
-                  <i className="fa-solid fa-image" style={{ fontSize: 56 }} aria-hidden="true" />
-                </div>
-              )}
-            </div>
-            {product.images.length > 1 && (
-              <div className="shop-thumbs">
-                {product.images.map((src, i) => (
-                  <button
-                    key={i}
-                    className={"shop-thumb" + (activeImg === i ? " active" : "")}
-                    onClick={() => switchImage(i)}
-                    aria-label={`View image ${i + 1}`}
-                  >
-                    <img src={src} alt={`Image ${i + 1}`} loading="lazy" decoding="async" />
-                    <span className="shop-thumb-label">{i + 1}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
         </div>
 
       </div>
@@ -1020,6 +1160,23 @@ function ShopPage() {
       {/* Reviews — commented out for now
       <ReviewsSection productSlug="midnight-blend" onStats={setReviewStats} />
       */}
+
+      {/* Sticky mobile CTA */}
+      <div className="shop-sticky-cta">
+        <div className="shop-sticky-cta-left">
+          <span className="shop-sticky-price">৳{totalPrice.toLocaleString()}</span>
+          {discount > 0 && (
+            <span className="shop-sticky-old">৳{(product.price * qty).toLocaleString()}</span>
+          )}
+        </div>
+        <button
+          className="shop-sticky-cta-btn"
+          onClick={buyNow}
+          disabled={product.status === "coming soon" || product.status === "stock out"}
+        >
+          {product.status === "coming soon" ? "Coming Soon" : product.status === "stock out" ? "Out of Stock" : "Order Now"}
+        </button>
+      </div>
 
       <ShopToastStack toasts={toasts} />
       {cartOpen && <CartPanel cart={cart} onClose={() => setCartOpen(false)} />}
@@ -1035,6 +1192,7 @@ function ShopPage() {
         setCoupon={setCoupon}
         couponStatus={couponStatus}
         setCouponStatus={setCouponStatus}
+        couponError={couponError}
         discount={discount}
         verifyCoupon={verifyCoupon}
         addToCart={addToCart}

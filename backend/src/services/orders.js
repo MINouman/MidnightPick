@@ -383,7 +383,7 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
       )
       if (pRows.length) {
         productName = pRows[0].name
-        unitPrice   = pRows[0].price
+        unitPrice   = parseInt(pRows[0].price, 10)
       }
     }
 
@@ -454,6 +454,19 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
       await sendOrderConfirmation(phone.trim(), orderRef, total)
     } catch (err) {
       console.error('[orders] SMS send failed:', err.message)
+    }
+
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`\n╔══════════════════════════════════════════════╗`)
+      console.log(`║           ORDER CONFIRMED ✓                  ║`)
+      console.log(`╠══════════════════════════════════════════════╣`)
+      console.log(`║  Order ID  : ${orderRef.padEnd(31)}║`)
+      console.log(`║  Customer  : ${name.trim().substring(0, 31).padEnd(31)}║`)
+      console.log(`║  Phone     : ${phone.trim().padEnd(31)}║`)
+      console.log(`║  Total     : BDT ${String(total).padEnd(27)}║`)
+      console.log(`║  Status    : ${order.status.padEnd(31)}║`)
+      console.log(`║  Track at  : /track?ref=${orderRef.padEnd(21)}║`)
+      console.log(`╚══════════════════════════════════════════════╝\n`)
     }
 
     return {

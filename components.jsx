@@ -669,24 +669,35 @@ const TRACK_STEPS = [
 ];
 const TRACK_STEP_IDX = { confirmed: 0, packed: 1, shipped: 2, delivered: 3 };
 
-// TODO: Replace with real delivery API call.
-// Should return: { orderId, currentStep, steps: { [id]: { timestamp, detail } | null } }
-// On not found: throw { code: "not_found" }
+const TRACK_STATUS_TO_STEP = {
+  processing: 'confirmed',
+  packed:     'packed',
+  shipped:    'shipped',
+  delivered:  'delivered',
+};
+
+function formatTrackTs(iso) {
+  if (!iso) return null;
+  return new Date(iso).toLocaleString('en-BD', {
+    day: 'numeric', month: 'short', year: 'numeric',
+    hour: 'numeric', minute: '2-digit', hour12: true,
+  });
+}
+
 async function fetchOrderStatus(orderId) {
-  await new Promise(r => setTimeout(r, 900));
-  if (orderId.toUpperCase() === "MP-1024") {
-    return {
-      orderId: "MP-1024",
-      currentStep: "shipped",
-      steps: {
-        confirmed: { timestamp: "15 May 2026, 10:30 AM", detail: "Order placed via midnightpick.com" },
-        packed:    { timestamp: "15 May 2026, 3:15 PM",  detail: "Packed and ready for courier pickup." },
-        shipped:   { timestamp: "16 May 2026, 9:00 AM",  detail: "Picked up by Pathao Courier. Est. delivery: 17 May." },
-        delivered: null,
-      },
-    };
+  const res  = await fetch(`http://localhost:3000/api/v1/track/${encodeURIComponent(orderId.trim().toUpperCase())}`);
+  const json = await res.json();
+  if (!json.ok) throw { code: 'not_found' };
+
+  const d           = json.data;
+  const currentStep = TRACK_STATUS_TO_STEP[d.status] ?? 'confirmed';
+
+  const steps = {};
+  for (const [key, val] of Object.entries(d.steps)) {
+    steps[key] = val ? { timestamp: formatTrackTs(val.at), detail: val.detail } : null;
   }
-  throw { code: "not_found" };
+
+  return { orderId: d.order_ref, currentStep, steps };
 }
 
 const TRACK_STATUS_LBL = { confirmed: "Confirmed", packed: "Packed", shipped: "In Transit", delivered: "Delivered" };
@@ -769,7 +780,7 @@ function TrackOrderModal({ open, onClose }) {
               <i className="fa-solid fa-hashtag track-input-icon" aria-hidden="true" />
               <input
                 ref={inputRef} autoFocus
-                className="track-input" type="text" placeholder="e.g. MP-1024"
+                className="track-input" type="text" placeholder="e.g. MP-1005"
                 value={orderId}
                 onChange={e => { setOrderId(e.target.value); if (phase === "not_found") setPhase("idle"); }}
                 onKeyDown={e => e.key === "Enter" && handleTrack()}

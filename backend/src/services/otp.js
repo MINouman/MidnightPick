@@ -15,10 +15,19 @@ function hashOtp(otp, phone) {
 }
 
 async function checkRateLimit(phone) {
-  const key   = `otp:rate:${phone}`
-  const count = await redis.incr(key)
-  if (count === 1) await redis.expire(key, env.OTP_RATE_LIMIT_WINDOW)
-  return count <= env.OTP_RATE_LIMIT_MAX
+  const key = `otp:rate:${phone}`
+  try {
+    const count = await redis.incr(key)
+    if (count === 1) await redis.expire(key, env.OTP_RATE_LIMIT_WINDOW)
+    return count <= env.OTP_RATE_LIMIT_MAX
+  } catch (err) {
+    // Redis unavailable — allow in dev, block in production
+    if (env.NODE_ENV !== 'production') {
+      console.warn('[otp] Redis unavailable, skipping rate limit in dev mode')
+      return true
+    }
+    throw err
+  }
 }
 
 async function sendOtp(phone) {

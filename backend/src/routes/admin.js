@@ -2,6 +2,14 @@
 
 const { query, withTransaction } = require('../config/db')
 
+// Convert a date-only string (YYYY-MM-DD) to end-of-day in Dhaka time (UTC+6).
+// Full datetime strings are passed through unchanged.
+function toEndOfDayDhaka(dateStr) {
+  if (!dateStr) return null
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return `${dateStr}T23:59:59+06:00`
+  return dateStr
+}
+
 module.exports = async function adminRoutes(app) {
 
   // Ensure requester is an admin on every route in this plugin
@@ -496,7 +504,7 @@ module.exports = async function adminRoutes(app) {
       `INSERT INTO coupons (code, type, discount_type, discount_value, min_order, max_uses, expires_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING id, code, type, discount_type, discount_value, min_order, max_uses, used_count, is_active, expires_at, created_at`,
-      [code.toUpperCase(), type, discount_type, Math.round(discount_value), Math.round(min_order), max_uses || null, expires_at || null]
+      [code.toUpperCase(), type, discount_type, Math.round(discount_value), Math.round(min_order), max_uses || null, toEndOfDayDhaka(expires_at)]
     )
     return reply.code(201).send({ ok: true, data: rows[0] })
   })
@@ -523,7 +531,7 @@ module.exports = async function adminRoutes(app) {
     const allowed = ['discount_type', 'discount_value', 'min_order', 'max_uses', 'expires_at']
     const entries = Object.entries(req.body).filter(([k]) => allowed.includes(k))
     const sets = entries.map(([k], i) => `${k} = $${i + 2}`)
-    const vals = entries.map(([, v]) => v !== '' ? v : null)
+    const vals = entries.map(([k, v]) => k === 'expires_at' ? toEndOfDayDhaka(v) : (v !== '' ? v : null))
     const { rows } = await query(
       `UPDATE coupons SET ${sets.join(', ')} WHERE code = $1
        RETURNING id, code, type, discount_type, discount_value, min_order, max_uses, used_count, is_active, expires_at, created_at`,
