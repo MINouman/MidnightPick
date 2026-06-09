@@ -80,7 +80,7 @@ function Nav({ cartCount, onShop, onSignIn }) {
       <nav className={"nav" + (scrolled ? " scrolled" : "")}>
         <div className="nav-announcement">
           <a href="shop.html" className="nav-announcement-link">
-            95g of Premium Freeze-Dried Coffee · ৳669 · Cash on Delivery across Bangladesh
+            95g of Premium Freeze-Dried Coffee · ৳699 · Cash on Delivery across Bangladesh
             <ArrowRight size={13} />
           </a>
         </div>
@@ -151,7 +151,7 @@ function Hero({ headline, showMountain }) {
         </h1>
         <p className="sub">Freeze-dried instant coffee from Colombian highlands. Carefully preserved aroma and character in every sip. The same gentle low-temperature process that premium imported jars use, at a fraction of the per-gram price.</p>
         <a className="hero-cta" href="shop.html">
-          Try the Pouch at ৳669 <span style={{whiteSpace:"nowrap"}}>(~45 cups)</span>
+          Try the Pouch at ৳699 only (~45 cups)
           <ArrowUpRight size={16} />
         </a>
       </div>
@@ -161,7 +161,7 @@ function Hero({ headline, showMountain }) {
           <span>95g · ~45 Cups <span className="dot">●</span></span>
           <span>Robusta 65 · Arabica 35 <span className="dot">●</span></span>
           <span>Cash on Delivery <span className="dot">●</span></span>
-          <span>৳669 Per Pouch <span className="dot">●</span></span>
+          <span>৳699 Per Pouch <span className="dot">●</span></span>
           <span>Delivered Nationwide <span className="dot">●</span></span>
           <span>Freeze-Dried <span className="dot">●</span></span>
           <span>95g · ~45 Cups <span className="dot">●</span></span>
@@ -199,18 +199,9 @@ function Story() {
 }
 
 // ----------------- collection -----------------
-const PRODUCTS = [
-{
-  id: "blend",
-  name: "Midnight Blend — 95g",
-  badge: "BEST VALUE",
-  price: "৳669",
-  old: null,
-  rating: 4.8, reviews: 640,
-  desc: "Resealable pouch. ~47 cups of pure freeze-dried Colombian coffee.",
-  specs: "MEDIUM ROAST · 95g"
-}];
+const PRODUCTS_STATIC = [];
 
+const COLLECTION_API = (window.MIDNIGHT_API_BASE || "http://localhost:3000/api/v1") + "/products";
 
 function ProductRow({ p, onAdd }) {
   const [added, setAdded] = useState(false);
@@ -222,10 +213,10 @@ function ProductRow({ p, onAdd }) {
   return (
     <div className="prod-row">
       <div className="prod-row-info">
-        <span className="prod-row-name">{p.name}</span>
+        <a className="prod-row-name" href={`shop.html${p.id && p.id !== 'blend' ? '?id=' + p.id : ''}`} style={{ textDecoration: "none", color: "inherit" }}>{p.name}</a>
         <div className="prod-row-meta">
-          {p.old && <span className="prod-row-old">{p.old}</span>}
-          <span className="prod-row-price">{p.price}</span>
+          {p.old && <span className="prod-row-old">৳{p.old}</span>}
+          <span className="prod-row-price">৳{p.price}</span>
           {p.badge && <span className="badge" style={{ fontSize: 9, padding: "2px 7px" }}>{p.badge}</span>}
         </div>
       </div>
@@ -236,6 +227,28 @@ function ProductRow({ p, onAdd }) {
 }
 
 function Collection({ onAdd }) {
+  const [products, setProducts] = useState(PRODUCTS_STATIC);
+
+  useEffect(() => {
+    fetch(COLLECTION_API)
+      .then(r => r.json())
+      .then(data => {
+        if (data?.ok && data.data?.products?.length) {
+          const mapped = data.data.products.map((p, i) => ({
+            id: p.id,
+            name: p.name,
+            badge: p.badge || p.category || null,
+            price: p.price,
+            old: null,
+            desc: p.description || "",
+            specs: p.qty && p.unit ? `${p.unit.toUpperCase()} · ${p.qty}g` : "",
+          }));
+          setProducts(mapped);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   return (
     <section className="collection" id="collection" data-screen-label="03 Collection">
       <div className="coll-words" aria-hidden="true">
@@ -250,12 +263,14 @@ function Collection({ onAdd }) {
             <h2>Explore <em className="italic-accent">Your</em><br /><span className="italic-accent underline-em">Favorite</span> Flavor</h2>
           </div>
           <div className="coll-product-list">
-            {PRODUCTS.map((p) => <ProductRow key={p.id} p={p} onAdd={onAdd} />)}
+            {products.map((p) => <ProductRow key={p.id} p={p} onAdd={onAdd} />)}
           </div>
         </div>
-        <div className="coll-imgs">
-          <div className="coll-img ci-0"><img src="assets/product_95g.png" alt="Midnight Blend 95g pouch" /></div>
-        </div>
+        {products.length > 0 && products[0].images && products[0].images[0] && (
+          <div className="coll-imgs">
+            <div className="coll-img ci-0"><img src={products[0].images[0]} alt={products[0].name} loading="lazy" decoding="async" /></div>
+          </div>
+        )}
         <div className="coll-cta-row">
           <a className="hero-cta coll-shop-shake" href="shop.html">
             Shop Now <ArrowRight size={14} />

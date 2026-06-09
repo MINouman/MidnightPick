@@ -516,16 +516,43 @@ function Orders() {
 
 // ── Section: Customers ─────────────────────────────────
 function Customers() {
-  const { customers: ctxCustomers } = useContext(DashCtx);
-  const [search, setSearch] = useState("");
-  const [selected, setSelected] = useState(null);
+  const [customers, setCustomers] = useState([]);
+  const [loading, setLoading]     = useState(true);
+  const [search, setSearch]       = useState("");
+  const [selected, setSelected]   = useState(null);
 
-  const all = ctxCustomers || [];
-  const filtered = all.filter(c =>
+  useEffect(() => {
+    setLoading(true);
+    window.mpApi.fetch('/admin/customers?limit=500').then(res => {
+      if (res?.ok) setCustomers(res.data.customers || []);
+    }).catch(() => {}).finally(() => setLoading(false));
+  }, []);
+
+  const filtered = customers.filter(c =>
     (c.name || '').toLowerCase().includes(search.toLowerCase()) ||
-    (c.phone || '').includes(search) ||
-    (c.email || '').toLowerCase().includes(search.toLowerCase())
+    (c.phone || '').includes(search)
   );
+
+  function exportCsv() {
+    const header = 'Name,Phone,Orders,Total Spent (BDT),Last Address,First Order,Last Order';
+    const rows = customers.map(c => [
+      `"${(c.name || '').replace(/"/g, '""')}"`,
+      c.phone || '',
+      c.order_count || 0,
+      Number(c.total_spent || 0).toFixed(0),
+      `"${(c.last_address || '').replace(/"/g, '""')}"`,
+      c.first_seen ? new Date(c.first_seen).toLocaleDateString('en-GB') : '',
+      c.last_seen  ? new Date(c.last_seen).toLocaleDateString('en-GB')  : '',
+    ].join(','));
+    const csv = [header, ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url;
+    a.download = `customers-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 
   if (selected) {
     const c = selected;
@@ -535,56 +562,58 @@ function Customers() {
           <i className="fa fa-arrow-left" style={{ fontSize: 12 }} /> Back to Customers
         </button>
         <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>{c.name || '—'}</div>
-        <div className="text-muted text-sm mb16">{c.phone || c.email || '—'}</div>
+        <div className="text-muted text-sm mb16">{c.phone || '—'}</div>
         <div className="stat-row mb16">
           <div className="stat-card"><div className="stat-label">Orders</div><div className="stat-value">{c.order_count || 0}</div></div>
           <div className="stat-card"><div className="stat-label">Total Spent</div><div className="stat-value">৳{Number(c.total_spent || 0).toLocaleString()}</div></div>
-          <div className="stat-card"><div className="stat-label">Points</div><div className="stat-value">{(c.points_balance || 0).toLocaleString()}</div></div>
         </div>
         <SectionCard>
-          <div className="row-between mb8 text-sm"><span className="text-muted">Role</span><span style={{ fontWeight: 600 }}>{roleLabel(c.role)}</span></div>
-          <div className="row-between mb8 text-sm"><span className="text-muted">Joined</span><span>{fmtDate(c.created_at)}</span></div>
           <div className="row-between mb8 text-sm"><span className="text-muted">Phone</span><span>{c.phone || '—'}</span></div>
-          {c.email && <div className="row-between mb8 text-sm"><span className="text-muted">Email</span><span>{c.email}</span></div>}
-          <div className="row-between text-sm"><span className="text-muted">Account Status</span><span className={`badge ${c.is_active ? "badge-green" : "badge-red"}`}>{c.is_active ? "Active" : "Suspended"}</span></div>
+          <div className="row-between mb8 text-sm"><span className="text-muted">Last Address</span><span style={{ textAlign: "right", maxWidth: 220 }}>{c.last_address || '—'}</span></div>
+          <div className="row-between mb8 text-sm"><span className="text-muted">First Order</span><span>{fmtDate(c.first_seen)}</span></div>
+          <div className="row-between text-sm"><span className="text-muted">Last Order</span><span>{fmtDate(c.last_seen)}</span></div>
         </SectionCard>
-        <div className="eyebrow mb10 mt16">Admin Actions</div>
-        <div className="col-gap">
-          <button className="btn btn-ghost btn-full">Adjust Points Manually</button>
-          <button className="btn btn-ghost-danger btn-full"><i className="fa fa-ban" style={{ fontSize: 12 }} /> Suspend Account</button>
-        </div>
       </div>
     );
   }
 
   return (
     <div className="dash-inner-wide">
-      <div className="page-title">Customers</div>
-      <input className="input mb16" placeholder="Search by name, phone, or email…" value={search} onChange={e => setSearch(e.target.value)} style={{ maxWidth: 320 }} />
+      <div className="row-between mb16">
+        <div className="page-title" style={{ marginBottom: 0 }}>Customers</div>
+        <button className="btn btn-ghost btn-sm" onClick={exportCsv} disabled={customers.length === 0}>
+          <i className="fa fa-download" style={{ fontSize: 12 }} /> Export CSV
+        </button>
+      </div>
+      <input className="input mb16" placeholder="Search by name or phone…" value={search} onChange={e => setSearch(e.target.value)} style={{ maxWidth: 320 }} />
       <SectionCard style={{ padding: 0, overflow: "hidden" }}>
         <div className="table-wrap">
           <table className="data-table">
             <thead>
-              <tr><th>Name</th><th>Phone</th><th>Orders</th><th>Total Spent</th><th>Points</th><th>Role</th><th>Joined</th></tr>
+              <tr><th>Name</th><th>Phone</th><th>Orders</th><th>Total Spent</th><th>Last Address</th><th>Last Order</th></tr>
             </thead>
             <tbody>
-              {filtered.length === 0 ? (
-                <tr><td colSpan={7} style={{ textAlign: "center", padding: 32, color: "var(--text-65)" }}>No customers found.</td></tr>
+              {loading ? (
+                <tr><td colSpan={6} style={{ textAlign: "center", padding: 24, color: "var(--text-65)" }}>Loading…</td></tr>
+              ) : filtered.length === 0 ? (
+                <tr><td colSpan={6} style={{ textAlign: "center", padding: 32, color: "var(--text-65)" }}>No customers found.</td></tr>
               ) : filtered.map((c, i) => (
                 <tr key={i} style={{ cursor: "pointer" }} onClick={() => setSelected(c)}>
                   <td style={{ fontWeight: 600 }}>{c.name || '—'}</td>
                   <td className="muted mono">{c.phone || '—'}</td>
                   <td>{c.order_count || 0}</td>
                   <td style={{ color: "var(--orange)", fontWeight: 600 }}>৳{Number(c.total_spent || 0).toLocaleString()}</td>
-                  <td>{(c.points_balance || 0).toLocaleString()}</td>
-                  <td><span className={`badge ${roleBadge(c.role)}`}>{roleLabel(c.role)}</span></td>
-                  <td className="muted">{fmtDate(c.created_at)}</td>
+                  <td className="muted" style={{ maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.last_address || '—'}</td>
+                  <td className="muted">{fmtDate(c.last_seen)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       </SectionCard>
+      <div className="text-muted text-sm mt8" style={{ textAlign: "right" }}>
+        {filtered.length} of {customers.length} customers
+      </div>
     </div>
   );
 }
@@ -626,14 +655,162 @@ function Coupons() {
   const [coupTab, setCoupTab] = useState("Festival");
   const [showForm, setShowForm] = useState(false);
   const [festCoupons, setFestCoupons] = useState([]);
-  const [form, setForm] = useState({ code: "", type: "Percentage", value: "", minOrder: "", cap: "", perAccount: "1", expiry: "", active: true });
+  const [festLoading, setFestLoading] = useState(false);
+  const [savingCoupon, setSavingCoupon] = useState(false);
+  const emptyForm = { code: "", type: "Percentage", value: "", minOrder: "", cap: "", expiry: "" };
+  const [form, setForm] = useState(emptyForm);
+  const [editingCode, setEditingCode] = useState(null);
+  const [editForm, setEditForm] = useState({});
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  useEffect(() => {
+    if (coupTab !== "Festival") return;
+    setFestLoading(true);
+    window.mpApi.fetch('/admin/coupons?type=festival').then(res => {
+      setFestCoupons(res?.data?.coupons || []);
+    }).catch(() => {}).finally(() => setFestLoading(false));
+  }, [coupTab]);
+
+  async function createCoupon() {
+    if (!form.code || !form.value) return;
+    setSavingCoupon(true);
+    try {
+      const res = await window.mpApi.fetch('/admin/coupons', {
+        method: 'POST',
+        body: JSON.stringify({
+          code: form.code,
+          type: 'festival',
+          discount_type: form.type === 'Percentage' ? 'pct' : 'flat',
+          discount_value: parseFloat(form.value),
+          min_order: parseFloat(form.minOrder) || 0,
+          max_uses: form.cap ? parseInt(form.cap) : undefined,
+          expires_at: form.expiry || undefined,
+        }),
+      });
+      if (res?.ok) {
+        setFestCoupons(prev => [res.data, ...prev]);
+        setForm(emptyForm);
+        setShowForm(false);
+      } else {
+        alert(res?.error?.message || 'Failed to create coupon.');
+      }
+    } catch (e) {
+      alert(e?.message || 'Failed to create coupon.');
+    } finally {
+      setSavingCoupon(false);
+    }
+  }
+
+  function startEdit(c) {
+    setEditingCode(c.code);
+    setEditForm({
+      type:     c.discount_type === 'pct' ? 'Percentage' : 'Flat amount',
+      value:    String(c.discount_value),
+      minOrder: String(c.min_order || 0),
+      cap:      c.max_uses != null ? String(c.max_uses) : '',
+      expiry:   c.expires_at ? c.expires_at.slice(0, 10) : '',
+    });
+  }
+
+  async function saveEdit(code) {
+    if (!editForm.value) return;
+    setSavingEdit(true);
+    try {
+      const body = {
+        discount_type:  editForm.type === 'Percentage' ? 'pct' : 'flat',
+        discount_value: parseFloat(editForm.value),
+        min_order:      parseFloat(editForm.minOrder) || 0,
+        max_uses:       editForm.cap ? parseInt(editForm.cap) : null,
+        expires_at:     editForm.expiry || null,
+      };
+      const res = await window.mpApi.fetch(`/admin/coupons/${code}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      });
+      if (res?.ok) {
+        setFestCoupons(prev => prev.map(c => c.code === code ? res.data : c));
+        setEditingCode(null);
+      } else {
+        alert(res?.error?.message || 'Failed to save changes.');
+      }
+    } catch (e) {
+      alert(e?.message || 'Failed to save changes.');
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
+  async function toggleCoupon(code) {
+    const isActive = festCoupons.find(c => c.code === code)?.is_active;
+    const action = isActive ? 'Deactivate' : 'Activate';
+    const result = await Swal.fire({
+      title: `${action} coupon?`,
+      text: isActive
+        ? `"${code}" will be disabled and can no longer be used at checkout.`
+        : `"${code}" will be re-enabled for use at checkout.`,
+      icon: 'question',
+      showCancelButton: true,
+      confirmButtonColor: isActive ? '#D94040' : '#FF9100',
+      cancelButtonColor: '#F7E3C9',
+      confirmButtonText: action,
+      cancelButtonText: 'Cancel',
+      background: '#fff',
+      customClass: { cancelButton: 'swal-cancel-dark' },
+    });
+    if (!result.isConfirmed) return;
+    const res = await window.mpApi.fetch(`/admin/coupons/${code}/toggle`, { method: 'PATCH' }).catch(() => null);
+    if (res?.ok) {
+      setFestCoupons(prev => prev.map(c => c.code === code ? { ...c, is_active: res.data.is_active } : c));
+    } else {
+      Swal.fire({ title: 'Failed', text: res?.error?.message || 'Could not update coupon.', icon: 'error', confirmButtonColor: '#FF9100', background: '#fff' });
+    }
+  }
+
+  async function deleteCoupon(code) {
+    const result = await Swal.fire({
+      title: `Delete "${code}"?`,
+      text: 'This coupon will be permanently removed and cannot be undone.',
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonColor: '#D94040',
+      cancelButtonColor: '#F7E3C9',
+      confirmButtonText: 'Delete',
+      cancelButtonText: 'Cancel',
+      background: '#fff',
+      customClass: { cancelButton: 'swal-cancel-dark' },
+    });
+    if (!result.isConfirmed) return;
+    const res = await window.mpApi.fetch(`/admin/coupons/${code}`, { method: 'DELETE' }).catch(() => null);
+    if (res?.ok) {
+      setFestCoupons(prev => prev.filter(c => c.code !== code));
+    } else {
+      Swal.fire({ title: 'Failed', text: res?.error?.message || 'Could not delete coupon.', icon: 'error', confirmButtonColor: '#FF9100', background: '#fff' });
+    }
+  }
 
   async function toggleInfluencerCoupon(code) {
-    const res = await window.mpApi.fetch(`/admin/coupons/${code}/toggle`, { method: 'PATCH' });
+    const isActive = (adminInfluencers || []).find(c => c.code === code)?.is_active !== false;
+    const action = isActive ? 'Deactivate' : 'Activate';
+    const result = await Swal.fire({
+      title: `${action} coupon?`,
+      text: isActive
+        ? `"${code}" will be disabled and can no longer be used at checkout.`
+        : `"${code}" will be re-enabled for use at checkout.`,
+      icon: 'question',
+      showCancelButton: true,
+      confirmButtonColor: isActive ? '#D94040' : '#FF9100',
+      cancelButtonColor: '#F7E3C9',
+      confirmButtonText: action,
+      cancelButtonText: 'Cancel',
+      background: '#fff',
+      customClass: { cancelButton: 'swal-cancel-dark' },
+    });
+    if (!result.isConfirmed) return;
+    const res = await window.mpApi.fetch(`/admin/coupons/${code}/toggle`, { method: 'PATCH' }).catch(() => null);
     if (res?.ok && res?.data) {
       setAdminInfluencers(prev => prev.map(c => c.code === code ? { ...c, is_active: res.data.is_active } : c));
-    } else if (res) {
-      alert(res?.error?.message || res?.message || 'Failed to toggle coupon.');
+    } else {
+      Swal.fire({ title: 'Failed', text: res?.error?.message || 'Failed to toggle coupon.', icon: 'error', confirmButtonColor: '#FF9100', background: '#fff' });
     }
   }
 
@@ -657,20 +834,26 @@ function Coupons() {
               <div style={{ marginTop: 16 }}>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                   <div className="input-group"><label className="input-label">Code</label><input className="input" placeholder="SUMMER25" value={form.code} onChange={e => setForm(f => ({ ...f, code: e.target.value.toUpperCase() }))} /></div>
-                  <div className="input-group"><label className="input-label">Type</label><select className="select" value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value }))}><option>Percentage</option><option>Flat amount</option></select></div>
-                  <div className="input-group"><label className="input-label">Discount Value</label><input className="input" placeholder={form.type === "Percentage" ? "15" : "50"} value={form.value} onChange={e => setForm(f => ({ ...f, value: e.target.value }))} /></div>
+                  <div className="input-group">
+                    <label className="input-label">Type</label>
+                    <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: "1.5px solid var(--border)" }}>
+                      <button type="button" onClick={() => setForm(f => ({ ...f, type: "Percentage" }))} style={{ flex: 1, padding: "10px 12px", background: form.type === "Percentage" ? "var(--orange)" : "transparent", color: form.type === "Percentage" ? "#fff" : "var(--text-65)", fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 13, border: "none", cursor: "pointer", transition: "background .15s" }}>% Percentage</button>
+                      <button type="button" onClick={() => setForm(f => ({ ...f, type: "Flat amount" }))} style={{ flex: 1, padding: "10px 12px", background: form.type === "Flat amount" ? "var(--orange)" : "transparent", color: form.type === "Flat amount" ? "#fff" : "var(--text-65)", fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 13, border: "none", borderLeft: "1.5px solid var(--border)", cursor: "pointer", transition: "background .15s" }}>৳ Amount</button>
+                    </div>
+                  </div>
+                  <div className="input-group">
+                    <label className="input-label">Discount Value</label>
+                    <div style={{ position: "relative" }}>
+                      <input className="input" placeholder={form.type === "Percentage" ? "15" : "50"} value={form.value} onChange={e => setForm(f => ({ ...f, value: e.target.value }))} style={{ paddingRight: 36 }} />
+                      <span style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", fontWeight: 700, color: "var(--text-65)", fontSize: 14, pointerEvents: "none" }}>{form.type === "Percentage" ? "%" : "৳"}</span>
+                    </div>
+                  </div>
                   <div className="input-group"><label className="input-label">Min Order (৳)</label><input className="input" placeholder="200" value={form.minOrder} onChange={e => setForm(f => ({ ...f, minOrder: e.target.value }))} /></div>
                   <div className="input-group"><label className="input-label">Usage Cap</label><input className="input" placeholder="100" value={form.cap} onChange={e => setForm(f => ({ ...f, cap: e.target.value }))} /></div>
-                  <div className="input-group"><label className="input-label">Per-account Limit</label><input className="input" value={form.perAccount} onChange={e => setForm(f => ({ ...f, perAccount: e.target.value }))} /></div>
                   <div className="input-group" style={{ gridColumn: "1/-1" }}><label className="input-label">Expiry</label><input className="input" type="date" value={form.expiry} onChange={e => setForm(f => ({ ...f, expiry: e.target.value }))} /></div>
                 </div>
                 <div className="row mt8" style={{ gap: 10 }}>
-                  <button className="btn btn-primary" onClick={() => {
-                    if (!form.code || !form.value) return;
-                    setFestCoupons(prev => [...prev, { ...form, used: 0 }]);
-                    setForm({ code: "", type: "Percentage", value: "", minOrder: "", cap: "", perAccount: "1", expiry: "", active: true });
-                    setShowForm(false);
-                  }}>Create Coupon</button>
+                  <button className="btn btn-primary" disabled={savingCoupon || !form.code || !form.value} onClick={createCoupon}>{savingCoupon ? 'Saving…' : 'Create Coupon'}</button>
                   <button className="btn btn-ghost" onClick={() => setShowForm(false)}>Cancel</button>
                 </div>
               </div>
@@ -682,25 +865,62 @@ function Coupons() {
               <table className="data-table">
                 <thead><tr><th>Code</th><th>Discount</th><th>Min Order</th><th>Used / Cap</th><th>Expiry</th><th>Status</th><th>Actions</th></tr></thead>
                 <tbody>
-                  {festCoupons.length === 0 ? (
+                  {festLoading ? (
+                    <tr><td colSpan={7} style={{ textAlign: "center", padding: 24, color: "var(--text-65)" }}>Loading…</td></tr>
+                  ) : festCoupons.length === 0 ? (
                     <tr><td colSpan={7} style={{ textAlign: "center", padding: 32, color: "var(--text-65)" }}>No festival coupons yet.</td></tr>
-                  ) : festCoupons.map((c, i) => (
-                    <tr key={i}>
-                      <td className="mono fw700" style={{ color: "var(--blue)" }}>{c.code}</td>
-                      <td>{c.type === "Percentage" ? `${c.value}%` : `৳${c.value}`}</td>
-                      <td className="muted">৳{c.minOrder}</td>
-                      <td>{c.used} / {c.cap}</td>
-                      <td className="muted">{c.expiry}</td>
-                      <td><span className={`badge ${c.active ? "badge-green" : "badge-gray"}`}>{c.active ? "Active" : "Expired"}</span></td>
-                      <td>
-                        <div className="cell-action">
-                          <button className="btn btn-sm btn-ghost" style={{ padding: "5px 10px", fontSize: 11 }} onClick={() => setFestCoupons(prev => prev.map((x, j) => j === i ? { ...x, active: !x.active } : x))}>
-                            {c.active ? "Deactivate" : "Activate"}
-                          </button>
-                          <button className="btn btn-sm btn-ghost" style={{ padding: "5px 10px", fontSize: 11, color: "var(--red)", borderColor: "rgba(229,92,92,.4)" }} onClick={() => setFestCoupons(prev => prev.filter((_, j) => j !== i))}>Delete</button>
-                        </div>
-                      </td>
-                    </tr>
+                  ) : festCoupons.map(c => (
+                    <React.Fragment key={c.code}>
+                      <tr>
+                        <td className="mono fw700" style={{ color: "var(--blue)" }}>{c.code}</td>
+                        <td>{c.discount_type === 'pct' ? `${c.discount_value}%` : `৳${c.discount_value}`}</td>
+                        <td className="muted">৳{c.min_order || 0}</td>
+                        <td>{c.used_count} / {c.max_uses ?? '∞'}</td>
+                        <td className="muted">{c.expires_at ? new Date(c.expires_at).toLocaleDateString() : '—'}</td>
+                        <td><span className={`badge ${c.is_active ? "badge-green" : "badge-gray"}`}>{c.is_active ? "Active" : "Inactive"}</span></td>
+                        <td>
+                          <div className="cell-action">
+                            <button className="btn btn-sm btn-ghost" style={{ padding: "5px 10px", fontSize: 11 }} onClick={() => editingCode === c.code ? setEditingCode(null) : startEdit(c)}>
+                              {editingCode === c.code ? "Cancel" : "Edit"}
+                            </button>
+                            <button className="btn btn-sm btn-ghost" style={{ padding: "5px 10px", fontSize: 11 }} onClick={() => toggleCoupon(c.code)}>
+                              {c.is_active ? "Deactivate" : "Activate"}
+                            </button>
+                            <button className="btn btn-sm btn-ghost" style={{ padding: "5px 10px", fontSize: 11, color: "var(--red)", borderColor: "rgba(229,92,92,.4)" }} onClick={() => deleteCoupon(c.code)}>Delete</button>
+                          </div>
+                        </td>
+                      </tr>
+                      {editingCode === c.code && (
+                        <tr style={{ background: "rgba(255,145,0,.04)" }}>
+                          <td colSpan={7} style={{ padding: "16px 20px" }}>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr auto", gap: 10, alignItems: "flex-end" }}>
+                              <div className="input-group" style={{ marginBottom: 0 }}>
+                                <label className="input-label">Type</label>
+                                <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: "1.5px solid var(--border)" }}>
+                                  <button type="button" onClick={() => setEditForm(f => ({ ...f, type: "Percentage" }))} style={{ flex: 1, padding: "8px", background: editForm.type === "Percentage" ? "var(--orange)" : "transparent", color: editForm.type === "Percentage" ? "#fff" : "var(--text-65)", fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 12, border: "none", cursor: "pointer" }}>% Pct</button>
+                                  <button type="button" onClick={() => setEditForm(f => ({ ...f, type: "Flat amount" }))} style={{ flex: 1, padding: "8px", background: editForm.type === "Flat amount" ? "var(--orange)" : "transparent", color: editForm.type === "Flat amount" ? "#fff" : "var(--text-65)", fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 12, border: "none", borderLeft: "1.5px solid var(--border)", cursor: "pointer" }}>৳ Flat</button>
+                                </div>
+                              </div>
+                              <div className="input-group" style={{ marginBottom: 0 }}>
+                                <label className="input-label">Value {editForm.type === "Percentage" ? "(%)" : "(৳)"}</label>
+                                <input className="input" value={editForm.value} onChange={e => setEditForm(f => ({ ...f, value: e.target.value }))} placeholder={editForm.type === "Percentage" ? "15" : "100"} />
+                              </div>
+                              <div className="input-group" style={{ marginBottom: 0 }}>
+                                <label className="input-label">Min Order (৳)</label>
+                                <input className="input" value={editForm.minOrder} onChange={e => setEditForm(f => ({ ...f, minOrder: e.target.value }))} placeholder="0" />
+                              </div>
+                              <div className="input-group" style={{ marginBottom: 0 }}>
+                                <label className="input-label">Expiry</label>
+                                <input className="input" type="date" value={editForm.expiry} onChange={e => setEditForm(f => ({ ...f, expiry: e.target.value }))} />
+                              </div>
+                              <button className="btn btn-primary" style={{ whiteSpace: "nowrap", marginBottom: 0 }} disabled={savingEdit || !editForm.value} onClick={() => saveEdit(c.code)}>
+                                {savingEdit ? "Saving…" : "Save"}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                   ))}
                 </tbody>
               </table>
@@ -921,6 +1141,24 @@ function Settings() {
 }
 
 // ── Section: Products ──────────────────────────────────
+const BEAN_VARIETIES  = ["Robusta", "Arabica", "Liberica", "Excelsa"];
+const ROAST_OPTIONS   = ["Light Roast", "Medium Roast", "Dark Roast"];
+const PROCESS_OPTIONS = ["Freeze Dried", "Spray Dried"];
+
+function parseBlend(str) {
+  if (!str || !str.trim()) return [{ variety: "Robusta", pct: "" }];
+  const parsed = str.split("·").map(s => s.trim()).filter(Boolean).map(p => {
+    const m = p.match(/^(.+?)\s+(\d+)%$/);
+    return m ? { variety: m[1].trim(), pct: m[2] } : null;
+  }).filter(Boolean);
+  return parsed.length ? parsed : [{ variety: "Robusta", pct: "" }];
+}
+
+function serializeBlend(parts) {
+  const valid = parts.filter(p => p.variety && parseInt(p.pct) > 0);
+  return valid.length ? valid.map(p => `${p.variety} ${p.pct}%`).join(" · ") : "";
+}
+
 function Products() {
   const [prodTab, setProdTab] = useState("Products");
   const { adminProducts: products, setAdminProducts: setProducts } = useContext(DashCtx);
@@ -931,8 +1169,12 @@ function Products() {
   const fileRef = useRef(null);
   const activeImgIdx = useRef(0);
 
-  const emptyProd = { name: "", description: "", price: "", stock: "", qty: "", unit: "g", status: "Active", images: [] };
+  const emptyProd = { name: "", description: "", price: "", stock: "", qty: "", unit: "g", status: "Active", images: [], category: "", badge: "", roast: "", origin: "" };
   const [form, setForm] = useState(emptyProd);
+  const [blendMode, setBlendMode]       = useState("single"); // "single" | "blend"
+  const [singleVariety, setSingleVariety] = useState("Robusta");
+  const [blendParts, setBlendParts]     = useState([{ variety: "Robusta", pct: "" }]);
+  const [processVal, setProcessVal]     = useState("");
 
   const emptyPkg = { name: "", description: "", price: "", status: "Active", productIds: [], quantities: {} };
   const [pkgForm, setPkgForm] = useState(emptyPkg);
@@ -941,25 +1183,51 @@ function Products() {
     const file = e.target.files[0];
     if (!file) { e.target.value = ""; return; }
     const idx = activeImgIdx.current;
-    const reader = new FileReader();
-    reader.onload = ev => {
+    e.target.value = "";
+
+    const objectUrl = URL.createObjectURL(file);
+    const img = new window.Image();
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      const MAX = 900;
+      let w = img.naturalWidth, h = img.naturalHeight;
+      if (w > MAX) { h = Math.round(h * MAX / w); w = MAX; }
+      if (h > MAX) { w = Math.round(w * MAX / h); h = MAX; }
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      // prefer WebP (smaller), fall back to JPEG
+      const compressed = canvas.toDataURL('image/webp', 0.82) || canvas.toDataURL('image/jpeg', 0.82);
       setForm(f => {
         const imgs = [...(f.images || [])];
-        imgs[idx] = ev.target.result;
+        imgs[idx] = compressed;
         return { ...f, images: imgs };
       });
     };
-    reader.readAsDataURL(file);
-    e.target.value = "";
+    img.src = objectUrl;
   }
 
   function openAddProduct() {
     setForm(emptyProd);
+    setBlendMode("single");
+    setSingleVariety("Robusta");
+    setBlendParts([{ variety: "Robusta", pct: "" }]);
+    setProcessVal("");
     setPanel({ type: "add" });
   }
 
   function openEditProduct(p) {
-    setForm({ ...p, price: String(p.price), stock: String(p.stock), qty: p.qty ? String(p.qty) : "", unit: p.unit || "g", images: p.images || (p.image ? [p.image] : []) });
+    setForm({ ...p, price: String(p.price), stock: String(p.stock), qty: p.qty ? String(p.qty) : "", unit: p.unit || "g", images: p.images || (p.image ? [p.image] : []), category: p.category || "", badge: p.badge || "", roast: p.roast || "", origin: p.origin || "" });
+    const mode = p.blend && p.blend.includes("%") ? "blend" : "single";
+    setBlendMode(mode);
+    if (mode === "single") {
+      setSingleVariety(p.blend || "Robusta");
+      setBlendParts([{ variety: "Robusta", pct: "" }]);
+    } else {
+      setSingleVariety("Robusta");
+      setBlendParts(parseBlend(p.blend));
+    }
+    setProcessVal(p.process || "");
     setPanel({ type: "edit", data: p });
   }
 
@@ -976,6 +1244,13 @@ function Products() {
     const qtyVal = parseInt(form.qty);
     if (qtyVal > 0) body.qty = qtyVal;
     if (form.unit) body.unit = form.unit;
+    if (form.category) body.category = form.category;
+    if (form.badge)    body.badge    = form.badge;
+    if (form.roast)    body.roast    = form.roast;
+    if (form.origin)   body.origin   = form.origin;
+    const blendStr = blendMode === "single" ? singleVariety : serializeBlend(blendParts);
+    if (blendStr)      body.blend    = blendStr;
+    if (processVal)    body.process  = processVal;
     try {
       let res;
       if (panel.type === "add") {
@@ -1057,7 +1332,7 @@ function Products() {
               <div key={p.id} className="card" style={{ display: "flex", flexDirection: "column", gap: 10, padding: 14, height: "100%" }}>
                 <div style={{ height: 130, borderRadius: 8, overflow: "hidden", background: "var(--bg-soft)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                   {(p.images?.[0] || p.image)
-                    ? <img src={p.images?.[0] || p.image} alt={p.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    ? <img src={p.images?.[0] || p.image} alt={p.name} loading="lazy" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                     : <i className="fa fa-coffee" style={{ fontSize: 36, color: "var(--text-15)" }} />}
                 </div>
                 <div className="row-between" style={{ flexShrink: 0 }}>
@@ -1148,7 +1423,7 @@ function Products() {
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
                 {(form.images || []).map((img, idx) => (
                   <div key={idx} style={{ position: "relative", width: 80, height: 80, flexShrink: 0 }}>
-                    <img src={img} alt={`Image ${idx + 1}`} style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 8, border: "1px solid var(--text-08)" }} />
+                    <img src={img} alt={`Image ${idx + 1}`} loading="lazy" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 8, border: "1px solid var(--text-08)" }} />
                     {idx === 0 && <span style={{ position: "absolute", bottom: 0, left: 0, right: 0, background: "rgba(0,0,0,.55)", color: "#fff", fontSize: 9, textAlign: "center", padding: "2px 0", borderRadius: "0 0 8px 8px" }}>Main</span>}
                     <button onClick={() => setForm(f => ({ ...f, images: f.images.filter((_, i) => i !== idx) }))} style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, borderRadius: "50%", background: "var(--red)", border: "none", color: "#fff", fontSize: 11, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0, lineHeight: 1 }}>×</button>
                   </div>
@@ -1197,6 +1472,126 @@ function Products() {
                 <select className="select" value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))}>
                   {PRODUCT_STATUSES.map(s => <option key={s}>{s}</option>)}
                 </select>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div className="input-group">
+                  <label className="input-label">Category</label>
+                  <input className="input" placeholder="e.g. Premium Coffee" value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} />
+                </div>
+                <div className="input-group">
+                  <label className="input-label">Badge</label>
+                  <input className="input" placeholder="e.g. BEST VALUE" value={form.badge} onChange={e => setForm(f => ({ ...f, badge: e.target.value }))} />
+                </div>
+              </div>
+              <div className="eyebrow mt8 mb8" style={{ fontSize: 11, color: "var(--cream-65)", textTransform: "uppercase", letterSpacing: ".06em" }}>Specifications</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div className="input-group">
+                  <label className="input-label">Roast</label>
+                  <select className="select" value={form.roast} onChange={e => setForm(f => ({ ...f, roast: e.target.value }))}>
+                    <option value="">— Select —</option>
+                    {ROAST_OPTIONS.map(r => <option key={r}>{r}</option>)}
+                  </select>
+                </div>
+                <div className="input-group">
+                  <label className="input-label">Origin</label>
+                  <input className="input" placeholder="e.g. Colombia" value={form.origin} onChange={e => setForm(f => ({ ...f, origin: e.target.value }))} />
+                </div>
+              </div>
+              <div className="input-group">
+                <label className="input-label">Process</label>
+                <select className="select" value={processVal} onChange={e => setProcessVal(e.target.value)}>
+                  <option value="">— Select —</option>
+                  {PROCESS_OPTIONS.map(p => <option key={p}>{p}</option>)}
+                </select>
+              </div>
+              <div className="input-group">
+                <label className="input-label">Bean</label>
+
+                {blendMode === "single" ? (
+                  <>
+                    <select
+                      className="select"
+                      value={singleVariety}
+                      onChange={e => setSingleVariety(e.target.value)}
+                    >
+                      {BEAN_VARIETIES.map(v => <option key={v}>{v}</option>)}
+                    </select>
+                    <button
+                      onClick={() => {
+                        setBlendParts([{ variety: singleVariety, pct: "" }, { variety: "Arabica", pct: "" }]);
+                        setBlendMode("blend");
+                      }}
+                      style={{ marginTop: 8, width: "100%", padding: "9px 0", background: "rgba(255,160,0,.12)", border: "1px dashed rgba(255,160,0,.45)", borderRadius: 8, color: "var(--orange)", fontSize: 12, fontWeight: 600, cursor: "pointer", letterSpacing: ".02em" }}
+                    >
+                      <i className="fa fa-plus" style={{ fontSize: 10, marginRight: 6 }} />Add Blend
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                      <button
+                        onClick={() => { setSingleVariety(blendParts[0]?.variety || "Robusta"); setBlendMode("single"); }}
+                        style={{ background: "none", border: "none", cursor: "pointer", color: "var(--cream-65)", fontSize: 11, padding: 0, textDecoration: "underline" }}
+                      >
+                        ← Single Origin
+                      </button>
+                      {(() => {
+                        const total = blendParts.reduce((s, p) => s + (parseInt(p.pct) || 0), 0);
+                        if (total === 0) return null;
+                        return (
+                          <span style={{ fontSize: 11, fontWeight: 700, color: total === 100 ? "var(--green)" : "var(--red)" }}>
+                            {total === 100 ? "✓ 100%" : `${total}% — must be 100%`}
+                          </span>
+                        );
+                      })()}
+                    </div>
+                    {blendParts.map((part, idx) => (
+                      <div key={idx} style={{ display: "flex", gap: 6, marginBottom: 6, alignItems: "center" }}>
+                        <select
+                          className="select"
+                          value={part.variety}
+                          onChange={e => setBlendParts(prev => prev.map((p, i) => i === idx ? { ...p, variety: e.target.value } : p))}
+                          style={{ flex: 1 }}
+                        >
+                          {BEAN_VARIETIES.map(v => <option key={v}>{v}</option>)}
+                        </select>
+                        <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                          <input
+                            className="input"
+                            type="number"
+                            min="1"
+                            max="100"
+                            placeholder="0"
+                            value={part.pct}
+                            onChange={e => setBlendParts(prev => prev.map((p, i) => i === idx ? { ...p, pct: e.target.value } : p))}
+                            style={{ width: 62, textAlign: "center" }}
+                          />
+                          <span style={{ fontSize: 13, color: "var(--cream-65)" }}>%</span>
+                        </div>
+                        <button
+                          onClick={() => {
+                            if (blendParts.length === 2) {
+                              setSingleVariety(blendParts[idx === 0 ? 1 : 0].variety);
+                              setBlendMode("single");
+                            } else {
+                              setBlendParts(prev => prev.filter((_, i) => i !== idx));
+                            }
+                          }}
+                          style={{ background: "none", border: "none", cursor: "pointer", color: "var(--red)", fontSize: 16, padding: "0 4px", lineHeight: 1 }}
+                          aria-label="Remove"
+                        >×</button>
+                      </div>
+                    ))}
+                    {blendParts.length < 4 && (
+                      <button
+                        onClick={() => setBlendParts(prev => [...prev, { variety: "Arabica", pct: "" }])}
+                        style={{ marginTop: 4, padding: "7px 14px", background: "rgba(255,160,0,.08)", border: "1px dashed rgba(255,160,0,.35)", borderRadius: 8, color: "var(--orange)", fontSize: 11, fontWeight: 600, cursor: "pointer" }}
+                      >
+                        <i className="fa fa-plus" style={{ fontSize: 9, marginRight: 5 }} />Add variety
+                      </button>
+                    )}
+                  </>
+                )}
               </div>
               <div className="divider mt4" />
               <div className="col-gap mt16">
@@ -1320,11 +1715,12 @@ function Sidebar({ section, setSection, onLogout }) {
     { id: "orders",     icon: "fa-box",             label: "Orders", badge: activeOrders > 0 ? String(activeOrders) : null },
     { id: "products",   icon: "fa-box-open",        label: "Products" },
     { id: "customers",  icon: "fa-users",           label: "Customers" },
-    { id: "subs",       icon: "fa-calendar-check",  label: "Subscriptions" },
+    // { id: "subs",       icon: "fa-calendar-check",  label: "Subscriptions" },
     { id: "coupons",    icon: "fa-ticket-alt",      label: "Coupons" },
-    { id: "crew",       icon: "fa-fire",            label: "Crew" },
+    // { id: "reviews",    icon: "fa-star-half-alt",   label: "Reviews" },
+    // { id: "crew",       icon: "fa-fire",            label: "Crew" },
     { id: "influencer", icon: "fa-bolt",            label: "Influencers" },
-    { id: "points",     icon: "fa-star",            label: "Points &amp; Redemptions" },
+    // { id: "points",     icon: "fa-star",            label: "Points &amp; Redemptions" },
     { id: "financials", icon: "fa-chart-line",      label: "Financials" },
     { id: "settings",   icon: "fa-cog",             label: "Settings" },
   ];
@@ -1361,15 +1757,14 @@ function AdminDashboard() {
   const [section, setSection] = useState("overview");
   const [logoutOpen, setLogoutOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [authed, setAuthed] = useState(null); // null=checking, true=ok, false=needs login
   const [ctxData, setCtxData] = useState({ user: null, orders: [], customers: [], stats: null });
   const [adminProducts, setAdminProducts] = useState([]);
   const [adminInfluencers, setAdminInfluencers] = useState([]);
 
-  useEffect(() => {
-    window.mpApi.guard(["admin"]);
+  function loadDashboard() {
     const stored = localStorage.getItem('mp_user');
     const user = stored ? JSON.parse(stored) : null;
-
     Promise.all([
       window.mpApi.fetch('/admin/stats').catch(() => null),
       window.mpApi.fetch('/admin/orders?limit=50').catch(() => null),
@@ -1387,7 +1782,25 @@ function AdminDashboard() {
       setAdminProducts(prodsRes?.data?.products || []);
       setLoading(false);
     });
+  }
+
+  useEffect(() => {
+    const token = localStorage.getItem('mp_access_token');
+    const raw   = localStorage.getItem('mp_user');
+    if (!token || !raw) { setAuthed(false); setLoading(false); return; }
+    try {
+      const user = JSON.parse(raw);
+      if (user.role !== 'admin') { setAuthed(false); setLoading(false); return; }
+    } catch { setAuthed(false); setLoading(false); return; }
+    setAuthed(true);
+    loadDashboard();
   }, []);
+
+  function onLoginSuccess() {
+    setAuthed(true);
+    setLoading(true);
+    loadDashboard();
+  }
 
   function render() {
     switch (section) {
@@ -1395,11 +1808,12 @@ function AdminDashboard() {
       case "orders":     return <Orders />;
       case "products":   return <Products />;
       case "customers":  return <Customers />;
-      case "subs":       return <Subscriptions />;
+      // case "subs":       return <Subscriptions />;
       case "coupons":    return <Coupons />;
-      case "crew":       return <CrewManagement />;
+      // case "reviews":    return <Reviews />;
+      // case "crew":       return <CrewManagement />;
       case "influencer": return <InfluencersSection />;
-      case "points":     return <PointsAdmin />;
+      // case "points":     return <PointsAdmin />;
       case "financials": return <Financials />;
       case "settings":   return <Settings />;
       default:           return null;
@@ -1407,6 +1821,7 @@ function AdminDashboard() {
   }
 
   if (loading) return <LoadingScreen />;
+  if (!authed)  return <AdminLogin onSuccess={onLoginSuccess} />;
 
   return (
     <DashCtx.Provider value={{...ctxData, adminProducts, setAdminProducts, adminInfluencers, setAdminInfluencers}}>
@@ -1616,6 +2031,144 @@ function InfluencersSection() {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+// ── Reviews ────────────────────────────────────────────
+function Reviews() {
+  const [filter, setFilter] = useState('pending');
+  const [reviews, setReviews] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  async function load(f) {
+    setLoading(true);
+    const q = f === 'pending' ? '?approved=false' : f === 'approved' ? '?approved=true' : '';
+    const res = await window.mpApi.fetch(`/admin/reviews${q}`).catch(() => null);
+    setReviews(res?.data?.reviews || []);
+    setLoading(false);
+  }
+
+  useEffect(() => { load(filter); }, [filter]);
+
+  async function approve(id, approved) {
+    const res = await window.mpApi.fetch(`/admin/reviews/${id}/approve`, {
+      method: 'PATCH',
+      body: JSON.stringify({ approved }),
+    }).catch(() => null);
+    if (res?.ok) setReviews(prev => prev.map(r => r.id === id ? { ...r, is_approved: approved } : r));
+  }
+
+  async function remove(id) {
+    if (!window.confirm('Permanently delete this review?')) return;
+    const res = await window.mpApi.fetch(`/admin/reviews/${id}`, { method: 'DELETE' }).catch(() => null);
+    if (res?.ok) setReviews(prev => prev.filter(r => r.id !== id));
+  }
+
+  return (
+    <div className="dash-inner-wide">
+      <div className="row-between mb20" style={{ alignItems: "flex-start" }}>
+        <div className="page-title" style={{ marginBottom: 0 }}>Reviews</div>
+        <button className="btn btn-ghost btn-sm" onClick={() => load(filter)}><i className="fa fa-sync" style={{ fontSize: 12 }} /> Refresh</button>
+      </div>
+      <div className="toggle-group" style={{ marginBottom: 16 }}>
+        {[['pending', 'Pending'], ['approved', 'Approved'], ['all', 'All']].map(([val, label]) => (
+          <button key={val} className={`toggle-btn ${filter === val ? 'active' : ''}`} onClick={() => setFilter(val)}>{label}</button>
+        ))}
+      </div>
+      <SectionCard style={{ padding: 0, overflow: 'hidden' }}>
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead>
+              <tr><th>Reviewer</th><th>Rating</th><th>Review</th><th>Date</th><th>Status</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={6} style={{ textAlign: 'center', padding: 24, color: 'var(--text-65)' }}>Loading…</td></tr>
+              ) : reviews.length === 0 ? (
+                <tr><td colSpan={6} style={{ textAlign: 'center', padding: 32, color: 'var(--text-65)' }}>No reviews found.</td></tr>
+              ) : reviews.map(r => (
+                <tr key={r.id}>
+                  <td style={{ fontWeight: 600 }}>{r.reviewer_name}</td>
+                  <td style={{ color: '#FF9100', letterSpacing: 1 }}>
+                    {'★'.repeat(r.rating)}{'☆'.repeat(5 - r.rating)}
+                    <span style={{ color: 'var(--text-65)', fontSize: 11, marginLeft: 4 }}>{r.rating}/5</span>
+                  </td>
+                  <td style={{ maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.comment}</td>
+                  <td className="muted">{new Date(r.created_at).toLocaleDateString()}</td>
+                  <td><span className={`badge ${r.is_approved ? 'badge-green' : 'badge-gray'}`}>{r.is_approved ? 'Approved' : 'Pending'}</span></td>
+                  <td>
+                    <div className="cell-action">
+                      {!r.is_approved
+                        ? <button className="btn btn-sm btn-primary" style={{ padding: '5px 10px', fontSize: 11 }} onClick={() => approve(r.id, true)}>Approve</button>
+                        : <button className="btn btn-sm btn-ghost" style={{ padding: '5px 10px', fontSize: 11 }} onClick={() => approve(r.id, false)}>Unapprove</button>
+                      }
+                      <button className="btn btn-sm btn-ghost" style={{ padding: '5px 10px', fontSize: 11, color: 'var(--red)', borderColor: 'rgba(229,92,92,.4)' }} onClick={() => remove(r.id)}>Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </SectionCard>
+    </div>
+  );
+}
+
+// ── Admin Login ────────────────────────────────────────
+function AdminLogin({ onSuccess }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function handleLogin(e) {
+    e.preventDefault();
+    setError('');
+    setBusy(true);
+    try {
+      const res = await fetch(window.mpApi.base + '/auth/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json();
+      if (!data.ok) { setError(data.error?.message || 'Login failed.'); return; }
+      localStorage.setItem('mp_access_token', data.data.access_token);
+      localStorage.setItem('mp_refresh_token', data.data.refresh_token);
+      localStorage.setItem('mp_user', JSON.stringify(data.data.user));
+      onSuccess();
+    } catch {
+      setError('Could not connect to server. Is the backend running?');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)' }}>
+      <div style={{ width: 360, padding: 32, background: 'var(--card)', borderRadius: 16, border: '1px solid var(--text-08)', boxShadow: 'var(--shadow-md)' }}>
+        <div style={{ textAlign: 'center', marginBottom: 28 }}>
+          <img src="assets/logo.png" alt="Midnight Pick" style={{ height: 40, marginBottom: 12 }} />
+          <div style={{ fontFamily: 'var(--font)', fontWeight: 800, fontSize: 20, color: 'var(--text)' }}>Admin Login</div>
+          <div style={{ fontSize: 13, color: 'var(--text-65)', marginTop: 4 }}>Midnight Pick Dashboard</div>
+        </div>
+        <form onSubmit={handleLogin}>
+          <div className="input-group">
+            <label className="input-label">Email</label>
+            <input className="input" type="email" required autoFocus value={email} onChange={e => setEmail(e.target.value)} placeholder="admin@midnightpick.com" />
+          </div>
+          <div className="input-group" style={{ marginBottom: error ? 8 : 20 }}>
+            <label className="input-label">Password</label>
+            <input className="input" type="password" required value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" />
+          </div>
+          {error && <div style={{ color: 'var(--red)', fontSize: 13, marginBottom: 16, padding: '8px 12px', background: 'rgba(229,92,92,.1)', borderRadius: 8 }}>{error}</div>}
+          <button className="btn btn-primary btn-full" type="submit" disabled={busy}>
+            {busy ? 'Signing in…' : 'Sign In'}
+          </button>
+        </form>
+      </div>
     </div>
   );
 }

@@ -11,7 +11,6 @@
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500;700&display=swap" rel="stylesheet"/>
-<script>if(!localStorage.getItem('mp_access_token')){window.location.replace('index.html');}</script>
 <script src="mp-api.js"></script>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
@@ -2065,10 +2064,77 @@ function useIsMobile(){
   return m;
 }
 
+/* ── Mobile Login Screen ─────────────────────────────────── */
+function MobileLogin({onSuccess}){
+  const[email,setEmail]=useState('');
+  const[pw,setPw]=useState('');
+  const[err,setErr]=useState('');
+  const[busy,setBusy]=useState(false);
+
+  async function submit(e){
+    e.preventDefault();
+    setErr('');setBusy(true);
+    try{
+      const res=await fetch(window.mpApi.base+'/auth/admin/login',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({email,password:pw}),
+      });
+      const d=await res.json();
+      if(!d.ok){setErr(d.error?.message||'Login failed.');setBusy(false);return;}
+      localStorage.setItem('mp_access_token',d.data.access_token);
+      localStorage.setItem('mp_refresh_token',d.data.refresh_token);
+      localStorage.setItem('mp_user',JSON.stringify(d.data.user));
+      onSuccess(d.data.user);
+    }catch{
+      setErr('Could not reach server. Is the backend running?');
+      setBusy(false);
+    }
+  }
+
+  return(
+    <div style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',
+      padding:'32px 24px 48px',background:C.bg}}>
+      <img src="assets/logo.png" alt="Midnight Pick" style={{width:80,marginBottom:20}}/>
+      <div style={{...sans,fontSize:22,fontWeight:700,color:C.text,marginBottom:4}}>Admin Login</div>
+      <div style={{...sans,fontSize:13,color:C.muted,marginBottom:28}}>Midnight Pick Dashboard</div>
+      <form onSubmit={submit} style={{width:'100%',maxWidth:340}}>
+        <div style={{marginBottom:14}}>
+          <div style={{...mono,fontSize:9,color:C.muted,letterSpacing:'0.15em',textTransform:'uppercase',marginBottom:6}}>Email</div>
+          <input type="email" required autoFocus value={email} onChange={e=>setEmail(e.target.value)}
+            placeholder="admin@midnightpick.com"
+            style={{width:'100%',background:'#fff',border:'1px solid rgba(44,24,16,0.18)',borderRadius:8,
+              padding:'12px 14px',color:C.text,...sans,fontSize:14,outline:'none'}}/>
+        </div>
+        <div style={{marginBottom:err?12:22}}>
+          <div style={{...mono,fontSize:9,color:C.muted,letterSpacing:'0.15em',textTransform:'uppercase',marginBottom:6}}>Password</div>
+          <input type="password" required value={pw} onChange={e=>setPw(e.target.value)}
+            placeholder="••••••••"
+            style={{width:'100%',background:'#fff',border:'1px solid rgba(44,24,16,0.18)',borderRadius:8,
+              padding:'12px 14px',color:C.text,...sans,fontSize:14,outline:'none'}}/>
+        </div>
+        {err&&(
+          <div style={{...sans,fontSize:12,color:C.red,marginBottom:16,padding:'10px 12px',
+            background:'rgba(229,115,115,0.1)',border:'1px solid rgba(229,115,115,0.3)',borderRadius:8}}>
+            {err}
+          </div>
+        )}
+        <button type="submit" disabled={busy}
+          style={{width:'100%',padding:'13px',borderRadius:8,border:'none',
+            background:busy?'rgba(255,145,0,0.45)':C.orange,color:'#1a0800',
+            ...sans,fontSize:14,fontWeight:700,cursor:busy?'not-allowed':'pointer',
+            opacity:busy?0.75:1}}>
+          {busy?'Signing in…':'Sign In'}
+        </button>
+      </form>
+    </div>
+  );
+}
+
 function App(){
   const storedUser=localStorage.getItem('mp_user');
   const initUser=storedUser?JSON.parse(storedUser):null;
-  const role=initUser?.role||null;
+  const [role,setRole]=useState(initUser?.role||null);
 
   const [adminProducts,setAdminProducts]=useState([]);
   const [adminInfluencers,setAdminInfluencers]=useState([]);
@@ -2151,12 +2217,7 @@ function App(){
               <BottomNav role={dash.role} tab={dash.tab} setTab={dash.setTab} mobile/>
             </>
           )}
-          {!role&&(
-            <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100%',flexDirection:'column',gap:16}}>
-              <img src="assets/logo.png" alt="Midnight Pick" style={{width:48,opacity:.6}}/>
-              <div style={{...sans,fontSize:13,color:C.muted}}>Redirecting…</div>
-            </div>
-          )}
+          {!role&&<MobileLogin onSuccess={u=>setRole(u?.role||null)}/>}
         </div>
       </MobileCtx.Provider>
     );

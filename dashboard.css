@@ -477,3 +477,11 @@ body {
   border-color: var(--cream-65);
   background: var(--cream-10);
 }
+
+/* SweetAlert2 overrides */
+.swal2-popup { border-radius: 16px !important; font-family: var(--font-sans, sans-serif) !important; }
+.swal2-title { font-family: var(--font-display, sans-serif) !important; color: #1a0800 !important; font-size: 18px !important; }
+.swal2-html-container { color: #5a3e28 !important; font-size: 14px !important; }
+.swal-cancel-dark { color: #1a0800 !important; border: 1.5px solid #c4aa88 !important; }
+.swal-cancel-dark:hover { background: var(--bg-soft, #EDD5AF) !important; }
+

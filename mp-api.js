@@ -8,7 +8,7 @@
     options = options || {};
     const token = localStorage.getItem('mp_access_token');
     const headers = Object.assign(
-      { 'Content-Type': 'application/json' },
+      options.body !== undefined ? { 'Content-Type': 'application/json' } : {},
       token ? { Authorization: 'Bearer ' + token } : {},
       options.headers || {}
     );

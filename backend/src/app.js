@@ -13,6 +13,7 @@ async function build() {
         : undefined,
     },
     trustProxy: true,
+    bodyLimit: 15 * 1024 * 1024, // 15 MB — allows up to 5 compressed product images
     ajv: { customOptions: { allErrors: true } },
   })
 
@@ -26,10 +27,12 @@ async function build() {
   })
 
   await app.register(require('@fastify/rate-limit'), {
-    global:      true,
-    max:         200,
-    timeWindow:  '1 minute',
-    redis:       require('./config/redis').redis,
+    global:       true,
+    max:          200,
+    timeWindow:   '1 minute',
+    // Use Redis only in production; in development use fast in-memory counting
+    redis:        env.NODE_ENV === 'production' ? require('./config/redis').redis : undefined,
+    skipOnError:  true,
     keyGenerator: (req) => req.ip,
     errorResponseBuilder: () => ({
       ok: false,
@@ -108,8 +111,12 @@ async function build() {
   // ── Routes ────────────────────────────────────────────────────────────
 
   // Public
-  await app.register(require('./routes/auth'),  { prefix: '/api/v1/auth' })
-  await app.register(require('./routes/track'), { prefix: '/api/v1/track' })
+  await app.register(require('./routes/auth'),         { prefix: '/api/v1/auth' })
+  await app.register(require('./routes/track'),        { prefix: '/api/v1/track' })
+  await app.register(require('./routes/products'),     { prefix: '/api/v1/products' })
+  await app.register(require('./routes/coupons'),      { prefix: '/api/v1/coupons' })
+  await app.register(require('./routes/orders-guest'), { prefix: '/api/v1/orders' })
+  await app.register(require('./routes/reviews'),      { prefix: '/api/v1/reviews' })
 
   // Protected (JWT required on every request)
   await app.register(async (api) => {

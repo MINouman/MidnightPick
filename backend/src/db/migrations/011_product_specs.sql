@@ -1,0 +1,8 @@
+-- 011: Product spec columns for shop page display
+
+ALTER TABLE products
+  ADD COLUMN IF NOT EXISTS roast   VARCHAR(100),
+  ADD COLUMN IF NOT EXISTS origin  VARCHAR(100),
+  ADD COLUMN IF NOT EXISTS blend   VARCHAR(100),
+  ADD COLUMN IF NOT EXISTS process VARCHAR(100),
+  ADD COLUMN IF NOT EXISTS badge   VARCHAR(100);

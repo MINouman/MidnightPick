@@ -78,37 +78,36 @@ module.exports = async function adminRoutes(app) {
     return { ok: true, data: rows[0] }
   })
 
-  // GET /admin/customers
+  // GET /admin/customers — from persistent customers table (upserted on each order)
   app.get('/customers', {
     schema: {
       querystring: {
         type: 'object',
         properties: {
           page:   { type: 'integer', minimum: 1, default: 1 },
-          limit:  { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+          limit:  { type: 'integer', minimum: 1, maximum: 500, default: 50 },
           search: { type: 'string', maxLength: 50 },
         },
       },
     },
   }, async (req) => {
-    const { page = 1, limit = 20, search } = req.query
+    const { page = 1, limit = 50, search } = req.query
     const offset = (page - 1) * limit
-    const conditions = [`u.role != 'admin'`]
     const params = []
+    const searchClause = search
+      ? (params.push(`%${search}%`), `AND (name ILIKE $1 OR phone ILIKE $1)`)
+      : ''
 
-    if (search) { params.push(`%${search}%`); conditions.push(`(u.phone ILIKE $${params.length} OR u.name ILIKE $${params.length} OR u.email ILIKE $${params.length})`) }
-
-    const where = `WHERE ${conditions.join(' AND ')}`
-    const { rows: countRows } = await query(`SELECT COUNT(*) FROM users u ${where}`, params)
-    const total = parseInt(countRows[0].count, 10)
+    const { rows: cr } = await query(
+      `SELECT COUNT(*) FROM customers WHERE 1=1 ${searchClause}`, params
+    )
+    const total = parseInt(cr[0].count, 10)
 
     const dataParams = [...params, limit, offset]
     const { rows } = await query(
-      `SELECT u.id, u.name, u.phone, u.email, u.role, u.points_balance, u.is_active, u.created_at,
-              (SELECT COUNT(*) FROM orders o WHERE o.user_id = u.id) AS order_count,
-              (SELECT COALESCE(SUM(o.total),0) FROM orders o WHERE o.user_id = u.id AND o.status != 'cancelled') AS total_spent
-       FROM   users u ${where}
-       ORDER  BY u.created_at DESC
+      `SELECT id, phone, name, last_address, order_count, total_spent, first_seen, last_seen
+       FROM   customers WHERE 1=1 ${searchClause}
+       ORDER  BY last_seen DESC
        LIMIT  $${dataParams.length - 1} OFFSET $${dataParams.length}`,
       dataParams
     )
@@ -172,8 +171,8 @@ module.exports = async function adminRoutes(app) {
     // Ensure coupon row exists — POST /influencers uses ON CONFLICT DO NOTHING which may have skipped it
     await query(
       `INSERT INTO coupons (code, type, discount_type, discount_value, min_order)
-       SELECT $1, 'influencer', 'pct', COALESCE(comm_rate::int, 15), 0
-       FROM influencers WHERE code = $1
+       SELECT $1::varchar, 'influencer', 'pct', COALESCE(comm_rate::int, 15), 0
+       FROM influencers WHERE code = $1::varchar
        ON CONFLICT (code) DO NOTHING`,
       [code]
     )
@@ -323,7 +322,8 @@ module.exports = async function adminRoutes(app) {
   // GET /admin/products
   app.get('/products', async () => {
     const { rows } = await query(
-      `SELECT id, sku, name, description, category, status, price, stock, qty, unit, images, created_at
+      `SELECT id, sku, name, description, category, badge, status, price, stock, qty, unit,
+              roast, origin, blend, process, images, created_at
        FROM products ORDER BY created_at DESC`
     )
     return { ok: true, data: { products: rows } }
@@ -345,17 +345,26 @@ module.exports = async function adminRoutes(app) {
           status:      { type: 'string', maxLength: 50 },
           images:      { type: 'array', maxItems: 5 },
           category:    { type: 'string', maxLength: 100 },
+          badge:       { type: 'string', maxLength: 100 },
+          roast:       { type: 'string', maxLength: 100 },
+          origin:      { type: 'string', maxLength: 100 },
+          blend:       { type: 'string', maxLength: 100 },
+          process:     { type: 'string', maxLength: 100 },
         },
         additionalProperties: false,
       },
     },
   }, async (req, reply) => {
-    const { name, description, price, stock = 0, qty, unit, status = 'Active', images = [], category } = req.body
+    const { name, description, price, stock = 0, qty, unit, status = 'Active', images = [],
+            category, badge, roast, origin, blend, process } = req.body
     const { rows } = await query(
-      `INSERT INTO products (name, description, price, stock, qty, unit, status, images, category)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
-       RETURNING id, sku, name, description, category, status, price, stock, qty, unit, images, created_at`,
-      [name, description || null, price, stock, qty || null, unit || null, status, JSON.stringify(images), category || null]
+      `INSERT INTO products (name, description, price, stock, qty, unit, status, images,
+                             category, badge, roast, origin, blend, process)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, $13, $14)
+       RETURNING id, sku, name, description, category, badge, status, price, stock, qty, unit,
+                 roast, origin, blend, process, images, created_at`,
+      [name, description || null, price, stock, qty || null, unit || null, status, JSON.stringify(images),
+       category || null, badge || null, roast || null, origin || null, blend || null, process || null]
     )
     return reply.code(201).send({ ok: true, data: rows[0] })
   })
@@ -376,13 +385,19 @@ module.exports = async function adminRoutes(app) {
           status:      { type: 'string', maxLength: 50 },
           images:      { type: 'array', maxItems: 5 },
           category:    { type: 'string', maxLength: 100 },
+          badge:       { type: 'string', maxLength: 100 },
+          roast:       { type: 'string', maxLength: 100 },
+          origin:      { type: 'string', maxLength: 100 },
+          blend:       { type: 'string', maxLength: 100 },
+          process:     { type: 'string', maxLength: 100 },
         },
         additionalProperties: false,
       },
     },
   }, async (req) => {
     const fields = req.body
-    const allowed = ['name', 'description', 'price', 'stock', 'qty', 'unit', 'status', 'images', 'category']
+    const allowed = ['name', 'description', 'price', 'stock', 'qty', 'unit', 'status', 'images',
+                     'category', 'badge', 'roast', 'origin', 'blend', 'process']
     const sets = []
     const params = []
     for (const key of allowed) {
@@ -401,7 +416,8 @@ module.exports = async function adminRoutes(app) {
     const { rows } = await query(
       `UPDATE products SET ${sets.join(', ')}, updated_at = NOW()
        WHERE id = $${params.length}
-       RETURNING id, sku, name, description, category, status, price, stock, qty, unit, images, created_at`,
+       RETURNING id, sku, name, description, category, badge, status, price, stock, qty, unit,
+                 roast, origin, blend, process, images, created_at`,
       params
     )
     if (!rows.length) throw { code: 'NOT_FOUND', message: 'Product not found.' }
@@ -434,5 +450,169 @@ module.exports = async function adminRoutes(app) {
     )
     if (!rows.length) throw { code: 'NOT_FOUND', message: 'Influencer not found.' }
     return { ok: true, data: rows[0] }
+  })
+
+  // ── Coupon CRUD ─────────────────────────────────────────────────────────────
+
+  // GET /admin/coupons?type=festival
+  app.get('/coupons', {
+    schema: {
+      querystring: {
+        type: 'object',
+        properties: { type: { type: 'string', maxLength: 20, default: 'festival' } },
+      },
+    },
+  }, async (req) => {
+    const type = req.query.type || 'festival'
+    const { rows } = await query(
+      `SELECT id, code, type, discount_type, discount_value, min_order, max_uses, used_count, is_active, expires_at, created_at
+       FROM coupons WHERE type = $1 ORDER BY created_at DESC`,
+      [type]
+    )
+    return { ok: true, data: { coupons: rows } }
+  })
+
+  // POST /admin/coupons
+  app.post('/coupons', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['code', 'discount_type', 'discount_value'],
+        properties: {
+          code:           { type: 'string', minLength: 2, maxLength: 20 },
+          type:           { type: 'string', maxLength: 20, default: 'festival' },
+          discount_type:  { type: 'string', enum: ['pct', 'flat'] },
+          discount_value: { type: 'number', minimum: 0 },
+          min_order:      { type: 'number', minimum: 0, default: 0 },
+          max_uses:       { type: 'integer', minimum: 1 },
+          expires_at:     { type: 'string', maxLength: 30 },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req, reply) => {
+    const { code, type = 'festival', discount_type, discount_value, min_order = 0, max_uses, expires_at } = req.body
+    const { rows } = await query(
+      `INSERT INTO coupons (code, type, discount_type, discount_value, min_order, max_uses, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, code, type, discount_type, discount_value, min_order, max_uses, used_count, is_active, expires_at, created_at`,
+      [code.toUpperCase(), type, discount_type, Math.round(discount_value), Math.round(min_order), max_uses || null, expires_at || null]
+    )
+    return reply.code(201).send({ ok: true, data: rows[0] })
+  })
+
+  // PATCH /admin/coupons/:code — edit coupon fields
+  app.patch('/coupons/:code', {
+    schema: {
+      params: { type: 'object', required: ['code'], properties: { code: { type: 'string', maxLength: 20 } } },
+      body: {
+        type: 'object',
+        properties: {
+          discount_type:  { type: 'string', enum: ['pct', 'flat'] },
+          discount_value: { type: 'number', minimum: 0 },
+          min_order:      { type: 'number', minimum: 0 },
+          max_uses:       { type: ['integer', 'null'], minimum: 1 },
+          expires_at:     { type: ['string', 'null'], maxLength: 30 },
+        },
+        additionalProperties: false,
+        minProperties: 1,
+      },
+    },
+  }, async (req, reply) => {
+    const code = req.params.code.toUpperCase()
+    const allowed = ['discount_type', 'discount_value', 'min_order', 'max_uses', 'expires_at']
+    const entries = Object.entries(req.body).filter(([k]) => allowed.includes(k))
+    const sets = entries.map(([k], i) => `${k} = $${i + 2}`)
+    const vals = entries.map(([, v]) => v !== '' ? v : null)
+    const { rows } = await query(
+      `UPDATE coupons SET ${sets.join(', ')} WHERE code = $1
+       RETURNING id, code, type, discount_type, discount_value, min_order, max_uses, used_count, is_active, expires_at, created_at`,
+      [code, ...vals]
+    )
+    if (!rows.length) throw { code: 'NOT_FOUND', message: 'Coupon not found.' }
+    return reply.send({ ok: true, data: rows[0] })
+  })
+
+  // DELETE /admin/coupons/:code
+  app.delete('/coupons/:code', {
+    schema: {
+      params: { type: 'object', required: ['code'], properties: { code: { type: 'string', maxLength: 20 } } },
+    },
+  }, async (req, reply) => {
+    const code = req.params.code.toUpperCase()
+    const { rows } = await query(`DELETE FROM coupons WHERE code = $1 RETURNING code`, [code])
+    if (!rows.length) throw { code: 'NOT_FOUND', message: 'Coupon not found.' }
+    return reply.code(200).send({ ok: true, data: { code: rows[0].code } })
+  })
+
+  // ── Review management ───────────────────────────────────────────────────────
+
+  // GET /admin/reviews
+  app.get('/reviews', {
+    schema: {
+      querystring: {
+        type: 'object',
+        properties: {
+          approved: { type: 'string' },
+          page:     { type: 'integer', minimum: 1, default: 1 },
+          limit:    { type: 'integer', minimum: 1, maximum: 100, default: 50 },
+        },
+      },
+    },
+  }, async (req) => {
+    const { approved, page = 1, limit = 50 } = req.query
+    const offset = (page - 1) * limit
+    const conditions = []
+    const params = []
+
+    if (approved !== undefined) {
+      params.push(approved === 'true')
+      conditions.push(`is_approved = $${params.length}`)
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+    const { rows: countRows } = await query(`SELECT COUNT(*) FROM reviews ${where}`, params)
+    const total = parseInt(countRows[0].count, 10)
+
+    const dataParams = [...params, limit, offset]
+    const { rows } = await query(
+      `SELECT id, product_slug, reviewer_name, rating, comment, is_approved, created_at
+       FROM reviews ${where}
+       ORDER BY created_at DESC
+       LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+      dataParams
+    )
+    return { ok: true, data: { reviews: rows, total, page, limit } }
+  })
+
+  // PATCH /admin/reviews/:id/approve
+  app.patch('/reviews/:id/approve', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+      body: {
+        type: 'object',
+        properties: { approved: { type: 'boolean' } },
+        additionalProperties: false,
+      },
+    },
+  }, async (req) => {
+    const approved = req.body?.approved !== false
+    const { rows } = await query(
+      `UPDATE reviews SET is_approved = $1 WHERE id = $2 RETURNING id, reviewer_name, is_approved`,
+      [approved, req.params.id]
+    )
+    if (!rows.length) throw { code: 'NOT_FOUND', message: 'Review not found.' }
+    return { ok: true, data: rows[0] }
+  })
+
+  // DELETE /admin/reviews/:id
+  app.delete('/reviews/:id', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+    },
+  }, async (req, reply) => {
+    const { rows } = await query(`DELETE FROM reviews WHERE id = $1 RETURNING id`, [req.params.id])
+    if (!rows.length) throw { code: 'NOT_FOUND', message: 'Review not found.' }
+    return reply.code(200).send({ ok: true, data: { id: rows[0].id } })
   })
 }

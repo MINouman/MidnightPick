@@ -1,28 +1,27 @@
-// midnight pick — shop page (phase 1: single product)
-const { useState, useEffect } = React;
+// midnight pick -  shop page
+const { useState, useEffect, useRef } = React;
 
-const PRODUCT = {
-  category: "PREMIUM COFFEE",
-  name: "Midnight Blend",
+const PRODUCT_DEFAULT = {
+  id: null,
+  category: "",
+  name: "",
+  status: "active",
   inStock: true,
-  rating: 4.8,
-  reviews: 640,
-  badge: "BEST VALUE",
-  price: 669,
-  desc: "Freeze-dried Colombian coffee in a resealable stand-up pouch. Around 45 cups. Medium roast — caramel and nut notes, clean finish, real body.",
-  roast: "Medium Roast",
-  origin: "Colombia",
-  blend: "Robusta 65% · Arabica 35%",
-  process: "Freeze-Dried",
-  weight: "95g",
+  badge: "",
+  price: 0,
+  desc: "",
+  roast: "",
+  origin: "",
+  blend: "",
+  process: "",
+  weight: "",
+  images: [],
 };
 
-const PRODUCT_IMAGES = [
-  { src: "assets/product_95g.png", label: "Front" },
-  { src: "assets/product_95g_back.png", label: "Back" },
-];
 
-// ── minimal header: back arrow (left) + sign-in (right) ──
+const API_BASE = window.MIDNIGHT_API_BASE || "http://localhost:3000/api/v1";
+
+// ── minimal header ────────────────────────────────────────────────────────────
 function ShopHeader({ cartCount, onSignIn, onCart }) {
   const [scrolled, setScrolled] = useState(false);
 
@@ -44,7 +43,7 @@ function ShopHeader({ cartCount, onSignIn, onCart }) {
           <i className="fa-solid fa-right-to-bracket" aria-hidden="true" />
           Sign In
         </button>
-        <button className="nav-cart-btn" onClick={onCart} aria-label={`Cart — ${cartCount} item${cartCount !== 1 ? "s" : ""}`}>
+        <button className="nav-cart-btn" onClick={onCart} aria-label={`Cart -  ${cartCount} item${cartCount !== 1 ? "s" : ""}`}>
           <CartIcon size={19} />
           <span className="nav-cart-badge">{cartCount}</span>
         </button>
@@ -54,14 +53,22 @@ function ShopHeader({ cartCount, onSignIn, onCart }) {
 }
 
 function ShopStarRating({ rating, reviews }) {
+  const scrollToReviews = () => {
+    document.getElementById("reviews-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
   return (
-    <div className="shop-rating">
+    <button
+      className="shop-rating"
+      onClick={scrollToReviews}
+      aria-label="Read customer reviews"
+      style={{ background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex", alignItems: "center" }}
+    >
       {[1,2,3,4,5].map(i => (
         <Star key={i} size={14} filled={i <= Math.round(rating)} />
       ))}
       <span className="shop-rating-num">{rating}</span>
-      <span className="shop-rating-reviews">({reviews} reviews)</span>
-    </div>
+      <span className="shop-rating-reviews" style={{ textDecoration: "underline", textUnderlineOffset: 2 }}>({reviews} reviews)</span>
+    </button>
   );
 }
 
@@ -88,8 +95,6 @@ function CartPanel({ cart, onClose }) {
     }, {})
   );
   const total = grouped.reduce((s, i) => s + i.totalAmt, 0);
-  const waMsg = grouped.map(i => `Midnight Blend — 95g ×${i.totalQty}`).join(", ");
-  const waUrl = `https://wa.me/8801829531588?text=${encodeURIComponent(`Hi! I'd like to order: ${waMsg}. Total: ৳${total.toLocaleString()}`)}`;
 
   return (
     <div
@@ -115,7 +120,7 @@ function CartPanel({ cart, onClose }) {
           ) : grouped.map((item, i) => (
             <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "12px 0", borderBottom: "1px solid rgba(87,31,41,.08)" }}>
               <div>
-                <div style={{ fontSize: 14, fontWeight: 600, color: "#571F29", fontFamily: "var(--font-display)" }}>Midnight Blend — 95g Pouch</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: "#571F29", fontFamily: "var(--font-display)" }}>Midnight Blend - 95g Pouch</div>
                 <div style={{ fontSize: 12, color: "rgba(87,31,41,.6)", marginTop: 2 }}>×{item.totalQty}</div>
               </div>
               <span style={{ fontFamily: "var(--font-display)", fontWeight: 700, color: "#FF9100", fontSize: 15 }}>৳{item.totalAmt.toLocaleString()}</span>
@@ -129,11 +134,9 @@ function CartPanel({ cart, onClose }) {
               <span>Total</span>
               <span style={{ color: "#FF9100" }}>৳{total.toLocaleString()}</span>
             </div>
-            <a href={waUrl} target="_blank" rel="noopener noreferrer"
-              style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%", padding: "13px 0", background: "#25D366", color: "#fff", borderRadius: 8, fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 14, textDecoration: "none" }}>
-              <i className="fa-brands fa-whatsapp" style={{ fontSize: 16 }} aria-hidden="true" />
-              Order via WhatsApp
-            </a>
+            <p style={{ margin: "0 0 12px", fontSize: 12, color: "rgba(87,31,41,.6)", fontFamily: "var(--font-body)" }}>
+              Items in your cart are saved here. Click "Buy Now" on the product page to place an order.
+            </p>
           </div>
         )}
       </div>
@@ -141,6 +144,329 @@ function CartPanel({ cart, onClose }) {
   );
 }
 
+// ── Order Modal ───────────────────────────────────────────────────────────────
+function OrderModal({ open, onClose, product, qty, discount, coupon }) {
+  const [step, setStep]           = useState("form"); // form | otp | loading | success | error
+  const [name, setName]           = useState("");
+  const [phone, setPhone]         = useState("");
+  const [address, setAddress]     = useState("");
+  const [errorMsg, setErrorMsg]   = useState("");
+  const [orderRef, setOrderRef]   = useState("");
+  const [isBusy, setIsBusy]       = useState(false);
+  const [otpDigits, setOtpDigits] = useState(["","","","","",""]);
+  const [otpError, setOtpError]   = useState("");
+  const [timeLeft, setTimeLeft]   = useState(120);
+  const [timerKey, setTimerKey]   = useState(0);
+  const otpRefs  = useRef([]);
+  const timerRef = useRef(null);
+
+  const finalPrice = product.price - discount;
+  const totalPrice = finalPrice * qty;
+
+  useEffect(() => {
+    document.body.style.overflow = open ? "hidden" : "";
+    return () => { document.body.style.overflow = ""; };
+  }, [open]);
+
+  // Full reset when modal opens
+  useEffect(() => {
+    if (open) {
+      setStep("form"); setErrorMsg(""); setOrderRef("");
+      setOtpDigits(["","","","","",""]); setOtpError("");
+      setIsBusy(false); setTimerKey(0);
+    }
+  }, [open]);
+
+  // 2-minute countdown -  starts/resets whenever we enter the OTP step
+  useEffect(() => {
+    if (step !== "otp") return;
+    setTimeLeft(120);
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = setInterval(() => {
+      setTimeLeft(t => {
+        if (t <= 1) { clearInterval(timerRef.current); timerRef.current = null; return 0; }
+        return t - 1;
+      });
+    }, 1000);
+    setTimeout(() => otpRefs.current[0]?.focus(), 80);
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [step, timerKey]);
+
+  const fmtTime = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+
+  if (!open) return null;
+
+  // ── Shared styles ──────────────────────────────────────────────────────────
+  const overlay = { position: "fixed", inset: 0, background: "rgba(0,0,0,.52)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" };
+  const panel   = { background: "#FFFDF7", borderRadius: 16, width: "100%", maxWidth: 440, boxShadow: "0 20px 60px rgba(0,0,0,.28)", overflow: "hidden" };
+  const field   = { width: "100%", padding: "11px 14px", fontFamily: "var(--font-body)", fontSize: 14, border: "1.5px solid rgba(87,31,41,.18)", borderRadius: 8, background: "#fff", color: "#1A0A0D", outline: "none", boxSizing: "border-box" };
+  const lbl     = { display: "block", fontSize: 12, fontWeight: 600, color: "rgba(87,31,41,.65)", marginBottom: 5, fontFamily: "var(--font-display)", textTransform: "uppercase", letterSpacing: ".04em" };
+  const hdr     = { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "18px 22px 14px", borderBottom: "1px solid rgba(87,31,41,.1)" };
+  const summary = { padding: "13px 22px", background: "rgba(87,31,41,.04)", borderBottom: "1px solid rgba(87,31,41,.08)", display: "flex", justifyContent: "space-between", alignItems: "center" };
+  const primBtn = (busy) => ({ width: "100%", padding: "14px 0", background: busy ? "rgba(87,31,41,.35)" : "#571F29", color: "#F7E3C9", borderRadius: 8, fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 15, border: "none", cursor: busy ? "not-allowed" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, transition: "background .2s" });
+
+  // ── Order summary strip ────────────────────────────────────────────────────
+  const SummaryStrip = () => (
+    <div style={summary}>
+      <div>
+        <div style={{ fontFamily: "var(--font-display)", fontWeight: 600, fontSize: 13, color: "#571F29" }}>
+          {product.name} -  {product.weight} × {qty}
+        </div>
+        {discount > 0 && <div style={{ fontSize: 11, color: "rgba(87,31,41,.5)", marginTop: 2 }}>Coupon applied -  ৳{discount} off / unit</div>}
+      </div>
+      <span style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 17, color: "#FF9100" }}>৳{totalPrice.toLocaleString()}</span>
+    </div>
+  );
+
+  // ── Success ────────────────────────────────────────────────────────────────
+  if (step === "success") return (
+    <div style={overlay} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={panel}>
+        <div style={{ padding: "36px 28px", textAlign: "center" }}>
+          <div style={{ width: 60, height: 60, borderRadius: "50%", background: "rgba(46,94,31,.1)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px" }}>
+            <i className="fa-solid fa-circle-check" style={{ fontSize: 28, color: "#2E5E1F" }} aria-hidden="true" />
+          </div>
+          <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 22, color: "#571F29", margin: "0 0 6px" }}>Order Placed!</h2>
+          <p style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 18, color: "#FF9100", margin: "0 0 14px" }}>#{orderRef}</p>
+          <p style={{ fontFamily: "var(--font-body)", fontSize: 14, color: "rgba(87,31,41,.7)", margin: "0 0 6px", lineHeight: 1.5 }}>
+            A confirmation SMS has been sent to <strong>{phone}</strong>.
+          </p>
+          <p style={{ fontFamily: "var(--font-body)", fontSize: 13, color: "rgba(87,31,41,.5)", margin: "0 0 26px", lineHeight: 1.5 }}>
+            Our team will contact you shortly to confirm delivery.
+          </p>
+          <button onClick={onClose} style={{ padding: "12px 36px", background: "#571F29", color: "#F7E3C9", borderRadius: 8, fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 14, border: "none", cursor: "pointer" }}>Done</button>
+        </div>
+      </div>
+    </div>
+  );
+
+  // ── Error ──────────────────────────────────────────────────────────────────
+  if (step === "error") return (
+    <div style={overlay} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={panel}>
+        <div style={{ padding: "36px 28px", textAlign: "center" }}>
+          <div style={{ width: 60, height: 60, borderRadius: "50%", background: "rgba(200,40,40,.1)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px" }}>
+            <i className="fa-solid fa-circle-xmark" style={{ fontSize: 28, color: "#C82828" }} aria-hidden="true" />
+          </div>
+          <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 20, color: "#571F29", margin: "0 0 10px" }}>Something went wrong</h2>
+          <p style={{ fontFamily: "var(--font-body)", fontSize: 14, color: "rgba(87,31,41,.7)", margin: "0 0 24px", lineHeight: 1.5 }}>{errorMsg}</p>
+          <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+            <button onClick={() => setStep("form")} style={{ padding: "11px 24px", background: "#571F29", color: "#F7E3C9", borderRadius: 8, fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 14, border: "none", cursor: "pointer" }}>Try Again</button>
+            <button onClick={onClose} style={{ padding: "11px 24px", background: "rgba(87,31,41,.08)", color: "#571F29", borderRadius: 8, fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 14, border: "none", cursor: "pointer" }}>Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  // ── OTP Step ───────────────────────────────────────────────────────────────
+  if (step === "otp") {
+    const otpComplete = otpDigits.every(d => d !== "");
+
+    const handleDigit = (idx, val) => {
+      if (!/^\d*$/.test(val)) return;
+      const d = [...otpDigits]; d[idx] = val.slice(-1);
+      setOtpDigits(d);
+      if (val && idx < 5) otpRefs.current[idx + 1]?.focus();
+    };
+
+    const handleKey = (idx, e) => {
+      if (e.key === "Backspace" && !otpDigits[idx] && idx > 0) {
+        const d = [...otpDigits]; d[idx - 1] = "";
+        setOtpDigits(d);
+        otpRefs.current[idx - 1]?.focus();
+      }
+    };
+
+    const handlePaste = (e) => {
+      const pasted = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, 6);
+      if (!pasted) return;
+      e.preventDefault();
+      const d = Array(6).fill(""); pasted.split("").forEach((c, i) => { d[i] = c; });
+      setOtpDigits(d);
+      otpRefs.current[Math.min(pasted.length, 5)]?.focus();
+    };
+
+    const handleVerify = async () => {
+      if (!otpComplete || isBusy) return;
+      setIsBusy(true); setOtpError("");
+      try {
+        const res  = await fetch(`${API_BASE}/orders/guest`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: name.trim(), phone: phone.trim(), address: address.trim(), qty, otp: otpDigits.join(""), ...(coupon ? { coupon_code: coupon } : {}), ...(product?.id ? { product_id: product.id } : {}) }),
+        });
+        const json = await res.json();
+        if (!res.ok) {
+          const code = json?.error?.code;
+          if (code === "INVALID_OTP" || code === "OTP_MAX_ATTEMPTS") {
+            setOtpError(json.error.message);
+          } else {
+            setErrorMsg(json?.error?.message || "Order failed. Please try again.");
+            setStep("error");
+          }
+          return;
+        }
+        setOrderRef(json.data.order_ref);
+        setStep("success");
+      } catch (err) {
+        setErrorMsg(err.message);
+        setStep("error");
+      } finally {
+        setIsBusy(false);
+      }
+    };
+
+    const resendOtp = async () => {
+      try {
+        await fetch(`${API_BASE}/orders/request-otp`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phone: phone.trim() }),
+        });
+        setOtpDigits(["","","","","",""]); setOtpError("");
+        setTimerKey(k => k + 1);
+      } catch {}
+    };
+
+    return (
+      <div style={overlay} onClick={e => e.target === e.currentTarget && onClose()}>
+        <div style={panel}>
+          {/* Header */}
+          <div style={hdr}>
+            <button onClick={() => setStep("form")} aria-label="Back" style={{ background: "none", border: "none", cursor: "pointer", color: "#571F29", fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", gap: 5 }}>
+              <i className="fa-solid fa-arrow-left" aria-hidden="true" /> Back
+            </button>
+            <span style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 15, color: "#571F29" }}>Verify Phone</span>
+            <button onClick={onClose} aria-label="Close" style={{ background: "none", border: "none", cursor: "pointer", color: "#571F29", fontSize: 20, lineHeight: 1 }}>×</button>
+          </div>
+
+          <SummaryStrip />
+
+          <div style={{ padding: "26px 22px 24px" }}>
+            {/* Instruction */}
+            <p style={{ fontFamily: "var(--font-body)", fontSize: 14, color: "rgba(87,31,41,.75)", margin: "0 0 22px", textAlign: "center", lineHeight: 1.5 }}>
+              Enter the 6-digit code sent to<br />
+              <strong style={{ color: "#571F29" }}>{phone}</strong>
+            </p>
+
+            {/* 6-box input */}
+            <div style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: 18 }}>
+              {[0,1,2,3,4,5].map(i => (
+                <input
+                  key={i}
+                  ref={el => otpRefs.current[i] = el}
+                  type="text" inputMode="numeric" maxLength={1}
+                  value={otpDigits[i]}
+                  onChange={e => handleDigit(i, e.target.value)}
+                  onKeyDown={e => handleKey(i, e)}
+                  onPaste={handlePaste}
+                  disabled={isBusy}
+                  style={{ width: 44, height: 52, textAlign: "center", fontSize: 22, fontWeight: 800, fontFamily: "var(--font-display)", border: `2px solid ${otpDigits[i] ? "#571F29" : "rgba(87,31,41,.22)"}`, borderRadius: 10, background: otpDigits[i] ? "rgba(87,31,41,.04)" : "#fff", color: "#571F29", outline: "none", transition: "border-color .15s, background .15s" }}
+                />
+              ))}
+            </div>
+
+            {/* OTP error */}
+            {otpError && (
+              <p style={{ fontFamily: "var(--font-body)", fontSize: 13, color: "#C82828", textAlign: "center", margin: "0 0 12px", background: "rgba(200,40,40,.06)", padding: "8px 12px", borderRadius: 7 }}>
+                <i className="fa-solid fa-circle-xmark" aria-hidden="true" style={{ marginRight: 5 }} />{otpError}
+              </p>
+            )}
+
+            {/* Timer / Resend */}
+            <div style={{ textAlign: "center", marginBottom: 20 }}>
+              {timeLeft > 0 ? (
+                <span style={{ fontFamily: "var(--font-body)", fontSize: 13, color: "rgba(87,31,41,.5)" }}>
+                  <i className="fa-regular fa-clock" aria-hidden="true" style={{ marginRight: 5 }} />
+                  Resend in <strong style={{ color: "#571F29", fontVariantNumeric: "tabular-nums" }}>{fmtTime(timeLeft)}</strong>
+                </span>
+              ) : (
+                <button onClick={resendOtp} style={{ background: "none", border: "none", cursor: "pointer", fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 13, color: "#FF9100", textDecoration: "underline", textUnderlineOffset: 2 }}>
+                  <i className="fa-solid fa-rotate-right" aria-hidden="true" style={{ marginRight: 5 }} />Resend OTP
+                </button>
+              )}
+            </div>
+
+            {/* Confirm button */}
+            <button onClick={handleVerify} disabled={!otpComplete || isBusy} style={primBtn(!otpComplete || isBusy)}>
+              {isBusy
+                ? <><i className="fa-solid fa-spinner fa-spin" aria-hidden="true" /> Placing Order…</>
+                : <><i className="fa-solid fa-check" aria-hidden="true" /> Confirm Order -  ৳{totalPrice.toLocaleString()}</>
+              }
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Form Step ──────────────────────────────────────────────────────────────
+  const handleFormSubmit = async (e) => {
+    e.preventDefault();
+    if (!name.trim() || !phone.trim() || !address.trim() || isBusy) return;
+    setIsBusy(true);
+    try {
+      const res = await fetch(`${API_BASE}/orders/request-otp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: phone.trim() }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error?.message || "Failed to send OTP.");
+      setOtpDigits(["","","","","",""]); setOtpError("");
+      setStep("otp");
+    } catch (err) {
+      setErrorMsg(err.message);
+      setStep("error");
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const canSubmit = name.trim() && phone.trim().length >= 11 && address.trim() && !isBusy;
+
+  return (
+    <div style={overlay} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={panel}>
+        <div style={hdr}>
+          <span style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 16, color: "#571F29" }}>Place Order</span>
+          <button onClick={onClose} aria-label="Close" style={{ background: "none", border: "none", cursor: "pointer", color: "#571F29", fontSize: 20, lineHeight: 1 }}>×</button>
+        </div>
+
+        <SummaryStrip />
+
+        <form onSubmit={handleFormSubmit} style={{ padding: "20px 22px 22px" }}>
+          <div style={{ marginBottom: 14 }}>
+            <label style={lbl}>Full Name</label>
+            <input style={field} type="text" placeholder="Your full name" value={name}
+              onChange={e => setName(e.target.value)} required disabled={isBusy} autoFocus />
+          </div>
+          <div style={{ marginBottom: 14 }}>
+            <label style={lbl}>Phone Number</label>
+            <input style={field} type="tel" placeholder="01XXXXXXXXX" value={phone}
+              onChange={e => setPhone(e.target.value)} required minLength={11} disabled={isBusy} />
+          </div>
+          <div style={{ marginBottom: 22 }}>
+            <label style={lbl}>Delivery Address</label>
+            <textarea style={{ ...field, resize: "vertical", minHeight: 72 }} placeholder="House, road, area, city"
+              value={address} onChange={e => setAddress(e.target.value)} required disabled={isBusy} />
+          </div>
+          <button type="submit" disabled={!canSubmit} style={primBtn(!canSubmit)}>
+            {isBusy
+              ? <><i className="fa-solid fa-spinner fa-spin" aria-hidden="true" /> Sending OTP…</>
+              : <><i className="fa-solid fa-mobile-screen-button" aria-hidden="true" /> Send Verification Code</>
+            }
+          </button>
+          <p style={{ margin: "10px 0 0", fontSize: 11, color: "rgba(87,31,41,.4)", fontFamily: "var(--font-body)", textAlign: "center" }}>
+            Cash on delivery · A code will be sent to your number
+          </p>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ── Buy Sheet (mobile) ────────────────────────────────────────────────────────
 function BuySheet({ open, onClose, qty, setQty, coupon, setCoupon, couponStatus, setCouponStatus, discount, verifyCoupon, addToCart, addedAnim, product, onBuyNow }) {
   const finalPrice = product.price - discount;
   const totalPrice = finalPrice * qty;
@@ -159,7 +485,7 @@ function BuySheet({ open, onClose, qty, setQty, coupon, setCoupon, couponStatus,
 
         <div className="buy-sheet-header">
           <div>
-            <div className="buy-sheet-product-name">{product.name} — {product.weight}</div>
+            <div className="buy-sheet-product-name">{product.name} -  {product.weight}</div>
             <div className="buy-sheet-price">
               ৳{totalPrice.toLocaleString()}
               {discount > 0 && (
@@ -172,7 +498,7 @@ function BuySheet({ open, onClose, qty, setQty, coupon, setCoupon, couponStatus,
           <button className="buy-sheet-close" onClick={onClose} aria-label="Close">×</button>
         </div>
 
-        {/* coupon — force row layout even on mobile */}
+        {/* coupon -  force row layout even on mobile */}
         <div className="shop-coupon-row">
           <div className="shop-coupon-wrap" style={{ flexDirection: "row", borderRadius: 8 }}>
             <input
@@ -188,7 +514,7 @@ function BuySheet({ open, onClose, qty, setQty, coupon, setCoupon, couponStatus,
           </div>
           {couponStatus === "ok" && (
             <span className="shop-coupon-msg shop-coupon-msg--ok">
-              <i className="fa-solid fa-circle-check" aria-hidden="true" /> Coupon applied — ৳{discount} off
+              <i className="fa-solid fa-circle-check" aria-hidden="true" /> Coupon applied -  ৳{discount} off
             </span>
           )}
           {couponStatus === "err" && (
@@ -198,22 +524,240 @@ function BuySheet({ open, onClose, qty, setQty, coupon, setCoupon, couponStatus,
           )}
         </div>
 
-        {/* qty */}
+        {/* qty + proceed */}
         <div className="shop-qty-row" style={{ marginBottom: 14 }}>
           <div className="shop-qty">
             <button className="shop-qty-btn" onClick={() => setQty(q => Math.max(1, q - 1))} aria-label="Decrease quantity">−</button>
             <span className="shop-qty-val">{qty}</span>
             <button className="shop-qty-btn" onClick={() => setQty(q => q + 1)} aria-label="Increase quantity">+</button>
           </div>
+          <button className="shop-add-btn" onClick={onBuyNow}>Proceed</button>
         </div>
-
-        <button className="shop-buy-btn" onClick={onBuyNow}>Buy Now</button>
       </div>
     </div>
   );
 }
 
+// ── Reviews Section ───────────────────────────────────────────────────────────
+const AVATAR_COLORS = ["#7B2D38","#B84A1A","#5E3A1E","#2B5C30","#1A4D6E","#6A3D72"];
+function avatarColor(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) & 0xfffff;
+  return AVATAR_COLORS[h % AVATAR_COLORS.length];
+}
+
+function ReviewsSection({ productSlug = "midnight-blend", onStats }) {
+  const [reviews, setReviews]         = useState([]);
+  const [total, setTotal]             = useState(0);
+  const [avgRating, setAvgRating]     = useState(0);
+  const [page, setPage]               = useState(1);
+  const [loading, setLoading]         = useState(true);
+  const [showForm, setShowForm]       = useState(false);
+  const [formRating, setFormRating]   = useState(0);
+  const [hoverRating, setHoverRating] = useState(0);
+  const [formName, setFormName]       = useState("");
+  const [formComment, setFormComment] = useState("");
+  const [submitting, setSubmitting]   = useState(false);
+  const [submitDone, setSubmitDone]   = useState(false);
+  const formRef = useRef(null);
+  const LIMIT = 5;
+
+  const fetchReviews = async (p = 1) => {
+    setLoading(true);
+    try {
+      const res  = await fetch(`${API_BASE}/reviews?product=${productSlug}&page=${p}&limit=${LIMIT}`);
+      const json = await res.json();
+      if (json.ok) {
+        setReviews(prev => p === 1 ? json.data.reviews : [...prev, ...json.data.reviews]);
+        setTotal(json.data.total);
+        if (p === 1) {
+          const avg = json.data.avg_rating || 0;
+          setAvgRating(avg);
+          if (onStats) onStats({ rating: avg, count: json.data.total });
+        }
+        setPage(p);
+      }
+    } catch { /* non-critical */ } finally { setLoading(false); }
+  };
+
+  useEffect(() => { fetchReviews(1); }, []);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!formRating || !formName.trim() || formComment.trim().length < 5) return;
+    setSubmitting(true);
+    try {
+      await fetch(`${API_BASE}/reviews`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ product_slug: productSlug, reviewer_name: formName.trim(), rating: formRating, comment: formComment.trim() }),
+      });
+      setSubmitDone(true);
+      setFormRating(0); setFormName(""); setFormComment("");
+    } catch { /* keep form open */ } finally { setSubmitting(false); }
+  };
+
+  const openForm = () => {
+    setShowForm(true);
+    setSubmitDone(false);
+    setTimeout(() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 60);
+  };
+
+  const timeAgo = (dateStr) => {
+    const d = Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000);
+    if (d === 0) return "Today";
+    if (d === 1) return "Yesterday";
+    if (d < 7)  return `${d} days ago`;
+    if (d < 30) return `${Math.floor(d / 7)}w ago`;
+    return new Date(dateStr).toLocaleDateString("en-GB", { month: "short", year: "numeric" });
+  };
+
+  const hasMore = reviews.length < total;
+  const displayRating = hoverRating || formRating;
+  const displayCount  = total;
+  const inField = { width: "100%", padding: "10px 13px", fontFamily: "var(--font-body)", fontSize: 14, border: "1.5px solid rgba(87,31,41,.15)", borderRadius: 8, background: "rgba(255,255,255,.7)", color: "#1A0A0D", outline: "none", boxSizing: "border-box" };
+
+  return (
+    <section id="reviews-section" style={{ borderTop: "1px solid rgba(87,31,41,.1)", marginTop: 36 }}>
+      <div style={{ maxWidth: 900, margin: "0 auto", padding: "40px 24px 64px" }}>
+
+        {/* ── Header ── */}
+        <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginBottom: 32, flexWrap: "wrap", gap: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
+            {/* Big number */}
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontFamily: "var(--font-display)", fontWeight: 900, fontSize: 48, lineHeight: 1, color: "#571F29" }}>{avgRating > 0 ? avgRating : "- "}</div>
+              <div style={{ display: "flex", gap: 3, justifyContent: "center", marginTop: 4 }}>
+                {[1,2,3,4,5].map(i => <Star key={i} size={14} filled={i <= Math.round(avgRating)} />)}
+              </div>
+            </div>
+            {/* Divider */}
+            <div style={{ width: 1, height: 52, background: "rgba(87,31,41,.15)" }} />
+            {/* Label */}
+            <div>
+              <div style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 18, color: "#571F29", marginBottom: 2 }}>Customer Reviews</div>
+              <div style={{ fontFamily: "var(--font-body)", fontSize: 13, color: "rgba(87,31,41,.55)" }}>{displayCount.toLocaleString()} verified reviews</div>
+            </div>
+          </div>
+          {/* Write a Review button -  commented out for now
+          <button
+            onClick={showForm ? () => setShowForm(false) : openForm}
+            style={{ display: "flex", alignItems: "center", gap: 7, padding: "10px 20px", background: showForm ? "rgba(87,31,41,.08)" : "#571F29", color: showForm ? "#571F29" : "#F7E3C9", borderRadius: 8, fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 13, border: showForm ? "1px solid rgba(87,31,41,.18)" : "none", cursor: "pointer", transition: "all .2s", whiteSpace: "nowrap" }}>
+            <i className={"fa-solid " + (showForm ? "fa-xmark" : "fa-pen-to-square")} aria-hidden="true" />
+            {showForm ? "Cancel" : "Write a Review"}
+          </button>
+          */}
+        </div>
+
+        {/* ── Write Review Form -  commented out for now
+        {showForm && (
+          <div ref={formRef} style={{ background: "rgba(255,255,255,.55)", backdropFilter: "blur(8px)", borderRadius: 14, padding: "24px 22px", marginBottom: 28, border: "1px solid rgba(87,31,41,.12)", boxShadow: "0 2px 16px rgba(87,31,41,.06)" }}>
+            {submitDone ? (
+              <div style={{ textAlign: "center", padding: "16px 0" }}>
+                <i className="fa-solid fa-circle-check" style={{ fontSize: 32, color: "#2E5E1F", display: "block", marginBottom: 12 }} aria-hidden="true" />
+                <p style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16, color: "#571F29", margin: "0 0 5px" }}>Thank you!</p>
+                <p style={{ fontFamily: "var(--font-body)", fontSize: 13, color: "rgba(87,31,41,.6)", margin: 0 }}>Your review will appear here after approval.</p>
+              </div>
+            ) : (
+              <form onSubmit={handleSubmit}>
+                <p style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 14, color: "#571F29", margin: "0 0 12px", textTransform: "uppercase", letterSpacing: ".05em" }}>Rate your experience</p>
+                <div style={{ marginBottom: 18 }}>
+                  <div style={{ display: "flex", gap: 4 }}>
+                    {[1,2,3,4,5].map(i => (
+                      <button key={i} type="button"
+                        onMouseEnter={() => setHoverRating(i)} onMouseLeave={() => setHoverRating(0)}
+                        onClick={() => setFormRating(i)} aria-label={`${i} star${i > 1 ? "s" : ""}`}
+                        style={{ background: "none", border: "none", cursor: "pointer", padding: "2px 3px", transition: "transform .12s", transform: displayRating >= i ? "scale(1.2)" : "scale(1)" }}>
+                        <Star size={28} filled={displayRating >= i} />
+                      </button>
+                    ))}
+                  </div>
+                  {formRating > 0 && (
+                    <span style={{ display: "block", marginTop: 6, fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 13, color: "#FF9100" }}>
+                      {["","Poor","Fair","Good","Great","Excellent!"][formRating]}
+                    </span>
+                  )}
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+                  <input style={inField} type="text" placeholder="Your name" value={formName}
+                    onChange={e => setFormName(e.target.value)} required disabled={submitting} />
+                </div>
+                <div style={{ marginBottom: 16 }}>
+                  <textarea style={{ ...inField, resize: "vertical", minHeight: 88 }}
+                    placeholder="Share your honest experience with this product…"
+                    value={formComment} onChange={e => setFormComment(e.target.value)}
+                    required minLength={5} disabled={submitting} />
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <button type="submit"
+                    disabled={submitting || !formRating || !formName.trim() || formComment.trim().length < 5}
+                    style={{ padding: "11px 26px", background: "#571F29", color: "#F7E3C9", borderRadius: 8, fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 13, border: "none", cursor: (submitting || !formRating || !formName.trim() || formComment.trim().length < 5) ? "not-allowed" : "pointer", opacity: (submitting || !formRating || !formName.trim() || formComment.trim().length < 5) ? .45 : 1, transition: "opacity .2s" }}>
+                    {submitting ? "Submitting…" : "Submit Review"}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        )}
+        ── end commented-out Write Review Form */}
+
+        {/* ── Review List ── */}
+        {loading && reviews.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "36px 0", color: "rgba(87,31,41,.4)", fontFamily: "var(--font-body)", fontSize: 13 }}>
+            <i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 8 }} aria-hidden="true" />Loading reviews…
+          </div>
+        ) : reviews.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "40px 0" }}>
+            <i className="fa-regular fa-comment-dots" style={{ fontSize: 32, color: "rgba(87,31,41,.2)", display: "block", marginBottom: 12 }} aria-hidden="true" />
+            <p style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 14, color: "rgba(87,31,41,.5)", margin: "0 0 4px" }}>No reviews yet</p>
+            <p style={{ fontFamily: "var(--font-body)", fontSize: 13, color: "rgba(87,31,41,.4)", margin: 0 }}>Be the first to share your experience!</p>
+          </div>
+        ) : (
+          <>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {reviews.map(r => (
+                <div key={r.id} style={{ background: "rgba(255,255,255,.5)", backdropFilter: "blur(6px)", borderRadius: 12, padding: "16px 18px", border: "1px solid rgba(87,31,41,.09)", boxShadow: "0 1px 8px rgba(87,31,41,.05)" }}>
+                  <div style={{ display: "flex", gap: 13, alignItems: "flex-start" }}>
+                    {/* Avatar */}
+                    <div style={{ width: 42, height: 42, borderRadius: "50%", background: avatarColor(r.reviewer_name), display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 16, flexShrink: 0, boxShadow: "0 2px 8px rgba(0,0,0,.15)" }}>
+                      {r.reviewer_name.charAt(0).toUpperCase()}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      {/* Name + date */}
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4, gap: 8, flexWrap: "wrap" }}>
+                        <span style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 14, color: "#571F29" }}>{r.reviewer_name}</span>
+                        <span style={{ fontFamily: "var(--font-body)", fontSize: 11, color: "rgba(87,31,41,.4)", whiteSpace: "nowrap" }}>{timeAgo(r.created_at)}</span>
+                      </div>
+                      {/* Stars */}
+                      <div style={{ display: "flex", gap: 2, marginBottom: 8 }}>
+                        {[1,2,3,4,5].map(i => <Star key={i} size={13} filled={i <= r.rating} />)}
+                      </div>
+                      {/* Comment */}
+                      <p style={{ fontFamily: "var(--font-body)", fontSize: 13, color: "rgba(87,31,41,.78)", margin: 0, lineHeight: 1.65 }}>{r.comment}</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {hasMore && (
+              <div style={{ textAlign: "center", marginTop: 20 }}>
+                <button onClick={() => fetchReviews(page + 1)} disabled={loading}
+                  style={{ padding: "10px 30px", background: "none", color: "#571F29", borderRadius: 8, fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 13, border: "1.5px solid rgba(87,31,41,.22)", cursor: "pointer", transition: "background .2s" }}>
+                  {loading ? "Loading…" : `Load more · ${total - reviews.length} remaining`}
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
+// ── Shop Page ─────────────────────────────────────────────────────────────────
 function ShopPage() {
+  const [product, setProduct] = useState(PRODUCT_DEFAULT);
+  const [productLoading, setProductLoading] = useState(true);
   const [activeImg, setActiveImg] = useState(0);
   const [imgKey, setImgKey] = useState(0);
   const [qty, setQty] = useState(1);
@@ -228,10 +772,47 @@ function ShopPage() {
   const [authOpen, setAuthOpen] = useState(false);
   const [cartOpen, setCartOpen] = useState(false);
   const [buySheetOpen, setBuySheetOpen] = useState(false);
+  const [orderModalOpen, setOrderModalOpen] = useState(false);
+  const [reviewStats, setReviewStats] = useState({ rating: 0, count: 0 });
+
+  // Fetch product from API -  use ?id= query param or first active product
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const pid = params.get('id');
+    const url = pid ? `${API_BASE}/products/${pid}` : `${API_BASE}/products`;
+    fetch(url)
+      .then(r => r.json())
+      .then(data => {
+        if (!data || !data.ok) return;
+        const p = pid ? data.data : (data.data && data.data.products && data.data.products[0]);
+        if (!p) return;
+        const statusLower = (p.status || "active").toLowerCase();
+        setProduct({
+          id:       p.id,
+          name:     p.name || "",
+          price:    p.price || 0,
+          desc:     p.description || "",
+          weight:   p.qty ? `${p.qty}${p.unit || 'g'}` : "",
+          category: p.category || "",
+          badge:    p.badge || p.category || "",
+          status:   statusLower,
+          inStock:  statusLower !== "coming soon" && statusLower !== "stock out" &&
+                    (p.stock === null || p.stock === undefined || p.stock > 0),
+          roast:    p.roast || "",
+          origin:   p.origin || "",
+          blend:    p.blend || "",
+          process:  p.process || "",
+          images:   Array.isArray(p.images) ? p.images : [],
+        });
+        setActiveImg(0);
+      })
+      .catch(() => {})
+      .finally(() => setProductLoading(false));
+  }, []);
 
   useEffect(() => { sessionStorage.setItem("mp_cart", JSON.stringify(cart)); }, [cart]);
 
-  const finalPrice = PRODUCT.price - discount;
+  const finalPrice = product.price - discount;
   const totalPrice = finalPrice * qty;
 
   const switchImage = (idx) => {
@@ -239,35 +820,63 @@ function ShopPage() {
     setImgKey(k => k + 1);
   };
 
-  const verifyCoupon = () => {
+  const verifyCoupon = async () => {
     if (!coupon.trim()) return;
-    // Coupon logic to be implemented in a later phase
-    setCouponStatus("err");
+    setCouponStatus("loading");
+    try {
+      const subtotal = product.price * qty;
+      const res  = await fetch(
+        `${API_BASE}/coupons/verify?code=${encodeURIComponent(coupon.trim())}&subtotal=${subtotal}`
+      );
+      const json = await res.json();
+      if (!res.ok) {
+        setDiscount(0);
+        setCouponStatus("err");
+        return;
+      }
+      setDiscount(json.data.discount);
+      setCouponStatus("ok");
+    } catch {
+      setDiscount(0);
+      setCouponStatus("err");
+    }
   };
 
   const addToCart = () => {
-    const item = { id: "blend", name: "Midnight Blend", price: finalPrice, qty };
+    const item = { id: product.id || "blend", name: product.name, price: finalPrice, qty };
     setCart(c => [...c, item]);
     const id = Math.random().toString(36).slice(2);
-    setToasts(ts => [...ts, { id, name: "Midnight Blend — 95g" }]);
+    setToasts(ts => [...ts, { id, name: `${product.name}${product.weight ? ' -  ' + product.weight : ''}` }]);
     setTimeout(() => setToasts(ts => ts.filter(x => x.id !== id)), 2200);
     setAddedAnim(true);
     setTimeout(() => setAddedAnim(false), 1400);
   };
 
-  const buyNowDirect = (q = qty) => {
-    const price = (PRODUCT.price - discount) * q;
-    const msg = `Hi! I'd like to buy: Midnight Blend — 95g Pouch ×${q}. Total: ৳${price.toLocaleString()}`;
-    window.open(`https://wa.me/8801829531588?text=${encodeURIComponent(msg)}`, "_blank", "noopener,noreferrer");
+  const openOrderModal = () => {
+    setBuySheetOpen(false);
+    setOrderModalOpen(true);
   };
 
   const buyNow = () => {
+    if (product.status === "coming soon" || product.status === "stock out") return;
     if (window.innerWidth <= 640) {
       setBuySheetOpen(true);
     } else {
-      buyNowDirect();
+      setOrderModalOpen(true);
     }
   };
+
+  if (productLoading) {
+    return (
+      <div className="shop-page">
+        <ShopHeader cartCount={cart.length} onSignIn={() => setAuthOpen(true)} onCart={() => setCartOpen(true)} />
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "60vh", flexDirection: "column", gap: 16 }}>
+          <i className="fa-solid fa-spinner fa-spin" style={{ fontSize: 32, color: "#571F29", opacity: 0.5 }} aria-hidden="true" />
+          <span style={{ fontFamily: "var(--font-body)", color: "rgba(87,31,41,.5)", fontSize: 14 }}>Loading product…</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="shop-page">
@@ -277,28 +886,35 @@ function ShopPage() {
 
         {/* LEFT: product info */}
         <div className="shop-info">
-          <div className="shop-category">{PRODUCT.category}</div>
+          {product.category && <div className="shop-category">{product.category}</div>}
 
           <div className="shop-name-row">
-            <h1 className="shop-name">{PRODUCT.name}</h1>
-            {PRODUCT.inStock && <span className="shop-stock-badge">In Stock</span>}
+            <h1 className="shop-name">{product.name}</h1>
+            {product.status === "coming soon"
+              ? <span className="shop-stock-badge" style={{ background: "rgba(255,145,0,.15)", color: "#b36200", border: "1px solid rgba(255,145,0,.35)" }}>Coming Soon</span>
+              : product.status === "stock out"
+              ? <span className="shop-stock-badge" style={{ background: "rgba(200,40,40,.1)", color: "#c82828", border: "1px solid rgba(200,40,40,.25)" }}>Out of Stock</span>
+              : product.inStock
+              ? <span className="shop-stock-badge">In Stock</span>
+              : null
+            }
           </div>
 
-          <ShopStarRating rating={PRODUCT.rating} reviews={PRODUCT.reviews} />
+          {reviewStats.rating > 0 && <ShopStarRating rating={reviewStats.rating} reviews={reviewStats.count} />}
 
           <div className="shop-price-row">
             <span className="shop-price">৳{totalPrice.toLocaleString()}</span>
             {discount > 0 && (
               <>
-                <span className="shop-old-price">৳{(PRODUCT.price * qty).toLocaleString()}</span>
+                <span className="shop-old-price">৳{(product.price * qty).toLocaleString()}</span>
                 <span className="shop-save-badge">Coupon Applied</span>
               </>
             )}
           </div>
 
-          <p className="shop-desc">{PRODUCT.desc}</p>
+          <p className="shop-desc">{product.desc}</p>
 
-          {/* coupon + qty + actions — hidden on mobile (lives in buy sheet) */}
+          {/* coupon + qty + actions -  hidden on mobile (lives in buy sheet) */}
           <div className="shop-inline-controls">
             {/* coupon code */}
             <div className="shop-coupon-row">
@@ -312,11 +928,13 @@ function ShopPage() {
                   onKeyDown={e => e.key === "Enter" && verifyCoupon()}
                   aria-label="Coupon code"
                 />
-                <button className="shop-coupon-btn" onClick={verifyCoupon}>Verify</button>
+                <button className="shop-coupon-btn" onClick={verifyCoupon} disabled={couponStatus === "loading"}>
+                  {couponStatus === "loading" ? <i className="fa-solid fa-spinner fa-spin" aria-hidden="true" /> : "Verify"}
+                </button>
               </div>
               {couponStatus === "ok" && (
                 <span className="shop-coupon-msg shop-coupon-msg--ok">
-                  <i className="fa-solid fa-circle-check" aria-hidden="true" /> Coupon applied — ৳{discount} off
+                  <i className="fa-solid fa-circle-check" aria-hidden="true" /> Coupon applied -  ৳{discount} off
                 </span>
               )}
               {couponStatus === "err" && (
@@ -326,62 +944,79 @@ function ShopPage() {
               )}
             </div>
 
-            {/* qty + add to cart */}
+            {/* qty */}
             <div className="shop-qty-row">
               <div className="shop-qty">
                 <button className="shop-qty-btn" onClick={() => setQty(q => Math.max(1, q - 1))} aria-label="Decrease quantity">−</button>
                 <span className="shop-qty-val">{qty}</span>
                 <button className="shop-qty-btn" onClick={() => setQty(q => q + 1)} aria-label="Increase quantity">+</button>
               </div>
-              <button className={"shop-add-btn" + (addedAnim ? " added" : "")} onClick={addToCart}>
-                <CartIcon size={17} />
-                {addedAnim ? "Added!" : "Add to Cart"}
-              </button>
             </div>
           </div>
 
-          {/* buy now */}
-          <button className="shop-buy-btn" onClick={buyNow}>Buy Now</button>
+          {/* proceed -  visible on both mobile and desktop */}
+          {product.status === "coming soon" || product.status === "stock out" ? (
+            <button className="shop-buy-btn" disabled style={{ opacity: 0.45, cursor: "not-allowed" }}>
+              {product.status === "coming soon" ? "Coming Soon" : "Out of Stock"}
+            </button>
+          ) : (
+            <button className="shop-buy-btn" onClick={buyNow}>Proceed</button>
+          )}
 
-          {/* specs */}
-          <div className="shop-specs">
-            <div className="shop-spec"><span>Roast</span><strong>{PRODUCT.roast}</strong></div>
-            <div className="shop-spec"><span>Origin</span><strong>{PRODUCT.origin}</strong></div>
-            <div className="shop-spec"><span>Blend</span><strong>{PRODUCT.blend}</strong></div>
-            <div className="shop-spec"><span>Process</span><strong>{PRODUCT.process}</strong></div>
-            <div className="shop-spec shop-spec--full"><span>Weight</span><strong>{PRODUCT.weight}</strong></div>
-          </div>
+          {/* specs -  only render rows that have data */}
+          {(product.roast || product.origin || product.blend || product.process || product.weight) && (
+            <div className="shop-specs">
+              {product.roast   && <div className="shop-spec"><span>Roast</span><strong>{product.roast}</strong></div>}
+              {product.origin  && <div className="shop-spec"><span>Origin</span><strong>{product.origin}</strong></div>}
+              {product.blend   && <div className="shop-spec"><span>Blend</span><strong>{product.blend}</strong></div>}
+              {product.process && <div className="shop-spec"><span>Process</span><strong>{product.process}</strong></div>}
+              {product.weight  && <div className="shop-spec shop-spec--full"><span>Weight</span><strong>{product.weight}</strong></div>}
+            </div>
+          )}
         </div>
 
         {/* RIGHT: image */}
         <div className="shop-visual">
           <div className="shop-img-card">
             <div className="shop-img-wrapper">
-              <span className="shop-img-badge">{PRODUCT.badge}</span>
-              <img
-                key={imgKey}
-                src={PRODUCT_IMAGES[activeImg].src}
-                alt={`${PRODUCT.name} — ${PRODUCT_IMAGES[activeImg].label}`}
-                className="shop-main-img"
-              />
+              {product.badge && <span className="shop-img-badge">{product.badge}</span>}
+              {product.images.length > 0 ? (
+                <img
+                  key={imgKey}
+                  src={product.images[activeImg]}
+                  alt={`${product.name} -  image ${activeImg + 1}`}
+                  className="shop-main-img"
+                  loading="eager"
+                  decoding="async"
+                />
+              ) : (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%", minHeight: 280, color: "rgba(87,31,41,.2)" }}>
+                  <i className="fa-solid fa-image" style={{ fontSize: 56 }} aria-hidden="true" />
+                </div>
+              )}
             </div>
-            <div className="shop-thumbs">
-              {PRODUCT_IMAGES.map((img, i) => (
-                <button
-                  key={i}
-                  className={"shop-thumb" + (activeImg === i ? " active" : "")}
-                  onClick={() => switchImage(i)}
-                  aria-label={`View ${img.label}`}
-                >
-                  <img src={img.src} alt={img.label} />
-                  <span className="shop-thumb-label">{img.label}</span>
-                </button>
-              ))}
-            </div>
+            {product.images.length > 1 && (
+              <div className="shop-thumbs">
+                {product.images.map((src, i) => (
+                  <button
+                    key={i}
+                    className={"shop-thumb" + (activeImg === i ? " active" : "")}
+                    onClick={() => switchImage(i)}
+                    aria-label={`View image ${i + 1}`}
+                  >
+                    <img src={src} alt={`Image ${i + 1}`} loading="lazy" decoding="async" />
+                    <span className="shop-thumb-label">{i + 1}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
       </div>
+
+      {/* Reviews */}
+      <ReviewsSection productSlug="midnight-blend" onStats={setReviewStats} />
 
       <ShopToastStack toasts={toasts} />
       {cartOpen && <CartPanel cart={cart} onClose={() => setCartOpen(false)} />}
@@ -399,8 +1034,16 @@ function ShopPage() {
         verifyCoupon={verifyCoupon}
         addToCart={addToCart}
         addedAnim={addedAnim}
-        product={PRODUCT}
-        onBuyNow={() => { buyNowDirect(qty); setBuySheetOpen(false); }}
+        product={product}
+        onBuyNow={openOrderModal}
+      />
+      <OrderModal
+        open={orderModalOpen}
+        onClose={() => setOrderModalOpen(false)}
+        product={product}
+        qty={qty}
+        discount={discount}
+        coupon={coupon}
       />
     </div>
   );

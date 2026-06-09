@@ -84,8 +84,12 @@ async function revokeTokens(fastify, rawAccessToken, rawRefreshToken) {
 
 async function isBlacklisted(rawAccessToken) {
   if (!rawAccessToken) return false
-  const hit = await redis.get(`token:blacklist:${rawAccessToken}`)
-  return hit !== null
+  try {
+    const hit = await redis.get(`token:blacklist:${rawAccessToken}`)
+    return hit !== null
+  } catch {
+    return false // Redis unavailable — skip blacklist check, JWT still verified
+  }
 }
 
 module.exports = { createTokenPair, rotateRefreshToken, revokeTokens, isBlacklisted }

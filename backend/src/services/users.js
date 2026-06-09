@@ -73,25 +73,46 @@ async function findOrCreateGoogleUser(googleId, email, name) {
 // ── Phone OTP auth helper ────────────────────────────────────────────────────
 
 async function findOrCreateUser(phone) {
-  const { rows } = await query(
-    `SELECT id, phone, email, name, role, points_balance, is_active
-     FROM   users WHERE phone = $1`,
-    [phone]
-  )
+  return withTransaction(async (client) => {
+    const { rows } = await client.query(
+      `SELECT id, phone, email, name, role, points_balance, is_active
+       FROM   users WHERE phone = $1`,
+      [phone]
+    )
 
-  if (rows.length) {
-    const user = rows[0]
-    if (!user.is_active) throw { code: 'ACCOUNT_INACTIVE', message: 'This account has been deactivated.' }
-    return { user, isNew: false }
-  }
+    let user, isNew = false
 
-  const res = await query(
-    `INSERT INTO users (phone)
-     VALUES ($1)
-     RETURNING id, phone, email, name, role, points_balance, is_active`,
-    [phone]
-  )
-  return { user: res.rows[0], isNew: true }
+    if (rows.length) {
+      user = rows[0]
+      if (!user.is_active) throw { code: 'ACCOUNT_INACTIVE', message: 'This account has been deactivated.' }
+    } else {
+      // New user — pre-fill name from their most recent guest order if available
+      const { rows: nameRows } = await client.query(
+        `SELECT customer_name FROM orders
+         WHERE  customer_phone = $1 AND customer_name IS NOT NULL AND user_id IS NULL
+         ORDER  BY created_at DESC LIMIT 1`,
+        [phone]
+      )
+      const prefillName = nameRows[0]?.customer_name ?? null
+
+      const { rows: inserted } = await client.query(
+        `INSERT INTO users (phone, name)
+         VALUES ($1, $2)
+         RETURNING id, phone, email, name, role, points_balance, is_active`,
+        [phone, prefillName]
+      )
+      user = inserted[0]
+      isNew = true
+    }
+
+    // Migrate all previous guest orders placed with this phone to the user's account
+    await client.query(
+      `UPDATE orders SET user_id = $1 WHERE customer_phone = $2 AND user_id IS NULL`,
+      [user.id, phone]
+    )
+
+    return { user, isNew }
+  })
 }
 
 // ── Profile ─────────────────────────────────────────────────────────────────

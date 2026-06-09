@@ -362,4 +362,109 @@ async function trackOrder(orderRef) {
   }
 }
 
-module.exports = { placeOrder, listOrders, getOrder, cancelOrder, trackOrder }
+// ── Guest Order (no login required) ────────────────────────────────────────
+
+const GUEST_PRODUCT_NAME = 'Midnight Blend — 95g Pouch'
+const GUEST_UNIT_PRICE   = 699
+
+async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, otp, product_id }) {
+  // Verify OTP before touching any order data
+  const { verifyOtp } = require('./otp')
+  await verifyOtp(phone.trim(), otp)
+
+  return withTransaction(async (client) => {
+    // Resolve product price — use DB price if product_id provided, else hardcoded default
+    let productName = GUEST_PRODUCT_NAME
+    let unitPrice   = GUEST_UNIT_PRICE
+    if (product_id) {
+      const { rows: pRows } = await client.query(
+        `SELECT name, price FROM products WHERE id = $1 AND LOWER(status) = 'active'`,
+        [product_id]
+      )
+      if (pRows.length) {
+        productName = pRows[0].name
+        unitPrice   = pRows[0].price
+      }
+    }
+
+    const subtotal = unitPrice * qty
+
+    let discountAmount = 0
+    let couponId       = null
+    if (coupon_code) {
+      try {
+        const c = await validateAndLockCoupon(client, coupon_code.toUpperCase(), subtotal)
+        discountAmount = c.discount
+        couponId       = c.couponId
+      } catch {
+        // ignore invalid coupon for guest checkout
+      }
+    }
+
+    const total     = subtotal - discountAmount + DELIVERY_FEE
+    const orderRef  = await generateOrderRef(client)
+    const addrSnap  = { label: 'Delivery', line1: address }
+
+    const { rows: orderRows } = await client.query(
+      `INSERT INTO orders
+         (order_ref, user_id, customer_name, customer_phone,
+          address_snapshot, payment_type, payment_number,
+          coupon_code, discount_amount, subtotal, delivery_fee, total, notes)
+       VALUES ($1, NULL, $2, $3, $4, 'cod', $3, $5, $6, $7, $8, $9, $10)
+       RETURNING id, order_ref, status, created_at`,
+      [orderRef, name.trim(), phone.trim(),
+       JSON.stringify(addrSnap),
+       coupon_code?.toUpperCase() ?? null,
+       discountAmount, subtotal, DELIVERY_FEE, total,
+       notes ?? null]
+    )
+    const order = orderRows[0]
+
+    await client.query(
+      `INSERT INTO order_items (order_id, name_snapshot, qty, unit_price, subtotal)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [order.id, productName, qty, unitPrice, unitPrice * qty]
+    )
+
+    if (couponId) {
+      await client.query(
+        `UPDATE coupons SET used_count = used_count + 1 WHERE id = $1`, [couponId]
+      )
+    }
+
+    await client.query(
+      `INSERT INTO order_tracking (order_id, step, detail) VALUES ($1, 'confirmed', 'Order received.')`,
+      [order.id]
+    )
+
+    await client.query(
+      `INSERT INTO customers (phone, name, last_address, order_count, total_spent)
+       VALUES ($1, $2, $3, 1, $4)
+       ON CONFLICT (phone) DO UPDATE SET
+         name         = EXCLUDED.name,
+         last_address = EXCLUDED.last_address,
+         order_count  = customers.order_count + 1,
+         total_spent  = customers.total_spent + EXCLUDED.total_spent,
+         last_seen    = NOW()`,
+      [phone.trim(), name.trim(), address, total]
+    )
+
+    try {
+      const { sendOrderConfirmation } = require('./sms')
+      await sendOrderConfirmation(phone.trim(), orderRef, total)
+    } catch (err) {
+      console.error('[orders] SMS send failed:', err.message)
+    }
+
+    return {
+      order_ref:       orderRef,
+      status:          order.status,
+      subtotal,
+      discount_amount: discountAmount,
+      total,
+      created_at:      order.created_at,
+    }
+  })
+}
+
+module.exports = { placeOrder, placeGuestOrder, listOrders, getOrder, cancelOrder, trackOrder }
