@@ -83,4 +83,25 @@ module.exports = async function orderRoutes(app) {
     const result = await ordersSvc.cancelOrder(req.user.sub, req.params.id)
     return { ok: true, data: result }
   })
+
+  // POST /orders/quick — authenticated quick order (no OTP, no variant required)
+  app.post('/quick', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['qty', 'address'],
+        properties: {
+          qty:         { type: 'integer', minimum: 1, maximum: 50 },
+          address:     { type: 'string', minLength: 5, maxLength: 500 },
+          product_id:  { type: 'string', format: 'uuid' },
+          coupon_code: { type: 'string', maxLength: 20 },
+          notes:       { type: 'string', maxLength: 500 },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req, reply) => {
+    const order = await ordersSvc.placeQuickOrder(req.user.sub, req.body)
+    return reply.code(201).send({ ok: true, data: order })
+  })
 }

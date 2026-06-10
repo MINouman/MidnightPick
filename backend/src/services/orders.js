@@ -1,7 +1,6 @@
 'use strict'
 
 const { query, withTransaction } = require('../config/db')
-const { calculatePointsForOrder, awardPoints, reversePoints } = require('./points')
 
 const DELIVERY_FEE = 0  // free delivery; update when zone-based fees are added
 
@@ -173,16 +172,6 @@ async function placeOrder(userId, body) {
       [order.id]
     )
 
-    // 11. Award loyalty points
-    const pointsEarned = calculatePointsForOrder(total)
-    if (pointsEarned > 0) {
-      await awardPoints(client, userId, pointsEarned, `Order #${orderRef}`, order.id)
-      await client.query(
-        `UPDATE orders SET points_earned = $2 WHERE id = $1`,
-        [order.id, pointsEarned]
-      )
-    }
-
     return {
       id:              order.id,
       order_ref:       orderRef,
@@ -191,7 +180,7 @@ async function placeOrder(userId, body) {
       discount_amount: discountAmount,
       delivery_fee:    DELIVERY_FEE,
       total,
-      points_earned:   pointsEarned,
+      points_earned:   0,
       created_at:      order.created_at,
     }
   })
@@ -312,15 +301,6 @@ async function cancelOrder(userId, orderId) {
       await client.query(
         `UPDATE coupons SET used_count = GREATEST(0, used_count - 1) WHERE code = $1`,
         [order.coupon_code]
-      )
-    }
-
-    // Reverse loyalty points
-    if (order.points_earned > 0) {
-      await reversePoints(
-        client, userId, order.points_earned,
-        `Cancelled order #${order.order_ref} — points reversed`,
-        order.id
       )
     }
 
@@ -480,4 +460,100 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
   })
 }
 
-module.exports = { placeOrder, placeGuestOrder, listOrders, getOrder, cancelOrder, trackOrder }
+// ── Quick Order (authenticated, no OTP, no variant required) ───────────────
+
+async function placeQuickOrder(userId, { product_id, qty, address, coupon_code, notes }) {
+  return withTransaction(async (client) => {
+    // Resolve user name and phone
+    const { rows: uRows } = await client.query(
+      `SELECT name, phone FROM users WHERE id = $1`,
+      [userId]
+    )
+    if (!uRows.length) throw { code: 'NOT_FOUND', message: 'User not found.' }
+    const name  = uRows[0].name  || 'Customer'
+    const phone = uRows[0].phone || ''
+
+    // Resolve product price
+    let productName = GUEST_PRODUCT_NAME
+    let unitPrice   = GUEST_UNIT_PRICE
+    if (product_id) {
+      const { rows: pRows } = await client.query(
+        `SELECT name, price FROM products WHERE id = $1 AND LOWER(status) = 'active'`,
+        [product_id]
+      )
+      if (pRows.length) {
+        productName = pRows[0].name
+        unitPrice   = parseInt(pRows[0].price, 10)
+      }
+    }
+
+    const subtotal = unitPrice * qty
+
+    let discountAmount = 0
+    let couponId       = null
+    if (coupon_code) {
+      try {
+        const c = await validateAndLockCoupon(client, coupon_code.toUpperCase(), subtotal)
+        discountAmount = c.discount
+        couponId       = c.couponId
+      } catch {
+        // ignore invalid coupon silently
+      }
+    }
+
+    const total    = subtotal - discountAmount + DELIVERY_FEE
+    const orderRef = await generateOrderRef(client)
+    const addrSnap = { label: 'Delivery', line1: address }
+
+    const { rows: orderRows } = await client.query(
+      `INSERT INTO orders
+         (order_ref, user_id, customer_name, customer_phone,
+          address_snapshot, payment_type, payment_number,
+          coupon_code, discount_amount, subtotal, delivery_fee, total, notes)
+       VALUES ($1, $2, $3, $4, $5, 'cod', $4, $6, $7, $8, $9, $10, $11)
+       RETURNING id, order_ref, status, created_at`,
+      [orderRef, userId, name, phone,
+       JSON.stringify(addrSnap),
+       coupon_code?.toUpperCase() ?? null,
+       discountAmount, subtotal, DELIVERY_FEE, total,
+       notes ?? null]
+    )
+    const order = orderRows[0]
+
+    await client.query(
+      `INSERT INTO order_items (order_id, name_snapshot, qty, unit_price, subtotal)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [order.id, productName, qty, unitPrice, unitPrice * qty]
+    )
+
+    if (couponId) {
+      await client.query(
+        `UPDATE coupons SET used_count = used_count + 1 WHERE id = $1`, [couponId]
+      )
+    }
+
+    await client.query(
+      `INSERT INTO order_tracking (order_id, step, detail) VALUES ($1, 'confirmed', 'Order received.')`,
+      [order.id]
+    )
+
+    try {
+      const { sendOrderConfirmation } = require('./sms')
+      await sendOrderConfirmation(phone, orderRef, total)
+    } catch (err) {
+      console.error('[orders] SMS send failed:', err.message)
+    }
+
+    return {
+      order_ref:       orderRef,
+      status:          order.status,
+      subtotal,
+      discount_amount: discountAmount,
+      total,
+      points_earned:   0,
+      created_at:      order.created_at,
+    }
+  })
+}
+
+module.exports = { placeOrder, placeQuickOrder, placeGuestOrder, listOrders, getOrder, cancelOrder, trackOrder }

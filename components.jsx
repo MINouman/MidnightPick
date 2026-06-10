@@ -912,7 +912,7 @@ const ROLE_ROUTES = {
 };
 
 function AuthModal({ open, onClose }) {
-  const [tab,       setTab]       = React.useState("login");
+  const [tab,       setTab]       = React.useState("phone");
   const [phase,     setPhase]     = React.useState("splash");
   const [showPass,  setShowPass]  = React.useState(false);
   const [showPass2, setShowPass2] = React.useState(false);
@@ -921,13 +921,19 @@ function AuthModal({ open, onClose }) {
   const [form, setForm] = React.useState({ name: "", email: "", password: "", password2: "" });
   const [errors, setErrors] = React.useState({});
   const [serverError, setServerError] = React.useState("");
+  const [otpPhone,  setOtpPhone]  = React.useState("");
+  const [otpDigits, setOtpDigits] = React.useState(["","","","","",""]);
+  const [otpStep,   setOtpStep]   = React.useState("phone");
+  const [otpTimer,  setOtpTimer]  = React.useState(0);
+  const otpRefs = React.useRef([]);
 
   React.useEffect(() => {
     if (open) {
-      setTab("login"); setPhase("splash");
+      setTab("phone"); setPhase("splash");
       setForm({ name: "", email: "", password: "", password2: "" });
       setErrors({}); setSubmitting(false); setServerError("");
       setShowPass(false); setShowPass2(false); setRemember(false);
+      setOtpPhone(""); setOtpDigits(["","","","","",""]); setOtpStep("phone"); setOtpTimer(0);
     }
   }, [open]);
 
@@ -936,6 +942,16 @@ function AuthModal({ open, onClose }) {
     if (!open) { _gsiErrorReporter = null; window.google?.accounts?.id?.cancel(); }
     return () => { document.body.style.overflow = ""; };
   }, [open]);
+
+  React.useEffect(() => {
+    if (otpTimer <= 0) return;
+    const id = setTimeout(() => setOtpTimer(t => t - 1), 1000);
+    return () => clearTimeout(id);
+  }, [otpTimer]);
+
+  React.useEffect(() => {
+    if (open && otpStep === "otp") setTimeout(() => otpRefs.current[0]?.focus(), 80);
+  }, [open, otpStep]);
 
   if (!open) return null;
 
@@ -949,6 +965,7 @@ function AuthModal({ open, onClose }) {
     setErrors({}); setServerError("");
     setForm({ name: "", email: "", password: "", password2: "" });
     setShowPass(false); setShowPass2(false);
+    if (t === "phone") { setOtpStep("phone"); setOtpDigits(["","","","","",""]); }
   };
 
   const validate = () => {
@@ -991,6 +1008,61 @@ function AuthModal({ open, onClose }) {
     }
   };
 
+  const handleSendOtp = async () => {
+    const phone = otpPhone.trim();
+    if (!/^01[3-9]\d{8}$/.test(phone)) {
+      setErrors({ otpPhone: "Enter a valid BD number (e.g. 01X XXXX XXXX)." });
+      return;
+    }
+    setSubmitting(true); setServerError(""); setErrors({});
+    try {
+      const res  = await fetch(`${API_BASE}/auth/otp/send`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error?.message || "Failed to send OTP.");
+      setOtpStep("otp");
+      setOtpTimer(data.data.expires_in || 120);
+    } catch (err) { setServerError(err.message); }
+    finally { setSubmitting(false); }
+  };
+
+  const handleVerifyOtp = async () => {
+    const code = otpDigits.join("");
+    if (!/^\d{6}$/.test(code)) {
+      setErrors({ otpCode: "Enter the 6-digit code." });
+      return;
+    }
+    setSubmitting(true); setServerError(""); setErrors({});
+    try {
+      const res  = await fetch(`${API_BASE}/auth/otp/verify`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: otpPhone.trim(), otp: code }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error?.message || "Invalid OTP.");
+      localStorage.setItem("mp_access_token",  data.data.access_token);
+      localStorage.setItem("mp_refresh_token", data.data.refresh_token);
+      localStorage.setItem("mp_user",          JSON.stringify(data.data.user));
+      window.location.href = ROLE_ROUTES[data.data.user.role] || ROLE_ROUTES.user;
+    } catch (err) { setServerError(err.message); setSubmitting(false); }
+  };
+
+  const handleResendOtp = async () => {
+    setOtpDigits(["","","","","",""]); setServerError(""); setSubmitting(true);
+    try {
+      const res  = await fetch(`${API_BASE}/auth/otp/send`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: otpPhone.trim() }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error?.message || "Failed to send OTP.");
+      setOtpTimer(data.data.expires_in || 120);
+    } catch (err) { setServerError(err.message); }
+    finally { setSubmitting(false); }
+  };
+
   const formPane = (
     <div className={`auth-form-pane${phase === "form" ? " auth-form-pane--visible" : ""}`}>
       <button className="auth-close-btn" onClick={onClose} aria-label="Close">
@@ -1005,10 +1077,12 @@ function AuthModal({ open, onClose }) {
       )}
 
       <div className="auth-tabs">
+        <button className={`auth-tab-btn${tab === "phone" ? " active" : ""}`} onClick={() => switchTab("phone")}>Phone</button>
         <button className={`auth-tab-btn${tab === "login" ? " active" : ""}`} onClick={() => switchTab("login")}>Login</button>
         <button className={`auth-tab-btn${tab === "signup" ? " active" : ""}`} onClick={() => switchTab("signup")}>Sign Up</button>
       </div>
 
+      {tab !== "phone" && <>
       <button className="auth-google-btn" type="button" onClick={() => {
         setServerError("");
         if (!window.google?.accounts?.id) {
@@ -1037,101 +1111,217 @@ function AuthModal({ open, onClose }) {
       </button>
 
       <div className="auth-divider"><span>or</span></div>
+      </>}
 
-      <form className="auth-form" onSubmit={handleSubmit} noValidate>
-        {tab === "signup" && (
-          <div className="auth-field">
-            <label className="auth-label">Full Name</label>
-            <div className="auth-input-wrap">
-              <i className="fa-solid fa-user auth-input-icon" aria-hidden="true" />
-              <input className={`auth-input${errors.name ? " error" : ""}`} type="text" placeholder="Your full name" value={form.name} onChange={set("name")} autoComplete="name" />
+      {tab === "phone" ? (
+        <div className="auth-form">
+          {otpStep === "phone" ? (
+            <>
+              <div className="auth-field">
+                <label className="auth-label">Phone Number</label>
+                <div className="auth-input-wrap">
+                  <i className="fa-solid fa-phone auth-input-icon" aria-hidden="true" />
+                  <input
+                    className={`auth-input${errors.otpPhone ? " error" : ""}`}
+                    type="tel"
+                    placeholder="01X XXXX XXXX"
+                    value={otpPhone}
+                    onChange={e => { setOtpPhone(e.target.value.replace(/\D/g, "").slice(0, 11)); if (errors.otpPhone) setErrors(p => ({...p, otpPhone: undefined})); }}
+                    autoComplete="tel"
+                    maxLength={11}
+                    autoFocus
+                  />
+                </div>
+                {errors.otpPhone && <span className="auth-field-err">{errors.otpPhone}</span>}
+              </div>
+              {serverError && <p className="auth-server-err">{serverError}</p>}
+              <button type="button" className={`auth-submit-btn${submitting ? " loading" : ""}`} disabled={submitting} onClick={handleSendOtp}>
+                {submitting ? <span className="sub-spinner" aria-hidden="true" /> : "Send OTP"}
+              </button>
+            </>
+          ) : (
+            <>
+              {/* Phone confirmation */}
+              <div style={{ textAlign: "center", marginBottom: 22 }}>
+                <p style={{ fontSize: 13, color: "rgba(15,14,14,.5)", marginBottom: 4 }}>Enter the 6-digit code sent to</p>
+                <p style={{ fontSize: 17, fontWeight: 700, color: "var(--burgundy)", letterSpacing: ".02em" }}>{otpPhone}</p>
+                <p style={{ fontSize: 11, color: "rgba(15,14,14,.32)", marginTop: 3 }}>via WhatsApp / SMS</p>
+              </div>
+
+              {/* 6-box OTP input */}
+              <div style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: 16 }}>
+                {[0,1,2,3,4,5].map(i => (
+                  <input
+                    key={i}
+                    ref={el => otpRefs.current[i] = el}
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={1}
+                    value={otpDigits[i]}
+                    disabled={submitting}
+                    autoComplete="one-time-code"
+                    onChange={e => {
+                      if (!/^\d*$/.test(e.target.value)) return;
+                      const d = [...otpDigits]; d[i] = e.target.value.slice(-1);
+                      setOtpDigits(d);
+                      if (errors.otpCode) setErrors(p => ({...p, otpCode: undefined}));
+                      if (e.target.value && i < 5) otpRefs.current[i + 1]?.focus();
+                    }}
+                    onKeyDown={e => {
+                      if (e.key === "Backspace" && !otpDigits[i] && i > 0) {
+                        const d = [...otpDigits]; d[i - 1] = "";
+                        setOtpDigits(d); otpRefs.current[i - 1]?.focus();
+                      }
+                    }}
+                    onPaste={e => {
+                      const pasted = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, 6);
+                      if (!pasted) return;
+                      e.preventDefault();
+                      const d = Array(6).fill(""); pasted.split("").forEach((c, j) => { d[j] = c; });
+                      setOtpDigits(d);
+                      otpRefs.current[Math.min(pasted.length, 5)]?.focus();
+                    }}
+                    style={{
+                      width: 42, height: 50,
+                      textAlign: "center", fontSize: 20, fontWeight: 700,
+                      fontFamily: "var(--font-body)",
+                      background: "#fff",
+                      border: `2px solid ${errors.otpCode ? "#e57373" : otpDigits[i] ? "var(--flame)" : "rgba(87,31,41,.15)"}`,
+                      borderRadius: 10,
+                      color: "var(--burgundy)",
+                      outline: "none",
+                      transition: "border-color .15s",
+                    }}
+                  />
+                ))}
+              </div>
+
+              {errors.otpCode && <p className="auth-server-err" style={{ marginBottom: 10 }}>{errors.otpCode}</p>}
+              {serverError  && <p className="auth-server-err" style={{ marginBottom: 10 }}>{serverError}</p>}
+
+              <button
+                type="button"
+                className={`auth-submit-btn${submitting ? " loading" : ""}`}
+                disabled={submitting || otpDigits.some(d => !d)}
+                onClick={handleVerifyOtp}
+              >
+                {submitting ? <span className="sub-spinner" aria-hidden="true" /> : "Verify & Continue"}
+              </button>
+
+              <div style={{ textAlign: "center", marginTop: 14, fontSize: 13 }}>
+                {otpTimer > 0
+                  ? <span style={{ color: "rgba(15,14,14,.5)" }}>
+                      <i className="fa-regular fa-clock" aria-hidden="true" style={{ marginRight: 5 }} />
+                      Resend in <strong style={{ color: "var(--ink)", fontVariantNumeric: "tabular-nums" }}>
+                        {Math.floor(otpTimer / 60)}:{String(otpTimer % 60).padStart(2, "0")}
+                      </strong>
+                    </span>
+                  : <button type="button" className="auth-switch-link" onClick={handleResendOtp}>Resend OTP</button>
+                }
+                <span style={{ color: "rgba(15,14,14,.2)", margin: "0 8px" }}>·</span>
+                <button type="button" className="auth-switch-link" onClick={() => { setOtpStep("phone"); setOtpDigits(["","","","","",""]); setServerError(""); setErrors({}); }}>
+                  Change number
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      ) : (
+        <form className="auth-form" onSubmit={handleSubmit} noValidate>
+          {tab === "signup" && (
+            <div className="auth-field">
+              <label className="auth-label">Full Name</label>
+              <div className="auth-input-wrap">
+                <i className="fa-solid fa-user auth-input-icon" aria-hidden="true" />
+                <input className={`auth-input${errors.name ? " error" : ""}`} type="text" placeholder="Your full name" value={form.name} onChange={set("name")} autoComplete="name" />
+              </div>
+              {errors.name && <span className="auth-field-err">{errors.name}</span>}
             </div>
-            {errors.name && <span className="auth-field-err">{errors.name}</span>}
-          </div>
-        )}
+          )}
 
-        <div className="auth-field">
-          <label className="auth-label">Email Address</label>
-          <div className="auth-input-wrap">
-            <i className="fa-solid fa-envelope auth-input-icon" aria-hidden="true" />
-            <input className={`auth-input${errors.email ? " error" : ""}`} type="email" placeholder="Enter your email address" value={form.email} onChange={set("email")} autoComplete="email" />
-          </div>
-          {errors.email && <span className="auth-field-err">{errors.email}</span>}
-        </div>
-
-        <div className="auth-field">
-          <label className="auth-label">Password</label>
-          <div className="auth-input-wrap">
-            <i className="fa-solid fa-lock auth-input-icon" aria-hidden="true" />
-            <input
-              className={`auth-input auth-input--pass${errors.password ? " error" : ""}`}
-              type={showPass ? "text" : "password"}
-              placeholder="Enter your password"
-              value={form.password}
-              onChange={set("password")}
-              autoComplete={tab === "login" ? "current-password" : "new-password"}
-            />
-            <button type="button" className="auth-eye-btn" onClick={() => setShowPass((v) => !v)} aria-label={showPass ? "Hide password" : "Show password"}>
-              <EyeIcon size={15} open={showPass} />
-            </button>
-          </div>
-          {errors.password && <span className="auth-field-err">{errors.password}</span>}
-        </div>
-
-        {tab === "signup" && (
           <div className="auth-field">
-            <label className="auth-label">Confirm Password</label>
+            <label className="auth-label">Email Address</label>
+            <div className="auth-input-wrap">
+              <i className="fa-solid fa-envelope auth-input-icon" aria-hidden="true" />
+              <input className={`auth-input${errors.email ? " error" : ""}`} type="email" placeholder="Enter your email address" value={form.email} onChange={set("email")} autoComplete="email" />
+            </div>
+            {errors.email && <span className="auth-field-err">{errors.email}</span>}
+          </div>
+
+          <div className="auth-field">
+            <label className="auth-label">Password</label>
             <div className="auth-input-wrap">
               <i className="fa-solid fa-lock auth-input-icon" aria-hidden="true" />
               <input
-                className={`auth-input auth-input--pass${errors.password2 ? " error" : ""}`}
-                type={showPass2 ? "text" : "password"}
-                placeholder="Repeat your password"
-                value={form.password2}
-                onChange={set("password2")}
-                autoComplete="new-password"
+                className={`auth-input auth-input--pass${errors.password ? " error" : ""}`}
+                type={showPass ? "text" : "password"}
+                placeholder="Enter your password"
+                value={form.password}
+                onChange={set("password")}
+                autoComplete={tab === "login" ? "current-password" : "new-password"}
               />
-              <button type="button" className="auth-eye-btn" onClick={() => setShowPass2((v) => !v)} aria-label={showPass2 ? "Hide password" : "Show password"}>
-                <EyeIcon size={15} open={showPass2} />
+              <button type="button" className="auth-eye-btn" onClick={() => setShowPass((v) => !v)} aria-label={showPass ? "Hide password" : "Show password"}>
+                <EyeIcon size={15} open={showPass} />
               </button>
             </div>
-            {errors.password2 && <span className="auth-field-err">{errors.password2}</span>}
+            {errors.password && <span className="auth-field-err">{errors.password}</span>}
           </div>
-        )}
 
-        {tab === "login" && (
-          <div className="auth-meta-row">
-            <label className="auth-remember-label">
-              <button
-                type="button"
-                role="checkbox"
-                aria-checked={remember}
-                className={`auth-checkbox${remember ? " checked" : ""}`}
-                onClick={() => setRemember((v) => !v)}
-              >
-                {remember && <i className="fa-solid fa-check" style={{ fontSize: 8 }} aria-hidden="true" />}
-              </button>
-              Remember Me
-            </label>
-            <a href="#" className="auth-forgot-link">Forgot Password?</a>
-          </div>
-        )}
+          {tab === "signup" && (
+            <div className="auth-field">
+              <label className="auth-label">Confirm Password</label>
+              <div className="auth-input-wrap">
+                <i className="fa-solid fa-lock auth-input-icon" aria-hidden="true" />
+                <input
+                  className={`auth-input auth-input--pass${errors.password2 ? " error" : ""}`}
+                  type={showPass2 ? "text" : "password"}
+                  placeholder="Repeat your password"
+                  value={form.password2}
+                  onChange={set("password2")}
+                  autoComplete="new-password"
+                />
+                <button type="button" className="auth-eye-btn" onClick={() => setShowPass2((v) => !v)} aria-label={showPass2 ? "Hide password" : "Show password"}>
+                  <EyeIcon size={15} open={showPass2} />
+                </button>
+              </div>
+              {errors.password2 && <span className="auth-field-err">{errors.password2}</span>}
+            </div>
+          )}
 
-        {serverError && <p className="auth-server-err">{serverError}</p>}
+          {tab === "login" && (
+            <div className="auth-meta-row">
+              <label className="auth-remember-label">
+                <button
+                  type="button"
+                  role="checkbox"
+                  aria-checked={remember}
+                  className={`auth-checkbox${remember ? " checked" : ""}`}
+                  onClick={() => setRemember((v) => !v)}
+                >
+                  {remember && <i className="fa-solid fa-check" style={{ fontSize: 8 }} aria-hidden="true" />}
+                </button>
+                Remember Me
+              </label>
+              <a href="#" className="auth-forgot-link">Forgot Password?</a>
+            </div>
+          )}
 
-        <button type="submit" className={`auth-submit-btn${submitting ? " loading" : ""}`} disabled={submitting}>
-          {submitting
-            ? <span className="sub-spinner" aria-hidden="true" />
-            : tab === "login" ? "Login" : "Create Account"}
-        </button>
-      </form>
+          {serverError && <p className="auth-server-err">{serverError}</p>}
 
-      <p className="auth-switch-row">
+          <button type="submit" className={`auth-submit-btn${submitting ? " loading" : ""}`} disabled={submitting}>
+            {submitting
+              ? <span className="sub-spinner" aria-hidden="true" />
+              : tab === "login" ? "Login" : "Create Account"}
+          </button>
+        </form>
+      )}
+
+      {tab !== "phone" && <p className="auth-switch-row">
         {tab === "login" ? "Don't have an account?" : "Already have an account?"}{" "}
         <button className="auth-switch-link" onClick={() => switchTab(tab === "login" ? "signup" : "login")}>
           {tab === "login" ? "Sign Up" : "Login"}
         </button>
-      </p>
+      </p>}
     </div>
   );
 

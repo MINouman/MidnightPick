@@ -620,23 +620,89 @@ function Customers() {
 
 // ── Section: Subscriptions ─────────────────────────────
 function Subscriptions() {
-  const [subTab, setSubTab] = useState("Active");
+  const STATUS_TABS = ["active", "paused", "cancelled"];
+  const [subTab, setSubTab]   = useState("active");
+  const [subs, setSubs]       = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    window.mpApi.fetch(`/admin/subscriptions?status=${subTab}`)
+      .then(res => setSubs(res?.data?.subscriptions || []))
+      .catch(() => setSubs([]))
+      .finally(() => setLoading(false));
+  }, [subTab]);
+
+  const sfx    = n => ['st','nd','rd'][n - 1] || 'th';
+  const fmtDt  = iso => iso ? new Date(iso).toLocaleDateString('en-BD', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+  const fmtAmt = v  => `৳${Number(v).toLocaleString()}`;
 
   return (
     <div className="dash-inner-wide">
       <div className="page-title">Subscriptions</div>
 
-      <div className="toggle-group">
-        {["Active", "Paused", "Cancelled"].map(t => (
-          <button key={t} className={`toggle-btn ${subTab === t ? "active" : ""}`} onClick={() => setSubTab(t)}>{t}</button>
+      <div className="toggle-group mb16">
+        {STATUS_TABS.map(t => (
+          <button key={t} className={`toggle-btn ${subTab === t ? "active" : ""}`} onClick={() => setSubTab(t)}>
+            {t.charAt(0).toUpperCase() + t.slice(1)}
+          </button>
         ))}
       </div>
 
-      <div className="empty-state" style={{ marginTop: 40 }}>
-        <div className="empty-icon"><i className="fa fa-calendar-check" /></div>
-        <h3>Subscriptions coming soon</h3>
-        <p>Subscription management backend is not yet built. This section will show active, paused, and cancelled subscriptions once ready.</p>
-      </div>
+      {loading ? (
+        <div style={{ textAlign: "center", padding: "40px 0", color: "rgba(87,31,41,.4)" }}>
+          <i className="fa fa-spinner fa-spin" style={{ fontSize: 24 }} />
+        </div>
+      ) : subs.length === 0 ? (
+        <div className="empty-state" style={{ marginTop: 24 }}>
+          <div className="empty-icon"><i className="fa fa-calendar-check" /></div>
+          <h3>No {subTab} subscriptions</h3>
+          <p>There are no {subTab} subscriptions right now.</p>
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {subs.map(s => (
+            <div key={s.id} className="card" style={{ padding: "14px 16px" }}>
+              <div className="row-between mb8">
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 15 }}>{s.user_name}</div>
+                  <div className="text-muted text-xs">{s.user_phone || s.user_email}</div>
+                </div>
+                <span className={`badge ${s.status === "active" ? "badge-green" : s.status === "paused" ? "badge-gray" : "badge-red"}`}>
+                  {s.status.charAt(0).toUpperCase() + s.status.slice(1)}
+                </span>
+              </div>
+
+              <div className="row-between text-sm mb4">
+                <span className="text-muted">Product</span>
+                <span style={{ fontWeight: 600 }}>{s.product_name} × {s.qty}</span>
+              </div>
+              <div className="row-between text-sm mb4">
+                <span className="text-muted">Monthly</span>
+                <span style={{ fontWeight: 600, color: "var(--orange)" }}>{fmtAmt(s.qty * s.unit_price)}</span>
+              </div>
+              <div className="row-between text-sm mb4">
+                <span className="text-muted">Delivery day</span>
+                <span>{s.billing_day}{sfx(s.billing_day)} of each month</span>
+              </div>
+              <div className="row-between text-sm mb4">
+                <span className="text-muted">Next delivery</span>
+                <span>{fmtDt(s.next_delivery_date)}</span>
+              </div>
+              {s.status === "paused" && s.pause_until && (
+                <div className="row-between text-sm mb4">
+                  <span className="text-muted">Resumes</span>
+                  <span style={{ color: "var(--orange)" }}>{fmtDt(s.pause_until)}</span>
+                </div>
+              )}
+              <div className="row-between text-sm">
+                <span className="text-muted">Address</span>
+                <span style={{ maxWidth: "55%", textAlign: "right", wordBreak: "break-word" }}>{s.address}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1010,51 +1076,208 @@ function CrewManagement() {
 
 // ── Section: Points & Redemptions ─────────────────────
 function PointsAdmin() {
-  const [adjSearch, setAdjSearch] = useState("");
-  const [adjAmount, setAdjAmount] = useState("");
-  const [adjReason, setAdjReason] = useState("");
+  const [rewards, setRewards]   = useState([]);
+  const [loading, setLoading]   = useState(true);
+  const [panel, setPanel]       = useState(null); // null | { mode: 'add' | 'edit', data }
+  const [busy, setBusy]         = useState(false);
+  const [form, setForm]         = useState({ label: "", pts_cost: "", worth: "", is_active: true, sort_order: 0 });
+
+  useEffect(() => {
+    window.mpApi.fetch('/admin/point-rewards')
+      .then(res => setRewards(res?.data?.rewards || []))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  function openAdd() {
+    setForm({ label: "", pts_cost: "", worth: "", is_active: true, sort_order: 0 });
+    setPanel({ mode: "add" });
+  }
+
+  function openEdit(r) {
+    setForm({ label: r.label, pts_cost: String(r.pts_cost), worth: r.worth || "", is_active: r.is_active, sort_order: r.sort_order });
+    setPanel({ mode: "edit", id: r.id });
+  }
+
+  async function handleSave() {
+    if (!form.label.trim() || !form.pts_cost) return;
+    setBusy(true);
+    try {
+      const body = {
+        label:      form.label.trim(),
+        pts_cost:   parseInt(form.pts_cost),
+        worth:      form.worth.trim() || null,
+        is_active:  form.is_active,
+        sort_order: parseInt(form.sort_order) || 0,
+      };
+      if (panel.mode === "add") {
+        const res = await window.mpApi.fetch('/admin/point-rewards', { method: 'POST', body: JSON.stringify(body) });
+        if (res?.ok) setRewards(prev => [...prev, res.data]);
+        else alert(res?.error?.message || 'Failed to create reward.');
+      } else {
+        const res = await window.mpApi.fetch(`/admin/point-rewards/${panel.id}`, { method: 'PATCH', body: JSON.stringify(body) });
+        if (res?.ok) setRewards(prev => prev.map(r => r.id === panel.id ? res.data : r));
+        else alert(res?.error?.message || 'Failed to update reward.');
+      }
+      setPanel(null);
+    } catch (e) { alert(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function handleToggle(r) {
+    const res = await window.mpApi.fetch(`/admin/point-rewards/${r.id}`, {
+      method: 'PATCH', body: JSON.stringify({ is_active: !r.is_active }),
+    }).catch(() => null);
+    if (res?.ok) setRewards(prev => prev.map(x => x.id === r.id ? res.data : x));
+  }
+
+  async function handleDelete(r) {
+    const confirmed = await Swal.fire({
+      title: 'Delete reward?',
+      text: `"${r.label}" will be permanently removed.`,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Delete',
+      confirmButtonColor: '#d33',
+      background: '#fff',
+    });
+    if (!confirmed.isConfirmed) return;
+    const res = await window.mpApi.fetch(`/admin/point-rewards/${r.id}`, { method: 'DELETE' }).catch(() => null);
+    if (res?.ok) setRewards(prev => prev.filter(x => x.id !== r.id));
+    else alert(res?.error?.message || 'Failed to delete reward.');
+  }
 
   return (
     <div className="dash-inner">
       <div className="page-title">Points &amp; Redemptions</div>
 
-      <div className="empty-state" style={{ marginBottom: 32 }}>
-        <div className="empty-icon"><i className="fa fa-star" /></div>
-        <h3>No pending redemptions</h3>
-        <p>Pending redemption requests will appear here once the redemptions backend is built.</p>
+      {/* Rewards catalogue */}
+      <div className="row-between mb10">
+        <div className="eyebrow" style={{ marginBottom: 0 }}>Point Rewards Catalogue</div>
+        <button className="btn btn-primary btn-sm" onClick={openAdd}>
+          <i className="fa fa-plus" style={{ fontSize: 11 }} /> Add Reward
+        </button>
       </div>
 
-      <div className="eyebrow mb10">Manual Points Adjustment</div>
-      <div className="card">
-        <div className="input-group">
-          <label className="input-label">Search Customer</label>
-          <input className="input" placeholder="Name or phone…" value={adjSearch} onChange={e => setAdjSearch(e.target.value)} />
-        </div>
-        <div className="input-group">
-          <label className="input-label">Adjustment Amount (+/−)</label>
-          <input className="input" placeholder="e.g. 500 or -200" value={adjAmount} onChange={e => setAdjAmount(e.target.value)} />
-        </div>
-        <div className="input-group" style={{ marginBottom: 0 }}>
-          <label className="input-label">Reason (required)</label>
-          <input className="input" placeholder="Customer service compensation…" value={adjReason} onChange={e => setAdjReason(e.target.value)} />
-        </div>
-        <button className="btn btn-primary mt16" disabled={!adjSearch || !adjAmount || !adjReason}>Apply Adjustment</button>
+      <div className="card mb20">
+        {loading ? (
+          <div style={{ textAlign: "center", padding: 24 }}><i className="fa fa-spinner fa-spin" style={{ color: "var(--orange)" }} /></div>
+        ) : rewards.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "24px 0", color: "var(--text-65)", fontSize: 13 }}>No rewards yet. Add one above.</div>
+        ) : (
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Label</th>
+                  <th>Points Cost</th>
+                  <th>Worth</th>
+                  <th>Order</th>
+                  <th>Status</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {rewards.map(r => (
+                  <tr key={r.id}>
+                    <td style={{ fontWeight: 600 }}>{r.label}</td>
+                    <td style={{ color: "var(--orange)", fontWeight: 700 }}>{Number(r.pts_cost).toLocaleString()} pts</td>
+                    <td className="text-muted">{r.worth || "—"}</td>
+                    <td className="text-muted">{r.sort_order}</td>
+                    <td>
+                      <span className={`badge ${r.is_active ? "badge-green" : "badge-gray"}`}>
+                        {r.is_active ? "Active" : "Hidden"}
+                      </span>
+                    </td>
+                    <td>
+                      <div className="row" style={{ gap: 6, justifyContent: "flex-end" }}>
+                        <button className="btn btn-ghost btn-sm" onClick={() => openEdit(r)}>Edit</button>
+                        <button className="btn btn-ghost btn-sm" onClick={() => handleToggle(r)}>
+                          {r.is_active ? "Hide" : "Show"}
+                        </button>
+                        <button className="btn btn-ghost btn-sm" style={{ color: "var(--red)" }} onClick={() => handleDelete(r)}>
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
+
+      {/* Add / Edit panel */}
+      {panel && (
+        <div className="overlay" onClick={() => setPanel(null)}>
+          <div className="sheet" onClick={e => e.stopPropagation()}>
+            <div className="sheet-handle" />
+            <div className="sheet-title">{panel.mode === "add" ? "Add Reward" : "Edit Reward"}</div>
+
+            <div className="input-group">
+              <label className="input-label">Label</label>
+              <input className="input" placeholder="e.g. 1 Free Sachet" value={form.label} onChange={e => setForm(f => ({ ...f, label: e.target.value }))} />
+            </div>
+            <div className="input-group">
+              <label className="input-label">Points Cost</label>
+              <input className="input" type="number" min="1" placeholder="e.g. 1000" value={form.pts_cost} onChange={e => setForm(f => ({ ...f, pts_cost: e.target.value }))} />
+            </div>
+            <div className="input-group">
+              <label className="input-label">Worth (display only, e.g. ৳25)</label>
+              <input className="input" placeholder="Optional" value={form.worth} onChange={e => setForm(f => ({ ...f, worth: e.target.value }))} />
+            </div>
+            <div className="input-group">
+              <label className="input-label">Sort Order (lower = first)</label>
+              <input className="input" type="number" min="0" value={form.sort_order} onChange={e => setForm(f => ({ ...f, sort_order: e.target.value }))} />
+            </div>
+            <div className="input-group" style={{ marginBottom: 0 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                <input type="checkbox" checked={form.is_active} onChange={e => setForm(f => ({ ...f, is_active: e.target.checked }))} style={{ accentColor: "var(--orange)" }} />
+                <span className="input-label" style={{ marginBottom: 0 }}>Active (visible to customers)</span>
+              </label>
+            </div>
+
+            <div className="col-gap" style={{ marginTop: 20 }}>
+              <button className="btn btn-primary btn-full" onClick={handleSave} disabled={busy || !form.label.trim() || !form.pts_cost}>
+                {busy ? <><i className="fa fa-spinner fa-spin" /> Saving…</> : "Save Reward"}
+              </button>
+              <button className="btn btn-ghost btn-full" onClick={() => setPanel(null)} disabled={busy}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 // ── Section: Financials ────────────────────────────────
 function Financials() {
-  const { stats } = useContext(DashCtx);
+  const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
   const months = Array.from({ length: 6 }, (_, i) => {
     const d = new Date();
     d.setDate(1);
     d.setMonth(d.getMonth() - i);
     return d.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
   });
-  const [month, setMonth] = useState(months[0]);
-  const revenueDelivered = Number(stats?.revenue?.total_delivered || 0);
+  const [month, setMonth]     = useState(months[0]);
+  const [fin, setFin]         = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const toYYYYMM = (label) => {
+    const [name, year] = label.split(' ');
+    return `${year}-${String(MONTH_NAMES.indexOf(name) + 1).padStart(2, '0')}`;
+  };
+
+  useEffect(() => {
+    setLoading(true);
+    window.mpApi.fetch(`/admin/financials?month=${toYYYYMM(month)}`)
+      .then(res => { if (res?.data) setFin(res.data); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [month]);
+
+  const fmt = v => loading ? '…' : `৳${Number(v ?? 0).toLocaleString()}`;
 
   return (
     <div className="dash-inner-wide">
@@ -1070,19 +1293,22 @@ function Financials() {
 
       <div className="stat-row" style={{ marginBottom: 16 }}>
         <div className="stat-card" style={{ borderColor: "rgba(255,145,0,.35)", background: "var(--orange-faint)" }}>
-          <div className="stat-label">Revenue (Delivered Orders)</div>
-          <div className="stat-value">৳{revenueDelivered.toLocaleString()}</div>
+          <div className="stat-label">Revenue (All Orders)</div>
+          <div className="stat-value">{fmt(fin?.revenue)}</div>
         </div>
-        <div className="stat-card"><div className="stat-label">Total Discounts</div><div className="stat-value text-muted">—</div></div>
-        <div className="stat-card"><div className="stat-label">Influencer Commission</div><div className="stat-value text-muted">—</div></div>
-        <div className="stat-card"><div className="stat-label">Points Redeemed (৳ eq.)</div><div className="stat-value text-muted">—</div></div>
+        <div className="stat-card">
+          <div className="stat-label">Total Discounts</div>
+          <div className="stat-value">{fmt(fin?.discounts)}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Influencer Commission</div>
+          <div className="stat-value">{fmt(fin?.commission)}</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Points Redeemed (৳ eq.)</div>
+          <div className="stat-value">{fmt(fin?.points_redeemed_taka)}</div>
+        </div>
       </div>
-
-      <SectionCard>
-        <div className="text-sm text-muted" style={{ textAlign: "center", padding: "20px 0" }}>
-          Detailed financial breakdown (discounts, commissions, coupon analytics) will be available once the full order pipeline is live.
-        </div>
-      </SectionCard>
     </div>
   );
 }
@@ -1715,12 +1941,12 @@ function Sidebar({ section, setSection, onLogout }) {
     { id: "orders",     icon: "fa-box",             label: "Orders", badge: activeOrders > 0 ? String(activeOrders) : null },
     { id: "products",   icon: "fa-box-open",        label: "Products" },
     { id: "customers",  icon: "fa-users",           label: "Customers" },
-    // { id: "subs",       icon: "fa-calendar-check",  label: "Subscriptions" },
+    { id: "subs",       icon: "fa-calendar-check",  label: "Subscriptions" },
     { id: "coupons",    icon: "fa-ticket-alt",      label: "Coupons" },
     // { id: "reviews",    icon: "fa-star-half-alt",   label: "Reviews" },
     // { id: "crew",       icon: "fa-fire",            label: "Crew" },
     { id: "influencer", icon: "fa-bolt",            label: "Influencers" },
-    // { id: "points",     icon: "fa-star",            label: "Points &amp; Redemptions" },
+    { id: "points",     icon: "fa-star",            label: "Points" },
     { id: "financials", icon: "fa-chart-line",      label: "Financials" },
     { id: "settings",   icon: "fa-cog",             label: "Settings" },
   ];
@@ -1808,12 +2034,12 @@ function AdminDashboard() {
       case "orders":     return <Orders />;
       case "products":   return <Products />;
       case "customers":  return <Customers />;
-      // case "subs":       return <Subscriptions />;
+      case "subs":       return <Subscriptions />;
       case "coupons":    return <Coupons />;
       // case "reviews":    return <Reviews />;
       // case "crew":       return <CrewManagement />;
       case "influencer": return <InfluencersSection />;
-      // case "points":     return <PointsAdmin />;
+      case "points":     return <PointsAdmin />;
       case "financials": return <Financials />;
       case "settings":   return <Settings />;
       default:           return null;

@@ -1550,10 +1550,66 @@ function AdminCustomersTab({setTab}){
 }
 
 function AdminSubscriptionsTab(){
+  const [tab,setTab]=useState('active');
+  const [subs,setSubs]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [err,setErr]=useState(null);
+
+  useEffect(()=>{
+    setLoading(true);setErr(null);
+    window.mpApi.fetch(`/admin/subscriptions?status=${tab}`)
+      .then(res=>{
+        if(res?.ok) setSubs(res.data?.subscriptions||[]);
+        else setErr(res?.error?.message||'Failed to load');
+      })
+      .catch(()=>setErr('Failed to load'))
+      .finally(()=>setLoading(false));
+  },[tab]);
+
+  const statusColor={active:C.green,paused:C.orange,cancelled:C.red};
+
   return(
     <div style={{padding:'24px 16px 0'}}>
       <div style={{...sans,fontSize:20,fontWeight:700,color:C.text,marginBottom:16}}>Subscriptions</div>
-      <EmptyState icon="repeat" title="Coming soon" body="Subscription management backend is not yet built."/>
+      <div style={{display:'flex',gap:8,marginBottom:16,overflowX:'auto',paddingBottom:4}}>
+        {['active','paused','cancelled'].map(k=>(
+          <button key={k} onClick={()=>setTab(k)} style={{
+            ...sans,fontSize:12,fontWeight:600,flexShrink:0,
+            background:tab===k?C.orange:'transparent',
+            color:tab===k?C.card:C.text,
+            border:`1.5px solid ${tab===k?C.orange:C.borderBg}`,
+            borderRadius:20,padding:'6px 16px',cursor:'pointer',
+          }}>{k.charAt(0).toUpperCase()+k.slice(1)}</button>
+        ))}
+      </div>
+      {loading?(
+        <div style={{...sans,fontSize:14,color:C.muted,textAlign:'center',padding:'40px 0'}}>Loading…</div>
+      ):err?(
+        <div style={{...sans,fontSize:14,color:C.red,textAlign:'center',padding:'40px 0'}}>{err}</div>
+      ):subs.length===0?(
+        <EmptyState icon="calendar-check" title={`No ${tab} subscriptions`} body="Nothing to show here yet."/>
+      ):subs.map(s=>(
+        <Card key={s.id} style={{marginBottom:12}}>
+          <RowBetween style={{marginBottom:4}}>
+            <div style={{...sans,fontSize:15,fontWeight:700,color:C.textCard}}>{s.user_name}</div>
+            <span style={{...sans,fontSize:11,fontWeight:600,padding:'3px 10px',borderRadius:20,
+              background:statusColor[s.status]+'22',color:statusColor[s.status]}}>
+              {s.status.charAt(0).toUpperCase()+s.status.slice(1)}
+            </span>
+          </RowBetween>
+          <div style={{...sans,fontSize:12,color:C.mutedCard,marginBottom:8}}>{s.user_phone||s.user_email||'—'}</div>
+          <div style={{...sans,fontSize:13,color:C.textCard,marginBottom:6}}>{s.product_name} × {s.qty}</div>
+          <RowBetween>
+            <span style={{...mono,fontSize:12,color:C.orange,fontWeight:600}}>৳{Number(s.unit_price).toLocaleString()}/mo</span>
+            <span style={{...sans,fontSize:11,color:C.mutedCard}}>
+              {s.status==='paused'?`Resumes ${s.pause_until}`:`Next ${s.next_delivery_date}`}
+            </span>
+          </RowBetween>
+          <div style={{...sans,fontSize:11,color:C.mutedCard,marginTop:6,lineHeight:1.4}}>
+            Day {s.billing_day} · {s.address}
+          </div>
+        </Card>
+      ))}
       <div style={{height:100}}/>
     </div>
   );
@@ -3149,23 +3205,76 @@ function Customers() {
 
 // ── Section: Subscriptions ─────────────────────────────
 function Subscriptions() {
-  const [subTab, setSubTab] = useState("Active");
+  const [subTab, setSubTab] = useState("active");
+  const [subs, setSubs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    setLoading(true);
+    setErr(null);
+    window.mpApi.fetch(`/admin/subscriptions?status=${subTab}`)
+      .then(res => {
+        if (res?.ok) setSubs(res.data?.subscriptions || []);
+        else setErr(res?.error?.message || 'Failed to load');
+      })
+      .catch(() => setErr('Failed to load subscriptions'))
+      .finally(() => setLoading(false));
+  }, [subTab]);
+
+  const BADGE = { active: "badge-green", paused: "badge-gray", cancelled: "badge-red" };
 
   return (
     <div className="dash-inner-wide">
       <div className="page-title">Subscriptions</div>
-
       <div className="toggle-group">
-        {["Active", "Paused", "Cancelled"].map(t => (
-          <button key={t} className={`toggle-btn ${subTab === t ? "active" : ""}`} onClick={() => setSubTab(t)}>{t}</button>
+        {[["active","Active"],["paused","Paused"],["cancelled","Cancelled"]].map(([key,label]) => (
+          <button key={key} className={`toggle-btn ${subTab === key ? "active" : ""}`} onClick={() => setSubTab(key)}>{label}</button>
         ))}
       </div>
 
-      <div className="empty-state" style={{ marginTop: 40 }}>
-        <div className="empty-icon"><i className="fa fa-calendar-check" /></div>
-        <h3>Subscriptions coming soon</h3>
-        <p>Subscription management backend is not yet built. This section will show active, paused, and cancelled subscriptions once ready.</p>
-      </div>
+      {loading ? (
+        <div style={{ textAlign: "center", padding: "40px 0", color: "var(--text-65)" }}>Loading…</div>
+      ) : err ? (
+        <div style={{ textAlign: "center", padding: "40px 0", color: "#e57373" }}>{err}</div>
+      ) : subs.length === 0 ? (
+        <div className="empty-state" style={{ marginTop: 40 }}>
+          <div className="empty-icon"><i className="fa fa-calendar-check" /></div>
+          <h3>No {subTab} subscriptions</h3>
+          <p>Nothing to show here yet.</p>
+        </div>
+      ) : (
+        <SectionCard style={{ padding: 0, overflow: "hidden", marginTop: 16 }}>
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr><th>Customer</th><th>Product</th><th>Qty</th><th>৳/mo</th><th>Billing Day</th><th>Next Delivery</th><th>Status</th></tr>
+              </thead>
+              <tbody>
+                {subs.map(s => (
+                  <tr key={s.id}>
+                    <td>
+                      <div style={{ fontWeight: 600 }}>{s.user_name}</div>
+                      <div className="muted" style={{ fontSize: 12 }}>{s.user_phone || s.user_email || '—'}</div>
+                    </td>
+                    <td>
+                      <div>{s.product_name}</div>
+                      <div className="muted" style={{ fontSize: 12, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.address}</div>
+                    </td>
+                    <td>{s.qty}</td>
+                    <td style={{ color: "var(--orange)", fontWeight: 600 }}>৳{Number(s.unit_price).toLocaleString()}</td>
+                    <td>{s.billing_day}</td>
+                    <td className="muted" style={{ fontSize: 12 }}>
+                      {s.status === 'paused' ? `Resumes ${s.pause_until}` : s.next_delivery_date}
+                    </td>
+                    <td><span className={`badge ${BADGE[s.status] || "badge-gray"}`}>{s.status.charAt(0).toUpperCase()+s.status.slice(1)}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </SectionCard>
+      )}
     </div>
   );
 }
@@ -3539,36 +3648,179 @@ function CrewManagement() {
 
 // ── Section: Points & Redemptions ─────────────────────
 function PointsAdmin() {
-  const [adjSearch, setAdjSearch] = useState("");
-  const [adjAmount, setAdjAmount] = useState("");
-  const [adjReason, setAdjReason] = useState("");
+  const [rewards, setRewards]   = useState([]);
+  const [loading, setLoading]   = useState(true);
+  const [panel, setPanel]       = useState(null);
+  const [busy, setBusy]         = useState(false);
+  const [form, setForm]         = useState({ label: "", pts_cost: "", worth: "", is_active: true, sort_order: 0 });
+
+  useEffect(() => {
+    window.mpApi.fetch('/admin/point-rewards')
+      .then(res => setRewards(res?.data?.rewards || []))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  function openAdd() {
+    setForm({ label: "", pts_cost: "", worth: "", is_active: true, sort_order: 0 });
+    setPanel({ mode: "add" });
+  }
+
+  function openEdit(r) {
+    setForm({ label: r.label, pts_cost: String(r.pts_cost), worth: r.worth || "", is_active: r.is_active, sort_order: r.sort_order });
+    setPanel({ mode: "edit", id: r.id });
+  }
+
+  async function handleSave() {
+    if (!form.label.trim() || !form.pts_cost) return;
+    setBusy(true);
+    try {
+      const body = {
+        label:      form.label.trim(),
+        pts_cost:   parseInt(form.pts_cost),
+        worth:      form.worth.trim() || null,
+        is_active:  form.is_active,
+        sort_order: parseInt(form.sort_order) || 0,
+      };
+      if (panel.mode === "add") {
+        const res = await window.mpApi.fetch('/admin/point-rewards', { method: 'POST', body: JSON.stringify(body) });
+        if (res?.ok) setRewards(prev => [...prev, res.data]);
+        else alert(res?.error?.message || 'Failed to create reward.');
+      } else {
+        const res = await window.mpApi.fetch(`/admin/point-rewards/${panel.id}`, { method: 'PATCH', body: JSON.stringify(body) });
+        if (res?.ok) setRewards(prev => prev.map(r => r.id === panel.id ? res.data : r));
+        else alert(res?.error?.message || 'Failed to update reward.');
+      }
+      setPanel(null);
+    } catch (e) { alert(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function handleToggle(r) {
+    const res = await window.mpApi.fetch(`/admin/point-rewards/${r.id}`, {
+      method: 'PATCH', body: JSON.stringify({ is_active: !r.is_active }),
+    }).catch(() => null);
+    if (res?.ok) setRewards(prev => prev.map(x => x.id === r.id ? res.data : x));
+  }
+
+  async function handleDelete(r) {
+    const confirmed = await Swal.fire({
+      title: 'Delete reward?',
+      text: `"${r.label}" will be permanently removed.`,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Delete',
+      confirmButtonColor: '#d33',
+      background: '#fff',
+    });
+    if (!confirmed.isConfirmed) return;
+    const res = await window.mpApi.fetch(`/admin/point-rewards/${r.id}`, { method: 'DELETE' }).catch(() => null);
+    if (res?.ok) setRewards(prev => prev.filter(x => x.id !== r.id));
+    else alert(res?.error?.message || 'Failed to delete reward.');
+  }
 
   return (
     <div className="dash-inner">
       <div className="page-title">Points &amp; Redemptions</div>
 
-      <div className="empty-state" style={{ marginBottom: 32 }}>
-        <div className="empty-icon"><i className="fa fa-star" /></div>
-        <h3>No pending redemptions</h3>
-        <p>Pending redemption requests will appear here once the redemptions backend is built.</p>
+      <div className="row-between mb10">
+        <div className="eyebrow" style={{ marginBottom: 0 }}>Point Rewards Catalogue</div>
+        <button className="btn btn-primary btn-sm" onClick={openAdd}>
+          <i className="fa fa-plus" style={{ fontSize: 11 }} /> Add Reward
+        </button>
       </div>
 
-      <div className="eyebrow mb10">Manual Points Adjustment</div>
-      <div className="card">
-        <div className="input-group">
-          <label className="input-label">Search Customer</label>
-          <input className="input" placeholder="Name or phone…" value={adjSearch} onChange={e => setAdjSearch(e.target.value)} />
-        </div>
-        <div className="input-group">
-          <label className="input-label">Adjustment Amount (+/−)</label>
-          <input className="input" placeholder="e.g. 500 or -200" value={adjAmount} onChange={e => setAdjAmount(e.target.value)} />
-        </div>
-        <div className="input-group" style={{ marginBottom: 0 }}>
-          <label className="input-label">Reason (required)</label>
-          <input className="input" placeholder="Customer service compensation…" value={adjReason} onChange={e => setAdjReason(e.target.value)} />
-        </div>
-        <button className="btn btn-primary mt16" disabled={!adjSearch || !adjAmount || !adjReason}>Apply Adjustment</button>
+      <div className="card mb20">
+        {loading ? (
+          <div style={{ textAlign: "center", padding: 24 }}>
+            <i className="fa fa-spinner fa-spin" style={{ color: "var(--orange)" }} />
+          </div>
+        ) : rewards.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "24px 0", color: "var(--text-65)", fontSize: 13 }}>
+            No rewards yet. Click "Add Reward" to create one.
+          </div>
+        ) : (
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Label</th>
+                  <th>Points Cost</th>
+                  <th>Worth</th>
+                  <th>Order</th>
+                  <th>Status</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {rewards.map(r => (
+                  <tr key={r.id}>
+                    <td style={{ fontWeight: 600 }}>{r.label}</td>
+                    <td style={{ color: "var(--orange)", fontWeight: 700 }}>{Number(r.pts_cost).toLocaleString()} pts</td>
+                    <td className="text-muted">{r.worth || "—"}</td>
+                    <td className="text-muted">{r.sort_order}</td>
+                    <td>
+                      <span className={`badge ${r.is_active ? "badge-green" : "badge-gray"}`}>
+                        {r.is_active ? "Active" : "Hidden"}
+                      </span>
+                    </td>
+                    <td>
+                      <div className="row" style={{ gap: 6, justifyContent: "flex-end" }}>
+                        <button className="btn btn-ghost btn-sm" onClick={() => openEdit(r)}>Edit</button>
+                        <button className="btn btn-ghost btn-sm" onClick={() => handleToggle(r)}>
+                          {r.is_active ? "Hide" : "Show"}
+                        </button>
+                        <button className="btn btn-ghost btn-sm" style={{ color: "var(--red)" }} onClick={() => handleDelete(r)}>
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
+
+      {panel && (
+        <div className="overlay" onClick={() => setPanel(null)}>
+          <div className="sheet" onClick={e => e.stopPropagation()}>
+            <div className="sheet-handle" />
+            <div className="sheet-title">{panel.mode === "add" ? "Add Reward" : "Edit Reward"}</div>
+
+            <div className="input-group">
+              <label className="input-label">Label</label>
+              <input className="input" placeholder="e.g. 1 Free Sachet" value={form.label} onChange={e => setForm(f => ({ ...f, label: e.target.value }))} />
+            </div>
+            <div className="input-group">
+              <label className="input-label">Points Cost</label>
+              <input className="input" type="number" min="1" placeholder="e.g. 1000" value={form.pts_cost} onChange={e => setForm(f => ({ ...f, pts_cost: e.target.value }))} />
+            </div>
+            <div className="input-group">
+              <label className="input-label">Worth (display only, e.g. ৳25)</label>
+              <input className="input" placeholder="Optional" value={form.worth} onChange={e => setForm(f => ({ ...f, worth: e.target.value }))} />
+            </div>
+            <div className="input-group">
+              <label className="input-label">Sort Order (lower = first)</label>
+              <input className="input" type="number" min="0" value={form.sort_order} onChange={e => setForm(f => ({ ...f, sort_order: e.target.value }))} />
+            </div>
+            <div className="input-group" style={{ marginBottom: 0 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                <input type="checkbox" checked={form.is_active} onChange={e => setForm(f => ({ ...f, is_active: e.target.checked }))} style={{ accentColor: "var(--orange)" }} />
+                <span className="input-label" style={{ marginBottom: 0 }}>Active (visible to customers)</span>
+              </label>
+            </div>
+
+            <div className="col-gap" style={{ marginTop: 20 }}>
+              <button className="btn btn-primary btn-full" onClick={handleSave} disabled={busy || !form.label.trim() || !form.pts_cost}>
+                {busy ? <><i className="fa fa-spinner fa-spin" /> Saving…</> : "Save Reward"}
+              </button>
+              <button className="btn btn-ghost btn-full" onClick={() => setPanel(null)} disabled={busy}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -4244,12 +4496,12 @@ function Sidebar({ section, setSection, onLogout }) {
     { id: "orders",     icon: "fa-box",             label: "Orders", badge: activeOrders > 0 ? String(activeOrders) : null },
     { id: "products",   icon: "fa-box-open",        label: "Products" },
     { id: "customers",  icon: "fa-users",           label: "Customers" },
-    // { id: "subs",       icon: "fa-calendar-check",  label: "Subscriptions" },
+    { id: "subs",       icon: "fa-calendar-check",  label: "Subscriptions" },
     { id: "coupons",    icon: "fa-ticket-alt",      label: "Coupons" },
     // { id: "reviews",    icon: "fa-star-half-alt",   label: "Reviews" },
     // { id: "crew",       icon: "fa-fire",            label: "Crew" },
     { id: "influencer", icon: "fa-bolt",            label: "Influencers" },
-    // { id: "points",     icon: "fa-star",            label: "Points &amp; Redemptions" },
+    { id: "points",     icon: "fa-star",            label: "Points" },
     { id: "financials", icon: "fa-chart-line",      label: "Financials" },
     { id: "settings",   icon: "fa-cog",             label: "Settings" },
   ];
@@ -4337,12 +4589,12 @@ function AdminDashboard() {
       case "orders":     return <Orders />;
       case "products":   return <Products />;
       case "customers":  return <Customers />;
-      // case "subs":       return <Subscriptions />;
+      case "subs":       return <Subscriptions />;
       case "coupons":    return <Coupons />;
       // case "reviews":    return <Reviews />;
       // case "crew":       return <CrewManagement />;
       case "influencer": return <InfluencersSection />;
-      // case "points":     return <PointsAdmin />;
+      case "points":     return <PointsAdmin />;
       case "financials": return <Financials />;
       case "settings":   return <Settings />;
       default:           return null;

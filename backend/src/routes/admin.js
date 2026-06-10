@@ -1,6 +1,8 @@
 'use strict'
 
 const { query, withTransaction } = require('../config/db')
+const { sendOrderConfirmation }  = require('../services/sms')
+const { calculatePointsForOrder, awardPoints } = require('../services/points')
 
 // Convert a date-only string (YYYY-MM-DD) to end-of-day in Dhaka time (UTC+6).
 // Full datetime strings are passed through unchanged.
@@ -78,12 +80,41 @@ module.exports = async function adminRoutes(app) {
       },
     },
   }, async (req) => {
-    const { rows } = await query(
-      `UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING id, order_ref, status`,
-      [req.body.status, req.params.id]
-    )
-    if (!rows.length) throw { code: 'NOT_FOUND', message: 'Order not found.' }
-    return { ok: true, data: rows[0] }
+    const newStatus = req.body.status
+    const orderId   = req.params.id
+
+    const result = await withTransaction(async (client) => {
+      const { rows: prev } = await client.query(
+        `SELECT id, order_ref, status, user_id, total, points_earned
+         FROM orders WHERE id = $1 FOR UPDATE`,
+        [orderId]
+      )
+      if (!prev.length) throw { code: 'NOT_FOUND', message: 'Order not found.' }
+      const order = prev[0]
+
+      const { rows: updated } = await client.query(
+        `UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2
+         RETURNING id, order_ref, status`,
+        [newStatus, orderId]
+      )
+
+      // Award points when order first moves to delivered and is linked to a user
+      if (newStatus === 'delivered' && order.status !== 'delivered' && order.user_id && order.total > 0 && order.points_earned === 0) {
+        const pts = calculatePointsForOrder(order.total)
+        if (pts > 0) {
+          await awardPoints(client, order.user_id, pts, `Order #${order.order_ref} delivered`, order.id)
+          await client.query(
+            `UPDATE orders SET points_earned = $2 WHERE id = $1`,
+            [order.id, pts]
+          )
+          updated[0].points_earned = pts
+        }
+      }
+
+      return updated[0]
+    })
+
+    return { ok: true, data: result }
   })
 
   // GET /admin/customers — from persistent customers table (upserted on each order)
@@ -135,6 +166,92 @@ module.exports = async function adminRoutes(app) {
         orders:   { total: parseInt(ordersRes.rows[0].total), active: parseInt(ordersRes.rows[0].active) },
         users:    { total: parseInt(usersRes.rows[0].total), crew: parseInt(usersRes.rows[0].crew), influencer: parseInt(usersRes.rows[0].influencer) },
         revenue:  { total_delivered: parseFloat(revenueRes.rows[0].total) },
+      },
+    }
+  })
+
+  // GET /admin/subscriptions?status=active|paused|cancelled
+  app.get('/subscriptions', {
+    schema: {
+      querystring: {
+        type: 'object',
+        properties: {
+          status: { type: 'string', enum: ['active', 'paused', 'cancelled'] },
+        },
+      },
+    },
+  }, async (req) => {
+    const { status } = req.query
+    const params = []
+    const where  = status
+      ? (params.push(status), `WHERE s.status = $1`)
+      : `WHERE s.status != 'cancelled'`
+
+    const { rows } = await query(
+      `SELECT s.id, s.product_name, s.qty, s.unit_price, s.address,
+              s.billing_day, s.status, s.pause_until, s.next_delivery_date,
+              s.created_at, s.updated_at,
+              u.name AS user_name, u.phone AS user_phone, u.email AS user_email
+       FROM   subscriptions s
+       JOIN   users u ON u.id = s.user_id
+       ${where}
+       ORDER  BY s.next_delivery_date ASC`,
+      params
+    )
+    return { ok: true, data: { subscriptions: rows } }
+  })
+
+  // GET /admin/financials?month=YYYY-MM — monthly financial summary
+  app.get('/financials', {
+    schema: {
+      querystring: {
+        type: 'object',
+        properties: {
+          month: { type: 'string', pattern: '^\\d{4}-\\d{2}$' },
+        },
+      },
+    },
+  }, async (req) => {
+    const month      = req.query.month || new Date().toISOString().slice(0, 7)
+    const monthStart = `${month}-01`
+
+    const [ordersRes, commRes, pointsRes] = await Promise.all([
+      query(
+        `SELECT COALESCE(SUM(total), 0)          AS revenue,
+                COALESCE(SUM(discount_amount), 0) AS discounts
+         FROM   orders
+         WHERE  status != 'cancelled'
+           AND  created_at >= $1::date
+           AND  created_at <  $1::date + INTERVAL '1 month'`,
+        [monthStart]
+      ),
+      query(
+        `SELECT COALESCE(SUM(ROUND(o.total * i.comm_rate / 100)), 0) AS commission
+         FROM   orders      o
+         JOIN   coupons     c ON c.code = o.coupon_code AND c.type = 'influencer'
+         JOIN   influencers i ON i.code = c.code
+         WHERE  o.status != 'cancelled'
+           AND  o.created_at >= $1::date
+           AND  o.created_at <  $1::date + INTERVAL '1 month'`,
+        [monthStart]
+      ),
+      query(
+        `SELECT COALESCE(SUM(points), 0) AS points_spent
+         FROM   points_transactions
+         WHERE  type = 'spent'
+           AND  created_at >= $1::date
+           AND  created_at <  $1::date + INTERVAL '1 month'`,
+        [monthStart]
+      ),
+    ])
+
+    return {
+      ok:   true,
+      data: {
+        revenue:              parseInt(ordersRes.rows[0].revenue),
+        discounts:            parseInt(ordersRes.rows[0].discounts),
+        commission:           parseInt(commRes.rows[0].commission),
+        points_redeemed_taka: Math.round(parseInt(pointsRes.rows[0].points_spent) * 2),
       },
     }
   })
@@ -315,6 +432,12 @@ module.exports = async function adminRoutes(app) {
 
       return o
     })
+
+    if (customer_phone) {
+      sendOrderConfirmation(customer_phone, order.order_ref, order.total).catch(err =>
+        app.log.error({ err }, '[admin-order] SMS send failed')
+      )
+    }
 
     return reply.code(201).send({
       ok: true,
@@ -621,6 +744,90 @@ module.exports = async function adminRoutes(app) {
   }, async (req, reply) => {
     const { rows } = await query(`DELETE FROM reviews WHERE id = $1 RETURNING id`, [req.params.id])
     if (!rows.length) throw { code: 'NOT_FOUND', message: 'Review not found.' }
+    return reply.code(200).send({ ok: true, data: { id: rows[0].id } })
+  })
+
+  // ── Point Rewards CRUD ──────────────────────────────────────────────────────
+
+  // GET /admin/point-rewards
+  app.get('/point-rewards', async () => {
+    const { rows } = await query(
+      `SELECT id, label, pts_cost, worth, is_active, sort_order, created_at
+       FROM point_rewards ORDER BY sort_order ASC, created_at ASC`
+    )
+    return { ok: true, data: { rewards: rows } }
+  })
+
+  // POST /admin/point-rewards
+  app.post('/point-rewards', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['label', 'pts_cost'],
+        properties: {
+          label:      { type: 'string', minLength: 1, maxLength: 255 },
+          pts_cost:   { type: 'integer', minimum: 1 },
+          worth:      { type: 'string', maxLength: 50 },
+          is_active:  { type: 'boolean' },
+          sort_order: { type: 'integer', minimum: 0 },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req, reply) => {
+    const { label, pts_cost, worth, is_active = true, sort_order = 0 } = req.body
+    const { rows } = await query(
+      `INSERT INTO point_rewards (label, pts_cost, worth, is_active, sort_order)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, label, pts_cost, worth, is_active, sort_order, created_at`,
+      [label, pts_cost, worth || null, is_active, sort_order]
+    )
+    return reply.code(201).send({ ok: true, data: rows[0] })
+  })
+
+  // PATCH /admin/point-rewards/:id
+  app.patch('/point-rewards/:id', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+      body: {
+        type: 'object',
+        minProperties: 1,
+        properties: {
+          label:      { type: 'string', minLength: 1, maxLength: 255 },
+          pts_cost:   { type: 'integer', minimum: 1 },
+          worth:      { type: ['string', 'null'], maxLength: 50 },
+          is_active:  { type: 'boolean' },
+          sort_order: { type: 'integer', minimum: 0 },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req) => {
+    const allowed = ['label', 'pts_cost', 'worth', 'is_active', 'sort_order']
+    const entries = Object.entries(req.body).filter(([k]) => allowed.includes(k))
+    const sets    = entries.map(([k], i) => `${k} = $${i + 2}`)
+    const vals    = entries.map(([, v]) => v)
+    const { rows } = await query(
+      `UPDATE point_rewards SET ${sets.join(', ')}, updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, label, pts_cost, worth, is_active, sort_order, created_at`,
+      [req.params.id, ...vals]
+    )
+    if (!rows.length) throw { code: 'NOT_FOUND', message: 'Reward not found.' }
+    return { ok: true, data: rows[0] }
+  })
+
+  // DELETE /admin/point-rewards/:id
+  app.delete('/point-rewards/:id', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+    },
+  }, async (req, reply) => {
+    const { rows } = await query(
+      `DELETE FROM point_rewards WHERE id = $1 RETURNING id`,
+      [req.params.id]
+    )
+    if (!rows.length) throw { code: 'NOT_FOUND', message: 'Reward not found.' }
     return reply.code(200).send({ ok: true, data: { id: rows[0].id } })
   })
 }

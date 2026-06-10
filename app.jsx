@@ -35,7 +35,17 @@ function CartNavBtn({ count, onClick }) {
 }
 
 // ----------------- nav -----------------
-function Nav({ cartCount, onShop, onSignIn }) {
+const ROLE_DASH = { user: "dashboard-user.html", crew: "dashboard-crew.html", influencer: "dashboard-influencer.html", admin: "dashboard-admin.html" };
+
+function getAuthState() {
+  try {
+    if (!localStorage.getItem("mp_access_token")) return { loggedIn: false, dashUrl: "dashboard-user.html" };
+    const u = JSON.parse(localStorage.getItem("mp_user") || "{}");
+    return { loggedIn: true, dashUrl: ROLE_DASH[u.role] || "dashboard-user.html" };
+  } catch { return { loggedIn: false, dashUrl: "dashboard-user.html" }; }
+}
+
+function Nav({ cartCount, onShop, onSignIn, loggedIn, dashUrl, onLogout }) {
   const [scrolled, setScrolled] = useState(false);
   const [active, setActive] = useState("home");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -96,12 +106,23 @@ function Nav({ cartCount, onShop, onSignIn }) {
             <a href="#faq" className={active === "contact" ? "active" : ""} onClick={jump("faq", "contact")}>Contact</a>
           </div>
           <div className="nav-right">
-            {/* Sign In button — commented out for now
-            <button className="nav-signin-btn" onClick={onSignIn}>
-              <i className="fa-solid fa-right-to-bracket" aria-hidden="true" />
-              Sign In
-            </button>
-            */}
+            {loggedIn ? (
+              <>
+                <a href={dashUrl} className="nav-signin-btn">
+                  <i className="fa-solid fa-gauge" aria-hidden="true" />
+                  Dashboard
+                </a>
+                <button className="nav-signin-btn" onClick={onLogout}>
+                  <i className="fa-solid fa-right-from-bracket" aria-hidden="true" />
+                  Log Out
+                </button>
+              </>
+            ) : (
+              <button className="nav-signin-btn" onClick={onSignIn}>
+                <i className="fa-solid fa-right-to-bracket" aria-hidden="true" />
+                Sign In
+              </button>
+            )}
             <a href="shop.html" className="nav-shop-btn">
               <i className="fa-solid fa-bag-shopping" aria-hidden="true" />
               Shop
@@ -127,11 +148,20 @@ function Nav({ cartCount, onShop, onSignIn }) {
           <a href="#faq" className={active === "contact" ? "active" : ""} onClick={jump("faq", "contact")}>Contact</a>
         </nav>
         <div className="mob-menu-footer">
-          {/* Account button — commented out for now
-          <button className="mob-menu-account-btn" onClick={onSignIn} aria-label="Account">
-            <UserIcon size={18} /> Account
-          </button>
-          */}
+          {loggedIn ? (
+            <>
+              <a href={dashUrl} className="mob-menu-account-btn" aria-label="Dashboard">
+                <UserIcon size={18} /> Dashboard
+              </a>
+              <button className="mob-menu-account-btn" onClick={onLogout} aria-label="Log out">
+                <i className="fa-solid fa-right-from-bracket" style={{ width: 18 }} aria-hidden="true" /> Log Out
+              </button>
+            </>
+          ) : (
+            <button className="mob-menu-account-btn" onClick={onSignIn} aria-label="Account">
+              <UserIcon size={18} /> Account
+            </button>
+          )}
         </div>
       </div>
     </>
@@ -975,7 +1005,15 @@ function App() {
   const [toasts, setToasts] = useState([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [trackOpen, setTrackOpen] = useState(false);
-  // const [authOpen,  setAuthOpen]  = useState(false); // commented out for now
+  const [authOpen,  setAuthOpen]  = useState(false);
+  const [auth, setAuth] = useState(getAuthState);
+
+  const handleLogout = () => {
+    localStorage.removeItem("mp_access_token");
+    localStorage.removeItem("mp_refresh_token");
+    localStorage.removeItem("mp_user");
+    setAuth({ loggedIn: false, dashUrl: "dashboard-user.html" });
+  };
 
   useEffect(() => {applyPalette(t.palette);}, [t.palette]);
   useEffect(() => { sessionStorage.setItem("mp_cart", JSON.stringify(cart)); }, [cart]);
@@ -1000,7 +1038,7 @@ function App() {
 
   return (
     <>
-      <Nav cartCount={cart.length} onShop={onShop} onSubscribe={() => setModalOpen(true)} />
+      <Nav cartCount={cart.length} onShop={onShop} onSubscribe={() => setModalOpen(true)} onSignIn={() => setAuthOpen(true)} loggedIn={auth.loggedIn} dashUrl={auth.dashUrl} onLogout={handleLogout} />
       <Hero headline={t.headline} showMountain={t.showMountain} />
       <Story />
       <Collection onAdd={addToCart} />
@@ -1015,9 +1053,7 @@ function App() {
       <ToastStack toasts={toasts} />
       <SubscribeModal open={modalOpen} onClose={() => setModalOpen(false)} />
       <TrackOrderModal open={trackOpen} onClose={() => setTrackOpen(false)} />
-      {/* AuthModal — commented out for now
       <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} />
-      */}
 
       <TweaksPanel title="Tweaks">
         <TweakSection label="Theme">

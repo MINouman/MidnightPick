@@ -80,7 +80,17 @@ const BD_AREAS = {
 };
 
 // ── minimal header ────────────────────────────────────────────────────────────
-function ShopHeader({ cartCount, onSignIn, onCart, productName }) {
+const ROLE_DASH = { user: "dashboard-user.html", crew: "dashboard-crew.html", influencer: "dashboard-influencer.html", admin: "dashboard-admin.html" };
+
+function getShopAuthState() {
+  try {
+    if (!localStorage.getItem("mp_access_token")) return { loggedIn: false, dashUrl: "dashboard-user.html", user: null };
+    const u = JSON.parse(localStorage.getItem("mp_user") || "{}");
+    return { loggedIn: true, dashUrl: ROLE_DASH[u.role] || "dashboard-user.html", user: u };
+  } catch { return { loggedIn: false, dashUrl: "dashboard-user.html", user: null }; }
+}
+
+function ShopHeader({ cartCount, onSignIn, onCart, productName, loggedIn, dashUrl, onLogout }) {
   const [scrolled, setScrolled] = useState(false);
 
   useEffect(() => {
@@ -103,12 +113,23 @@ function ShopHeader({ cartCount, onSignIn, onCart, productName }) {
         )}
       </a>
       <div className="shop-header-actions">
-        {/* Sign In button — commented out for now
-        <button className="nav-signin-btn" onClick={onSignIn}>
-          <i className="fa-solid fa-right-to-bracket" aria-hidden="true" />
-          Sign In
-        </button>
-        */}
+        {loggedIn ? (
+          <>
+            <a href={dashUrl} className="nav-signin-btn">
+              <i className="fa-solid fa-gauge" aria-hidden="true" />
+              Dashboard
+            </a>
+            <button className="nav-signin-btn" onClick={onLogout}>
+              <i className="fa-solid fa-right-from-bracket" aria-hidden="true" />
+              Log Out
+            </button>
+          </>
+        ) : (
+          <button className="nav-signin-btn" onClick={onSignIn}>
+            <i className="fa-solid fa-right-to-bracket" aria-hidden="true" />
+            Sign In
+          </button>
+        )}
         <button className="nav-cart-btn" onClick={onCart} aria-label={`Cart -  ${cartCount} item${cartCount !== 1 ? "s" : ""}`}>
           <CartIcon size={19} />
           <span className="nav-cart-badge">{cartCount}</span>
@@ -211,7 +232,7 @@ function CartPanel({ cart, onClose }) {
 }
 
 // ── Order Modal ───────────────────────────────────────────────────────────────
-function OrderModal({ open, onClose, product, qty, discount, coupon }) {
+function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser }) {
   const [step, setStep]           = useState("form"); // form | otp | loading | success | error
   const [name, setName]           = useState("");
   const [phone, setPhone]         = useState("");
@@ -243,6 +264,8 @@ function OrderModal({ open, onClose, product, qty, discount, coupon }) {
       setOtpDigits(["","","","","",""]); setOtpError("");
       setIsBusy(false); setTimerKey(0);
       setCity(""); setArea(""); setStreet("");
+      setName(loggedUser?.name || "");
+      setPhone(loggedUser?.phone || "");
     }
   }, [open]);
 
@@ -264,6 +287,8 @@ function OrderModal({ open, onClose, product, qty, discount, coupon }) {
   const fmtTime = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 
   if (!open) return null;
+
+  const composedAddress = [street.trim(), area, city].filter(Boolean).join(", ");
 
   // ── Shared styles ──────────────────────────────────────────────────────────
   const overlay = { position: "fixed", inset: 0, background: "rgba(0,0,0,.52)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" };
@@ -470,12 +495,43 @@ function OrderModal({ open, onClose, product, qty, discount, coupon }) {
   }
 
   // ── Form Step ──────────────────────────────────────────────────────────────
-  const composedAddress = [street.trim(), area, city].filter(Boolean).join(", ");
-
   const handleFormSubmit = async (e) => {
     e.preventDefault();
     if (!name.trim() || !phone.trim() || !city || !street.trim() || isBusy) return;
     setIsBusy(true);
+
+    if (loggedUser?.phone) {
+      // Authenticated — skip OTP, place order directly
+      try {
+        const token = localStorage.getItem("mp_access_token");
+        const res = await fetch(`${API_BASE}/orders/quick`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+          body: JSON.stringify({
+            qty,
+            address: composedAddress,
+            ...(coupon ? { coupon_code: coupon } : {}),
+            ...(product?.id ? { product_id: product.id } : {}),
+          }),
+        });
+        const json = await res.json();
+        if (!res.ok) {
+          setErrorMsg(json?.error?.message || "Order failed. Please try again.");
+          setStep("error");
+          return;
+        }
+        setOrderRef(json.data.order_ref);
+        setStep("success");
+      } catch (err) {
+        setErrorMsg(err.message);
+        setStep("error");
+      } finally {
+        setIsBusy(false);
+      }
+      return;
+    }
+
+    // Guest — send OTP first
     try {
       const res = await fetch(`${API_BASE}/orders/request-otp`, {
         method: "POST",
@@ -507,15 +563,21 @@ function OrderModal({ open, onClose, product, qty, discount, coupon }) {
         <SummaryStrip />
 
         <form onSubmit={handleFormSubmit} style={{ padding: "20px 22px 22px" }}>
+          {loggedUser?.phone && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, padding: "8px 12px", background: "rgba(46,168,107,.08)", borderRadius: 8, border: "1px solid rgba(46,168,107,.2)" }}>
+              <i className="fa-solid fa-circle-check" style={{ color: "#2ea86b", fontSize: 14 }} aria-hidden="true" />
+              <span style={{ fontFamily: "var(--font-body)", fontSize: 13, color: "#2ea86b", fontWeight: 600 }}>Logged in — no OTP needed</span>
+            </div>
+          )}
           <div style={{ marginBottom: 14 }}>
             <label style={lbl}>Full Name</label>
-            <input style={field} type="text" placeholder="Your full name" value={name}
-              onChange={e => setName(e.target.value)} required disabled={isBusy} autoFocus />
+            <input style={{ ...field, ...(loggedUser?.name ? { background: "rgba(87,31,41,.04)", color: "rgba(26,10,13,.6)" } : {}) }} type="text" placeholder="Your full name" value={name}
+              onChange={e => !loggedUser?.name && setName(e.target.value)} required disabled={isBusy || !!(loggedUser?.name)} autoFocus={!loggedUser?.name} />
           </div>
           <div style={{ marginBottom: 14 }}>
             <label style={lbl}>Phone Number</label>
-            <input style={field} type="tel" placeholder="01XXXXXXXXX" value={phone}
-              onChange={e => setPhone(e.target.value)} required minLength={11} disabled={isBusy} />
+            <input style={{ ...field, ...(loggedUser?.phone ? { background: "rgba(87,31,41,.04)", color: "rgba(26,10,13,.6)" } : {}) }} type="tel" placeholder="01XXXXXXXXX" value={phone}
+              onChange={e => !loggedUser?.phone && setPhone(e.target.value)} required minLength={11} disabled={isBusy || !!(loggedUser?.phone)} />
           </div>
           {/* ── Delivery Address — structured ── */}
           <div style={{ marginBottom: 14 }}>
@@ -570,12 +632,14 @@ function OrderModal({ open, onClose, product, qty, discount, coupon }) {
           </div>
           <button type="submit" disabled={!canSubmit} style={primBtn(!canSubmit)}>
             {isBusy
-              ? <><i className="fa-solid fa-spinner fa-spin" aria-hidden="true" /> Sending OTP…</>
-              : <><i className="fa-solid fa-mobile-screen-button" aria-hidden="true" /> Send Verification Code</>
+              ? <><i className="fa-solid fa-spinner fa-spin" aria-hidden="true" /> {loggedUser?.phone ? "Placing Order…" : "Sending OTP…"}</>
+              : loggedUser?.phone
+                ? <><i className="fa-solid fa-check" aria-hidden="true" /> Place Order — ৳{totalPrice.toLocaleString()}</>
+                : <><i className="fa-solid fa-mobile-screen-button" aria-hidden="true" /> Send Verification Code</>
             }
           </button>
           <p style={{ margin: "10px 0 0", fontSize: 11, color: "rgba(87,31,41,.4)", fontFamily: "var(--font-body)", textAlign: "center" }}>
-            Cash on delivery · A code will be sent to your number
+            {loggedUser?.phone ? "Cash on delivery · Your order will be confirmed immediately" : "Cash on delivery · A code will be sent to your number"}
           </p>
         </form>
       </div>
@@ -887,8 +951,16 @@ function ShopPage() {
   });
   const [toasts, setToasts] = useState([]);
   const [addedAnim, setAddedAnim] = useState(false);
-  // const [authOpen, setAuthOpen] = useState(false); // commented out for now
+  const [authOpen, setAuthOpen] = useState(false);
   const [cartOpen, setCartOpen] = useState(false);
+  const [shopAuth, setShopAuth] = useState(getShopAuthState);
+
+  const handleLogout = () => {
+    localStorage.removeItem("mp_access_token");
+    localStorage.removeItem("mp_refresh_token");
+    localStorage.removeItem("mp_user");
+    setShopAuth({ loggedIn: false, dashUrl: "dashboard-user.html", user: null });
+  };
   const [buySheetOpen, setBuySheetOpen] = useState(false);
   const [orderModalOpen, setOrderModalOpen] = useState(false);
   const [reviewStats, setReviewStats] = useState({ rating: 0, count: 0 });
@@ -991,7 +1063,7 @@ function ShopPage() {
   if (productLoading) {
     return (
       <div className="shop-page">
-        <ShopHeader cartCount={cart.length} onCart={() => setCartOpen(true)} />
+        <ShopHeader cartCount={cart.length} onCart={() => setCartOpen(true)} onSignIn={() => setAuthOpen(true)} loggedIn={shopAuth.loggedIn} dashUrl={shopAuth.dashUrl} onLogout={handleLogout} />
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "60vh", flexDirection: "column", gap: 16 }}>
           <i className="fa-solid fa-spinner fa-spin" style={{ fontSize: 32, color: "#571F29", opacity: 0.5 }} aria-hidden="true" />
           <span style={{ fontFamily: "var(--font-body)", color: "rgba(87,31,41,.5)", fontSize: 14 }}>Loading product…</span>
@@ -1002,7 +1074,7 @@ function ShopPage() {
 
   return (
     <div className="shop-page">
-      <ShopHeader cartCount={cart.length} onCart={() => setCartOpen(true)} productName={product.name} />
+      <ShopHeader cartCount={cart.length} onCart={() => setCartOpen(true)} onSignIn={() => setAuthOpen(true)} productName={product.name} loggedIn={shopAuth.loggedIn} dashUrl={shopAuth.dashUrl} onLogout={handleLogout} />
 
       <div className="shop-layout">
 
@@ -1180,9 +1252,7 @@ function ShopPage() {
 
       <ShopToastStack toasts={toasts} />
       {cartOpen && <CartPanel cart={cart} onClose={() => setCartOpen(false)} />}
-      {/* AuthModal — commented out for now
       <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} />
-      */}
       <BuySheet
         open={buySheetOpen}
         onClose={() => setBuySheetOpen(false)}
@@ -1207,6 +1277,7 @@ function ShopPage() {
         qty={qty}
         discount={discount}
         coupon={coupon}
+        loggedUser={shopAuth.user}
       />
     </div>
   );

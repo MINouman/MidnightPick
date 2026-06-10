@@ -81,6 +81,7 @@ async function build() {
     CANNOT_CANCEL:       409,
     INSUFFICIENT_STOCK:  409,
     EMAIL_EXISTS:        409,
+    SUBSCRIPTION_EXISTS: 409,
   }
 
   app.setErrorHandler((err, req, reply) => {
@@ -92,10 +93,9 @@ async function build() {
       })
     }
 
-    // Business logic errors (thrown as plain objects with a `code`)
-    if (err.code && typeof err.code === 'string' && !err.statusCode) {
-      const status = HTTP_STATUS[err.code] || 400
-      return reply.code(status).send({ ok: false, error: { code: err.code, message: err.message } })
+    // Business logic errors (thrown as plain objects with a known `code`)
+    if (err.code && err.code in HTTP_STATUS && !err.statusCode) {
+      return reply.code(HTTP_STATUS[err.code]).send({ ok: false, error: { code: err.code, message: err.message } })
     }
 
     // @fastify/jwt 401s
@@ -121,9 +121,10 @@ async function build() {
   // Protected (JWT required on every request)
   await app.register(async (api) => {
     api.addHook('onRequest', app.authenticate)
-    await api.register(require('./routes/users'),  { prefix: '/me' })
-    await api.register(require('./routes/orders'), { prefix: '/orders' })
-    await api.register(require('./routes/admin'),  { prefix: '/admin' })
+    await api.register(require('./routes/users'),         { prefix: '/me' })
+    await api.register(require('./routes/orders'),        { prefix: '/orders' })
+    await api.register(require('./routes/subscriptions'), { prefix: '/subscriptions' })
+    await api.register(require('./routes/admin'),         { prefix: '/admin' })
   }, { prefix: '/api/v1' })
 
   // Health check (used by load balancer)

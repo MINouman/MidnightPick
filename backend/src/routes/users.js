@@ -150,6 +150,14 @@ module.exports = async function userRoutes(app) {
     return { ok: true, data: { balance: user?.points_balance ?? 0 } }
   })
 
+  app.get('/point-rewards', async () => {
+    const { rows } = await query(
+      `SELECT id, label, pts_cost, worth FROM point_rewards
+       WHERE is_active = true ORDER BY sort_order ASC, created_at ASC`
+    )
+    return { ok: true, data: { rewards: rows } }
+  })
+
   app.get('/points/history', {
     schema: {
       querystring: {
