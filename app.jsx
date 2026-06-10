@@ -24,16 +24,6 @@ function applyPalette(name) {
   r.setProperty("--paper", p.paper);
 }
 
-// ----------------- cart nav button -----------------
-function CartNavBtn({ count, onClick }) {
-  return (
-    <button className="nav-cart-btn" onClick={onClick} aria-label={`Cart — ${count} item${count !== 1 ? "s" : ""}`}>
-      <CartIcon size={19} />
-      <span className="nav-cart-badge">{count}</span>
-    </button>
-  );
-}
-
 // ----------------- nav -----------------
 const ROLE_DASH = { user: "dashboard-user.html", crew: "dashboard-crew.html", influencer: "dashboard-influencer.html", admin: "dashboard-admin.html" };
 
@@ -45,7 +35,7 @@ function getAuthState() {
   } catch { return { loggedIn: false, dashUrl: "dashboard-user.html" }; }
 }
 
-function Nav({ cartCount, onShop, onSignIn, loggedIn, dashUrl, onLogout }) {
+function Nav({ onSignIn, loggedIn, dashUrl, onLogout }) {
   const [scrolled, setScrolled] = useState(false);
   const [active, setActive] = useState("home");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -127,7 +117,9 @@ function Nav({ cartCount, onShop, onSignIn, loggedIn, dashUrl, onLogout }) {
               <i className="fa-solid fa-bag-shopping" aria-hidden="true" />
               Shop
             </a>
-            <CartNavBtn count={cartCount} onClick={onShop} />
+            <a href="shop.html" className="nav-shop-icon-btn" aria-label="Shop">
+              <i className="fa-solid fa-bag-shopping" aria-hidden="true" />
+            </a>
             <button
               className={"mob-menu-btn" + (menuOpen ? " is-open" : "")}
               onClick={() => setMenuOpen(!menuOpen)}
@@ -254,9 +246,11 @@ function ProductRow({ p, onAdd }) {
           {p.badge && <span className="badge" style={{ fontSize: 9, padding: "2px 7px" }}>{p.badge}</span>}
         </div>
       </div>
+      {/* +ADD button hidden for now
       <button className={"add-btn" + (added ? " added" : "")} onClick={handle}>
         {added ? <><Check size={14} /> Added</> : <><Plus size={12} /> ADD</>}
       </button>
+      */}
     </div>);
 }
 
@@ -571,7 +565,8 @@ const BLOG_CONTENT = {
   },
 };
 
-const JOURNAL_INITIAL = 6;
+// 3 posts per batch on mobile (single-column grid), 6 on larger screens
+const journalBatch = () => (window.innerWidth <= 640 ? 3 : 6);
 
 function JournalCard({ post, onClick }) {
   const color = PILLAR_META[post.pillar] || "#FF9100";
@@ -662,9 +657,9 @@ function BlogModal({ post, onClose }) {
 }
 
 function TheJournal() {
-  const [showAll, setShowAll] = useState(false);
+  const [count, setCount] = useState(journalBatch);
   const [activePost, setActivePost] = useState(null);
-  const visible = showAll ? BLOG_POSTS : BLOG_POSTS.slice(0, JOURNAL_INITIAL);
+  const visible = BLOG_POSTS.slice(0, count);
 
   return (
     <section className="journal" id="journal" data-screen-label="05 The Journal">
@@ -681,9 +676,9 @@ function TheJournal() {
             <JournalCard key={post.slug} post={post} onClick={setActivePost} />
           ))}
         </div>
-        {!showAll && BLOG_POSTS.length > JOURNAL_INITIAL && (
+        {count < BLOG_POSTS.length && (
           <div className="journal-load-more-wrap">
-            <button className="journal-load-more-btn" onClick={() => setShowAll(true)}>
+            <button className="journal-load-more-btn" onClick={() => setCount((c) => c + journalBatch())}>
               Load More <ArrowRight size={14} />
             </button>
           </div>
@@ -704,11 +699,11 @@ const WHY_ITEMS = [
 {
   title: "Fuel for Focused Hours",
   desc: "Built for students, designers, developers, and creators who do their best work in a clear, undistracted hour. 65% Robusta, 35% Arabica means real body and a clean caffeine lift.",
-  icon: <IconSparkles />
+  icon: <IconBullseye />
 },
 {
   title: "Freeze-Dried, Not Spray-Dried",
-  desc: "The same low-temperature vacuum process as Nescafé Gold and Davidoff — preserving aroma and antioxidants — at roughly a third of the per-gram price. No burnt taste. No flat finish.",
+  desc: "The same low-temperature vacuum process as the premium imported jars — preserving aroma and antioxidants — at roughly a third of the per-gram price. No burnt taste. No flat finish.",
   icon: <IconQualityBadge />
 }];
 
@@ -830,7 +825,7 @@ const FAQ_TOPICS = [
 
 const FAQS = [
 { topic: "brand",    q: "What does \"Midnight Pick\" mean?",                  a: "A nod to coffee that gets you through the quiet hours — the ideas, the projects, the breakthroughs that happen long after the rest of the city has gone to sleep. The name also points to the Colombian harvest tradition of picking ripe cherries in the cool pre-dawn." },
-{ topic: "brand",    q: "Is Midnight Pick freeze-dried?",                      a: "Yes — every bag and sachet is freeze-dried, the same low-temperature vacuum process used by Nescafé Gold, Davidoff, and Moccona. Spray-drying (250°C hot air) cooks off the aromatics; freeze-drying preserves them." },
+{ topic: "brand",    q: "Is Midnight Pick freeze-dried?",                      a: "Yes — every bag and sachet is freeze-dried, the same low-temperature vacuum process used by premium imported brands. Spray-drying (250°C hot air) cooks off the aromatics; freeze-drying preserves them." },
 
 { topic: "quality",  q: "What is freeze-dried coffee?",                        a: "Freeze-dried coffee is instant coffee made by freezing brewed coffee and removing the water under vacuum through sublimation. The ice converts directly to vapour without passing through liquid. Because no high heat is involved, more of the coffee's natural aroma and flavour compounds survive. The result dissolves cleanly in hot or cold water." },
 { topic: "quality",  q: "How is freeze-dried coffee different from regular instant coffee?", a: "Most instant coffee is spray-dried: the brewed liquid is sprayed as a mist through very hot air — sometimes around 250°C — until it dries. It's fast and cheap. Freeze-drying takes longer and costs more, but avoids the heat that flattens delicate aromatics. Freeze-dried granules taste cleaner, dissolve more evenly, and retain more antioxidants." },
@@ -844,7 +839,7 @@ const FAQS = [
 { topic: "health",   q: "What does the 65/35 Robusta-Arabica blend mean?",     a: "65% Robusta and 35% Arabica. Robusta beans have more body, higher caffeine, and a stronger, earthier profile. Arabica beans are more aromatic, with a cleaner, slightly sweeter finish. The blend gives the cup real weight and caffeine presence from the Robusta, with aromatic brightness from the Arabica rounding it out." },
 { topic: "health",   q: "Where do your beans come from?",                      a: "Colombian highlands. Colombia is one of the most established coffee origins — high altitude, distinct seasons, and mineral-rich soil that develops well-structured, balanced beans." },
 
-{ topic: "products", q: "How does Midnight Pick compare to Nescafé Gold?",    a: "Same freeze-drying process. A 100g jar of Nescafé Gold runs roughly ৳780–990 in Bangladesh (about ৳8–10/g). Our 100g Midnight Blend pouch is ৳349 (about ৳3.49/g). A fraction of the price, none of the compromise." },
+{ topic: "products", q: "Why is Midnight Pick more affordable than imported instant coffee?",    a: "Premium imported freeze-dried jars in Bangladesh typically run ৳8–10 per gram once import markups are added. Our 100g Midnight Blend pouch is ৳349 (about ৳3.49/g) — same low-temperature freeze-drying process, without the import costs. A fraction of the price, none of the compromise." },
 { topic: "products", q: "How much freeze-dried coffee per cup?",               a: "1.5–2 grams per 150–180ml of water. From the 100g pouch, that's roughly half a level teaspoon. The 10g sachet is pre-measured for a single strong cup. Adjust to your taste." },
 { topic: "products", q: "How do I store freeze-dried coffee once opened?",     a: "Seal the pouch or transfer to an airtight jar. Store at room temperature in a cool, dry cupboard. Keep away from steam, sunlight, and anything that introduces moisture. Do not refrigerate — cold environments introduce condensation, which is worse for freeze-dried coffee than warmth." },
 { topic: "products", q: "Can I make iced coffee with freeze-dried instant coffee?", a: "Yes. Dissolve one sachet (or 2g from the pouch) in 50ml of hot water first, then pour over ice and top up with cold water or cold milk. The hot water step ensures the granules dissolve fully before cooling." },
@@ -1038,7 +1033,7 @@ function App() {
 
   return (
     <>
-      <Nav cartCount={cart.length} onShop={onShop} onSubscribe={() => setModalOpen(true)} onSignIn={() => setAuthOpen(true)} loggedIn={auth.loggedIn} dashUrl={auth.dashUrl} onLogout={handleLogout} />
+      <Nav onSubscribe={() => setModalOpen(true)} onSignIn={() => setAuthOpen(true)} loggedIn={auth.loggedIn} dashUrl={auth.dashUrl} onLogout={handleLogout} />
       <Hero headline={t.headline} showMountain={t.showMountain} />
       <Story />
       <Collection onAdd={addToCart} />

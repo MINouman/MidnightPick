@@ -210,9 +210,8 @@ a { color: inherit; text-decoration: none; }
   pointer-events: none;
 }
 
-/* cart icon button in navbar (mobile only — hidden on desktop) */
-.nav-cart-btn {
-  position: relative;
+/* shop icon button in navbar (mobile only — hidden on desktop) */
+.nav-shop-icon-btn {
   display: none;
   align-items: center;
   justify-content: center;
@@ -220,25 +219,11 @@ a { color: inherit; text-decoration: none; }
   height: 38px;
   border-radius: 8px;
   color: rgba(15,14,14,0.7);
+  font-size: 18px;
   flex-shrink: 0;
   transition: color .15s ease, background .15s ease;
 }
-.nav-cart-btn:hover { color: var(--ink); background: rgba(0,0,0,0.06); }
-.nav-cart-badge {
-  position: absolute;
-  top: 0; right: 0;
-  min-width: 16px; height: 16px;
-  border-radius: 999px;
-  background: var(--flame);
-  color: var(--ink);
-  font-family: var(--font-display);
-  font-size: 9px; font-weight: 700;
-  display: flex; align-items: center; justify-content: center;
-  padding: 0 3px;
-  font-variant-numeric: tabular-nums;
-  pointer-events: none;
-  transform: translate(30%, -30%);
-}
+.nav-shop-icon-btn:hover { color: var(--ink); background: rgba(0,0,0,0.06); }
 
 /* logo */
 .logo {
@@ -1224,6 +1209,10 @@ a { color: inherit; text-decoration: none; }
   padding-top: 32px;
   border-top: 1px solid rgba(255,255,255,0.08);
   margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
 }
 .mob-menu-account-btn {
   display: inline-flex;
@@ -1266,7 +1255,7 @@ a { color: inherit; text-decoration: none; }
   .nav-links { display: none !important; }
   .nav-signin-btn { display: none; }
   .nav-shop-btn { display: none; }
-  .nav-cart-btn { display: inline-flex; }
+  .nav-shop-icon-btn { display: inline-flex; }
   .sticky-cart { display: none; }
   .mob-menu-btn { display: inline-flex; }
   .nav-logo-link img { height: 96px !important; }
@@ -4552,4 +4541,108 @@ a { color: inherit; text-decoration: none; }
 
   /* Show back button on mobile */
   .auth-back-btn { display: flex; }
+}
+
+/* ===== COFFEE CUP LOADER (from Uiverse.io by esraaabdel-kareem, brand-recolored) ===== */
+.loader {
+  width: 100px;
+  height: 100px;
+  position: relative;
+  animation: shake 3s infinite ease-in-out;
+}
+.cup {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 40px;
+  height: 30px;
+  background-color: rgba(87,31,41,0.85);
+  border: 1px solid #3A1F1A;
+  border-radius: 3px 3px 10px 10px;
+  z-index: 1;
+  animation: cupPulse 6s infinite ease-in-out;
+}
+.cup::before {
+  content: "";
+  position: absolute;
+  bottom: -5px;
+  width: calc(100% - 2px);
+  height: 6px;
+  background: rgba(87,31,41,0.85);
+  border: 1px solid #3A1F1A;
+  border-top: none;
+  border-radius: 50%;
+  z-index: -1;
+  animation: cupPulse 6s infinite ease-in-out;
+}
+.cup::after {
+  content: "";
+  position: absolute;
+  top: -2px;
+  left: 1px;
+  width: calc(100% - 2px);
+  height: 4px;
+  background: rgba(255,145,0,0.85);
+  border: 1px solid #3A1F1A;
+  border-radius: 50%;
+  animation: coffeeGlow 6s infinite ease-in-out;
+}
+.cup-handle {
+  position: absolute;
+  top: 5px;
+  right: -10px;
+  width: 10px;
+  height: 15px;
+  border: 2px solid #3A1F1A;
+  border-left: none;
+  border-radius: 0 10px 10px 0;
+  background: transparent;
+}
+.smoke {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  width: 10px;
+  height: 25px;
+  background: rgba(87,31,41,0.5);
+  border-radius: 50%;
+  transform: translateX(-50%);
+  animation: rise 3s infinite ease-in-out;
+  filter: blur(8px);
+}
+.smoke.one { animation-delay: 0s; }
+.smoke.two { animation-delay: 0.8s; }
+.smoke.three { animation-delay: 1.6s; }
+.load {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 12px;
+  font-family: var(--font-body, sans-serif);
+  color: #571F29;
+  opacity: 0.6;
+  white-space: nowrap;
+}
+@keyframes rise {
+  0%   { transform: translate(-50%, 0) scale(0.4); opacity: 0; }
+  30%  { opacity: 0.7; }
+  60%  { opacity: 0.4; }
+  100% { transform: translate(-50%, -120px) scale(1); opacity: 0; }
+}
+@keyframes shake {
+  0%   { transform: translateX(0) translateY(0) rotate(0); }
+  25%  { transform: translateX(-4px) translateY(-2px) rotate(-2deg); }
+  50%  { transform: translateX(0) translateY(0) rotate(0); }
+  75%  { transform: translateX(4px) translateY(-2px) rotate(2deg); }
+  100% { transform: translateX(0) translateY(0) rotate(0); }
+}
+@keyframes cupPulse {
+  0%, 100% { background-color: rgba(87,31,41,0.85); }
+  50%      { background-color: rgba(247,227,201,0.85); }
+}
+@keyframes coffeeGlow {
+  0%, 100% { background: rgba(255,145,0,0.85); }
+  50%      { background: rgba(254,209,151,0.9); }
 }

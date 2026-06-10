@@ -90,7 +90,7 @@ function getShopAuthState() {
   } catch { return { loggedIn: false, dashUrl: "dashboard-user.html", user: null }; }
 }
 
-function ShopHeader({ cartCount, onSignIn, onCart, productName, loggedIn, dashUrl, onLogout }) {
+function ShopHeader({ onSignIn, productName, loggedIn, dashUrl, onLogout }) {
   const [scrolled, setScrolled] = useState(false);
 
   useEffect(() => {
@@ -130,10 +130,6 @@ function ShopHeader({ cartCount, onSignIn, onCart, productName, loggedIn, dashUr
             Sign In
           </button>
         )}
-        <button className="nav-cart-btn" onClick={onCart} aria-label={`Cart -  ${cartCount} item${cartCount !== 1 ? "s" : ""}`}>
-          <CartIcon size={19} />
-          <span className="nav-cart-badge">{cartCount}</span>
-        </button>
       </div>
     </header>
   );
@@ -168,65 +164,6 @@ function ShopToastStack({ toasts }) {
           <span>Added <strong>{t.name}</strong> to cart</span>
         </div>
       ))}
-    </div>
-  );
-}
-
-function CartPanel({ cart, onClose }) {
-  const grouped = Object.values(
-    cart.reduce((acc, item) => {
-      if (!acc[item.id]) acc[item.id] = { ...item, totalQty: 0, totalAmt: 0 };
-      acc[item.id].totalQty += item.qty;
-      acc[item.id].totalAmt += item.price * item.qty;
-      return acc;
-    }, {})
-  );
-  const total = grouped.reduce((s, i) => s + i.totalAmt, 0);
-
-  return (
-    <div
-      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", zIndex: 1000, display: "flex", justifyContent: "flex-end" }}
-      onClick={e => e.target === e.currentTarget && onClose()}
-    >
-      <div style={{ width: "min(380px, 100vw)", background: "#FFFDF7", height: "100%", display: "flex", flexDirection: "column", boxShadow: "-4px 0 24px rgba(0,0,0,.18)" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "18px 20px", borderBottom: "1px solid rgba(87,31,41,.12)" }}>
-          <span style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16, color: "#571F29" }}>
-            Cart ({grouped.length} item{grouped.length !== 1 ? "s" : ""})
-          </span>
-          <button onClick={onClose} aria-label="Close cart" style={{ background: "none", border: "none", cursor: "pointer", color: "#571F29", padding: 4 }}>
-            <CloseIcon size={18} />
-          </button>
-        </div>
-
-        <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
-          {grouped.length === 0 ? (
-            <div style={{ textAlign: "center", padding: "48px 0", color: "rgba(87,31,41,.5)" }}>
-              <i className="fa-solid fa-bag-shopping" style={{ fontSize: 36, marginBottom: 12, display: "block" }} aria-hidden="true" />
-              <p style={{ margin: 0, fontSize: 14, fontFamily: "var(--font-body)" }}>Your cart is empty.</p>
-            </div>
-          ) : grouped.map((item, i) => (
-            <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "12px 0", borderBottom: "1px solid rgba(87,31,41,.08)" }}>
-              <div>
-                <div style={{ fontSize: 14, fontWeight: 600, color: "#571F29", fontFamily: "var(--font-display)" }}>Midnight Blend - 95g Pouch</div>
-                <div style={{ fontSize: 12, color: "rgba(87,31,41,.6)", marginTop: 2 }}>×{item.totalQty}</div>
-              </div>
-              <span style={{ fontFamily: "var(--font-display)", fontWeight: 700, color: "#FF9100", fontSize: 15 }}>৳{item.totalAmt.toLocaleString()}</span>
-            </div>
-          ))}
-        </div>
-
-        {grouped.length > 0 && (
-          <div style={{ padding: 20, borderTop: "1px solid rgba(87,31,41,.12)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16, color: "#571F29", marginBottom: 16 }}>
-              <span>Total</span>
-              <span style={{ color: "#FF9100" }}>৳{total.toLocaleString()}</span>
-            </div>
-            <p style={{ margin: "0 0 12px", fontSize: 12, color: "rgba(87,31,41,.6)", fontFamily: "var(--font-body)" }}>
-              Items in your cart are saved here. Click "Buy Now" on the product page to place an order.
-            </p>
-          </div>
-        )}
-      </div>
     </div>
   );
 }
@@ -952,7 +889,6 @@ function ShopPage() {
   const [toasts, setToasts] = useState([]);
   const [addedAnim, setAddedAnim] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
-  const [cartOpen, setCartOpen] = useState(false);
   const [shopAuth, setShopAuth] = useState(getShopAuthState);
 
   const handleLogout = () => {
@@ -1063,10 +999,17 @@ function ShopPage() {
   if (productLoading) {
     return (
       <div className="shop-page">
-        <ShopHeader cartCount={cart.length} onCart={() => setCartOpen(true)} onSignIn={() => setAuthOpen(true)} loggedIn={shopAuth.loggedIn} dashUrl={shopAuth.dashUrl} onLogout={handleLogout} />
+        <ShopHeader onSignIn={() => setAuthOpen(true)} loggedIn={shopAuth.loggedIn} dashUrl={shopAuth.dashUrl} onLogout={handleLogout} />
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "60vh", flexDirection: "column", gap: 16 }}>
-          <i className="fa-solid fa-spinner fa-spin" style={{ fontSize: 32, color: "#571F29", opacity: 0.5 }} aria-hidden="true" />
-          <span style={{ fontFamily: "var(--font-body)", color: "rgba(87,31,41,.5)", fontSize: 14 }}>Loading product…</span>
+          <div className="loader" aria-label="Loading product" role="status">
+            <div className="cup">
+              <div className="cup-handle" />
+              <div className="smoke one" />
+              <div className="smoke two" />
+              <div className="smoke three" />
+            </div>
+            <div className="load">Loading product…</div>
+          </div>
         </div>
       </div>
     );
@@ -1074,7 +1017,7 @@ function ShopPage() {
 
   return (
     <div className="shop-page">
-      <ShopHeader cartCount={cart.length} onCart={() => setCartOpen(true)} onSignIn={() => setAuthOpen(true)} productName={product.name} loggedIn={shopAuth.loggedIn} dashUrl={shopAuth.dashUrl} onLogout={handleLogout} />
+      <ShopHeader onSignIn={() => setAuthOpen(true)} productName={product.name} loggedIn={shopAuth.loggedIn} dashUrl={shopAuth.dashUrl} onLogout={handleLogout} />
 
       <div className="shop-layout">
 
@@ -1251,7 +1194,6 @@ function ShopPage() {
       </div>
 
       <ShopToastStack toasts={toasts} />
-      {cartOpen && <CartPanel cart={cart} onClose={() => setCartOpen(false)} />}
       <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} />
       <BuySheet
         open={buySheetOpen}

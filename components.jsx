@@ -87,7 +87,7 @@ const Star = ({ size = 14, filled = true }) => (
 
 // --- "why" section icons (Font Awesome 6 Free) ---
 const IconCoffeeSack  = () => <i className="fa-solid fa-building-wheat" style={{ fontSize: 48 }} aria-hidden="true" />;
-const IconSparkles    = () => <i className="fa-solid fa-bolt"  style={{ fontSize: 48 }} aria-hidden="true" />;
+const IconBullseye    = () => <i className="fa-solid fa-bullseye"  style={{ fontSize: 48 }} aria-hidden="true" />;
 const IconQualityBadge = () => <i className="fa-solid fa-award" style={{ fontSize: 48 }} aria-hidden="true" />;
 
 // --- "how it works" process icons (Font Awesome 6 Free) ---
@@ -1361,7 +1361,7 @@ Object.assign(window, {
   Logo,
   CartIcon, HeartIcon, UserIcon, ArrowRight, ArrowUpRight, Plus, Chev, Check, Star,
   MenuGridIcon, CloseIcon,
-  IconCoffeeSack, IconSparkles, IconQualityBadge,
+  IconCoffeeSack, IconBullseye, IconQualityBadge,
   StepPick, StepSundry, StepRoast, StepGrind, StepJar,
   SocialIcons,
   SubscribeModal,

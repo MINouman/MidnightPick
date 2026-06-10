@@ -332,87 +332,81 @@ function OrdersTab() {
 }
 
 // ── SUBSCRIPTION TAB ──────────────────────────────────────────
+const PLAN_BLANK = { product_id: "", qty: 1, address: "", billing_day: 1 };
+
 function SubscriptionTab() {
+  const { addresses }           = useContext(DashCtx);
   const [sub, setSub]           = useState(undefined);
-  const [notified, setNotified] = useState(false);
+  const [products, setProducts] = useState([]);
+  const [sheet, setSheet]       = useState(null);   // "plan" | "pause"
+  const [form, setForm]         = useState(PLAN_BLANK);
+  const [pauseMonths, setPauseMonths] = useState(1);
   const [busy, setBusy]         = useState(false);
 
   useEffect(() => {
     mpApi.fetch("/subscriptions")
       .then(res => setSub(res?.data ?? null))
       .catch(() => setSub(null));
+    mpApi.fetch("/products")
+      .then(res => setProducts((res?.data?.products || []).filter(p => (p.status || "").toLowerCase() === "active")))
+      .catch(() => {});
   }, []);
 
-  if (sub === undefined) {
-    return (
-      <div className="loading-screen">
-        <i className="fa fa-circle-notch fa-spin" style={{ fontSize: 28, color: "var(--orange)" }} />
-      </div>
-    );
+  const sfx = n => ["st","nd","rd"][n-1] || "th";
+
+  function apiError(res) {
+    Swal.fire({
+      title: "Something went wrong",
+      text: res?.error?.message || "Please try again.",
+      icon: "error",
+      confirmButtonColor: "#FF9100",
+    });
   }
 
-  // No active subscription — show premium empty state
-  if (!sub) {
-    return (
-      <div>
-        <div className="page-title mb4">Monthly Plan</div>
-        <div className="page-sub">Coffee on autopilot.</div>
-
-        <div className="sub-empty">
-          <div className="sub-empty-icon">
-            <i className="fa fa-calendar-check" style={{ color: "var(--orange)" }} />
-          </div>
-          <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>Plans Coming Soon</div>
-          <div className="text-sm text-muted" style={{ lineHeight: 1.7, marginBottom: 0 }}>
-            Set it once and never run out of your favourite blend again.
-          </div>
-
-          <ul className="sub-benefits">
-            {[
-              "Free delivery on every monthly order",
-              "Locked-in pricing — no surprise increases",
-              "Skip, pause, or cancel anytime",
-              "Priority dispatch before public stock",
-            ].map((b, i) => (
-              <li key={i} className="sub-benefit">
-                <span className="sub-benefit-check"><i className="fa fa-check" style={{ fontSize: 10 }} /></span>
-                {b}
-              </li>
-            ))}
-          </ul>
-
-          {notified ? (
-            <div style={{
-              display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
-              padding: "14px 22px", borderRadius: "var(--radius)",
-              background: "var(--green-soft)", color: "var(--green)",
-              fontWeight: 700, fontSize: 14,
-            }}>
-              <i className="fa fa-check" /> You're on the list!
-            </div>
-          ) : (
-            <button className="btn btn-primary btn-full" onClick={() => setNotified(true)}>
-              Notify Me When Available
-            </button>
-          )}
-        </div>
-      </div>
-    );
+  function defaultAddressString() {
+    const a = addresses.find(x => x.is_default) || addresses[0];
+    return a ? [a.line1, a.line2, a.district, a.city].filter(Boolean).join(", ") : "";
   }
 
-  // Active subscription
-  const isPaused   = sub.status === "paused";
-  const totalPrice = sub.qty * sub.unit_price;
-  const nextDate   = new Date(sub.next_delivery_date);
-  const today      = new Date(); today.setHours(0, 0, 0, 0);
-  const countdown  = Math.ceil((nextDate - today) / 86400000);
-  const sfx        = n => ["st","nd","rd"][n-1] || "th";
+  function openCreate() {
+    setForm({ product_id: products[0]?.id || "", qty: 1, address: defaultAddressString(), billing_day: 1 });
+    setSheet("plan");
+  }
+  function openEdit() {
+    setForm({ product_id: sub.product_id || "", qty: sub.qty, address: sub.address, billing_day: sub.billing_day });
+    setSheet("plan");
+  }
+
+  async function savePlan() {
+    const address = form.address.trim();
+    if (address.length < 5) return;
+    setBusy(true);
+    try {
+      let res;
+      if (!sub) {
+        const body = { qty: form.qty, address, billing_day: form.billing_day };
+        if (form.product_id) body.product_id = form.product_id;
+        res = await mpApi.fetch("/subscriptions", { method: "POST", body: JSON.stringify(body) });
+      } else {
+        const body = {};
+        if (form.product_id && form.product_id !== (sub.product_id || "")) body.product_id = form.product_id;
+        if (form.qty !== sub.qty)                   body.qty = form.qty;
+        if (address !== sub.address)                body.address = address;
+        if (form.billing_day !== sub.billing_day)   body.billing_day = form.billing_day;
+        if (!Object.keys(body).length) { setSheet(null); return; }
+        res = await mpApi.fetch("/subscriptions", { method: "PATCH", body: JSON.stringify(body) });
+      }
+      if (res?.ok) { setSub(res.data); setSheet(null); }
+      else apiError(res);
+    } finally { setBusy(false); }
+  }
 
   async function handlePause() {
     setBusy(true);
     try {
-      const res = await mpApi.fetch("/subscriptions/pause", { method: "POST", body: JSON.stringify({ months: 1 }) });
-      if (res?.ok) setSub(res.data);
+      const res = await mpApi.fetch("/subscriptions/pause", { method: "POST", body: JSON.stringify({ months: pauseMonths }) });
+      if (res?.ok) { setSub(res.data); setSheet(null); }
+      else apiError(res);
     } finally { setBusy(false); }
   }
   async function handleResume() {
@@ -420,6 +414,7 @@ function SubscriptionTab() {
     try {
       const res = await mpApi.fetch("/subscriptions/resume", { method: "POST" });
       if (res?.ok) setSub(res.data);
+      else apiError(res);
     } finally { setBusy(false); }
   }
   async function handleCancel() {
@@ -440,8 +435,154 @@ function SubscriptionTab() {
     try {
       const res = await mpApi.fetch("/subscriptions", { method: "DELETE" });
       if (res?.ok) setSub(null);
+      else apiError(res);
     } finally { setBusy(false); }
   }
+
+  if (sub === undefined) {
+    return (
+      <div className="loading-screen">
+        <i className="fa fa-circle-notch fa-spin" style={{ fontSize: 28, color: "var(--orange)" }} />
+      </div>
+    );
+  }
+
+  // Plan setup / edit sheet (shared)
+  const editing      = !!sub;
+  const selectedProd = products.find(p => p.id === form.product_id);
+  const unitPrice    = selectedProd ? parseInt(selectedProd.price, 10) : (editing ? sub.unit_price : 699);
+  const formTotal    = unitPrice * form.qty;
+
+  const planSheet = sheet === "plan" && (
+    <div className="overlay" onClick={() => setSheet(null)}>
+      <div className="sheet" onClick={e => e.stopPropagation()}>
+        <div className="sheet-handle" />
+        <div className="sheet-title">{editing ? "Edit Plan" : "Start Monthly Plan"}</div>
+
+        <div className="input-group">
+          <label className="input-label">Blend</label>
+          <div style={{ position: "relative" }}>
+            <select
+              className="select"
+              style={{ appearance: "none", WebkitAppearance: "none", paddingRight: 36, cursor: "pointer" }}
+              value={form.product_id}
+              onChange={e => setForm(f => ({ ...f, product_id: e.target.value }))}
+            >
+              {products.length === 0 && <option value="">Midnight Blend — 95g Pouch (৳699)</option>}
+              {products.map(p => (
+                <option key={p.id} value={p.id}>{p.name} (৳{parseInt(p.price, 10).toLocaleString()})</option>
+              ))}
+            </select>
+            <i className="fa fa-chevron-down" style={{ position: "absolute", right: 13, top: "50%", transform: "translateY(-50%)", fontSize: 11, color: "var(--cream-65)", pointerEvents: "none" }} />
+          </div>
+        </div>
+
+        <div className="input-group">
+          <label className="input-label">Packs per month</label>
+          <div className="row" style={{ gap: 12 }}>
+            <button
+              className="btn btn-ghost btn-sm"
+              style={{ width: 40 }}
+              disabled={form.qty <= 1}
+              onClick={() => setForm(f => ({ ...f, qty: Math.max(1, f.qty - 1) }))}
+            ><i className="fa fa-minus" style={{ fontSize: 11 }} /></button>
+            <span style={{ fontSize: 17, fontWeight: 700, minWidth: 28, textAlign: "center" }}>{form.qty}</span>
+            <button
+              className="btn btn-ghost btn-sm"
+              style={{ width: 40 }}
+              disabled={form.qty >= 20}
+              onClick={() => setForm(f => ({ ...f, qty: Math.min(20, f.qty + 1) }))}
+            ><i className="fa fa-plus" style={{ fontSize: 11 }} /></button>
+          </div>
+        </div>
+
+        <div className="input-group">
+          <label className="input-label">Delivery Address</label>
+          <input className="input" placeholder="House / Road / Area, City" value={form.address}
+            onChange={e => setForm(f => ({ ...f, address: e.target.value }))} />
+          {form.address.trim().length > 0 && form.address.trim().length < 5 && (
+            <div className="input-note" style={{ color: "var(--red)" }}>Address is too short.</div>
+          )}
+        </div>
+
+        <div className="input-group">
+          <label className="input-label">Delivery Day</label>
+          <div style={{ position: "relative" }}>
+            <select
+              className="select"
+              style={{ appearance: "none", WebkitAppearance: "none", paddingRight: 36, cursor: "pointer" }}
+              value={form.billing_day}
+              onChange={e => setForm(f => ({ ...f, billing_day: Number(e.target.value) }))}
+            >
+              {Array.from({ length: 28 }, (_, i) => i + 1).map(d => (
+                <option key={d} value={d}>{d}{sfx(d)} of each month</option>
+              ))}
+            </select>
+            <i className="fa fa-chevron-down" style={{ position: "absolute", right: 13, top: "50%", transform: "translateY(-50%)", fontSize: 11, color: "var(--cream-65)", pointerEvents: "none" }} />
+          </div>
+        </div>
+
+        <div className="row-between mb16" style={{ paddingTop: 4 }}>
+          <span className="text-sm text-muted">Monthly total</span>
+          <span style={{ fontSize: 18, fontWeight: 700, color: "var(--orange)" }}>৳{formTotal.toLocaleString()}<span className="text-muted text-sm" style={{ fontWeight: 400 }}>/mo</span></span>
+        </div>
+
+        <div className="col-gap">
+          <button className="btn btn-primary btn-full" disabled={busy || form.address.trim().length < 5} onClick={savePlan}>
+            {busy ? <><i className="fa fa-spinner fa-spin" /> Saving…</> : editing ? "Update Plan" : "Start Plan"}
+          </button>
+          <button className="btn btn-ghost btn-full" onClick={() => setSheet(null)}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+
+  // No active subscription — start a plan
+  if (!sub) {
+    return (
+      <div>
+        <div className="page-title mb4">Monthly Plan</div>
+        <div className="page-sub">Coffee on autopilot.</div>
+
+        <div className="sub-empty">
+          <div className="sub-empty-icon">
+            <i className="fa fa-calendar-check" style={{ color: "var(--orange)" }} />
+          </div>
+          <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>Start Your Monthly Plan</div>
+          <div className="text-sm text-muted" style={{ lineHeight: 1.7, marginBottom: 0 }}>
+            Set it once and never run out of your favourite blend again.
+          </div>
+
+          <ul className="sub-benefits">
+            {[
+              "Free delivery on every monthly order",
+              "Locked-in pricing — no surprise increases",
+              "Skip, pause, or cancel anytime",
+              "Priority dispatch before public stock",
+            ].map((b, i) => (
+              <li key={i} className="sub-benefit">
+                <span className="sub-benefit-check"><i className="fa fa-check" style={{ fontSize: 10 }} /></span>
+                {b}
+              </li>
+            ))}
+          </ul>
+
+          <button className="btn btn-primary btn-full" onClick={openCreate}>
+            <i className="fa fa-calendar-check" /> Start Monthly Plan
+          </button>
+        </div>
+
+        {planSheet}
+      </div>
+    );
+  }
+
+  // Active subscription
+  const isPaused   = sub.status === "paused";
+  const totalPrice = sub.qty * sub.unit_price;
+  const nextDate   = new Date(sub.next_delivery_date);
+  const today      = new Date(); today.setHours(0, 0, 0, 0);
+  const countdown  = Math.ceil((nextDate - today) / 86400000);
 
   return (
     <div style={{ maxWidth: 560 }}>
@@ -486,13 +627,16 @@ function SubscriptionTab() {
       </div>
 
       <div className="col-gap">
+        <button className="btn btn-ghost btn-full" onClick={openEdit} disabled={busy}>
+          <i className="fa fa-pen" style={{ fontSize: 12 }} /> Edit Plan
+        </button>
         {isPaused ? (
           <button className="btn btn-primary btn-full" onClick={handleResume} disabled={busy}>
             {busy ? <><i className="fa fa-spinner fa-spin" /> Resuming…</> : "Resume Subscription"}
           </button>
         ) : (
-          <button className="btn btn-ghost btn-full" onClick={handlePause} disabled={busy}>
-            <i className="fa fa-pause" style={{ fontSize: 12 }} /> {busy ? "Pausing…" : "Pause for 1 Month"}
+          <button className="btn btn-ghost btn-full" onClick={() => { setPauseMonths(1); setSheet("pause"); }} disabled={busy}>
+            <i className="fa fa-pause" style={{ fontSize: 12 }} /> Pause Plan
           </button>
         )}
       </div>
@@ -502,6 +646,40 @@ function SubscriptionTab() {
           Cancel Subscription
         </button>
       </div>
+
+      {planSheet}
+
+      {sheet === "pause" && (
+        <div className="overlay" onClick={() => setSheet(null)}>
+          <div className="sheet" onClick={e => e.stopPropagation()}>
+            <div className="sheet-handle" />
+            <div className="sheet-title">Pause Plan</div>
+            <div className="sheet-body">Deliveries will skip ahead — no charges while paused. Resume anytime.</div>
+            <div className="input-group">
+              <label className="input-label">Pause for</label>
+              <div style={{ position: "relative" }}>
+                <select
+                  className="select"
+                  style={{ appearance: "none", WebkitAppearance: "none", paddingRight: 36, cursor: "pointer" }}
+                  value={pauseMonths}
+                  onChange={e => setPauseMonths(Number(e.target.value))}
+                >
+                  {[1, 2, 3, 4, 5, 6].map(m => (
+                    <option key={m} value={m}>{m} month{m !== 1 ? "s" : ""}</option>
+                  ))}
+                </select>
+                <i className="fa fa-chevron-down" style={{ position: "absolute", right: 13, top: "50%", transform: "translateY(-50%)", fontSize: 11, color: "var(--cream-65)", pointerEvents: "none" }} />
+              </div>
+            </div>
+            <div className="col-gap">
+              <button className="btn btn-primary btn-full" disabled={busy} onClick={handlePause}>
+                {busy ? <><i className="fa fa-spinner fa-spin" /> Pausing…</> : `Pause for ${pauseMonths} Month${pauseMonths !== 1 ? "s" : ""}`}
+              </button>
+              <button className="btn btn-ghost btn-full" onClick={() => setSheet(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
