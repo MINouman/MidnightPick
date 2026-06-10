@@ -239,6 +239,8 @@ function OrdersTab() {
   const { orders } = useContext(DashCtx);
   const [filter, setFilter]     = useState("All");
   const [expanded, setExpanded] = useState(null);
+  const [reviewTrigger, setReviewTrigger] = useState(0);
+  const [reviewOrderId, setReviewOrderId] = useState(null);
 
   const filters = ["All", "Confirmed", "Processing", "Packed", "Shipped", "Delivered", "Cancelled"];
   const visible  = filter === "All" ? orders : orders.filter(o => fmtStatus(o.status) === filter);
@@ -319,6 +321,11 @@ function OrdersTab() {
               </div>
 
               <div className="row mt12" style={{ gap: 8 }}>
+                {order.status === "delivered" && (
+                  <button type="button" className="btn btn-primary btn-sm" onClick={() => { setReviewOrderId(order.id); setReviewTrigger(Date.now()); }}>
+                    <i className="fa fa-star" /> Write Review
+                  </button>
+                )}
                 <a href={waLink(order.order_ref)} target="_blank" rel="noreferrer" className="btn btn-ghost btn-sm">
                   <i className="fab fa-whatsapp" /> Get Help
                 </a>
@@ -327,6 +334,7 @@ function OrdersTab() {
           )}
         </div>
       ))}
+      <MPReviewPrompt source="dashboard_order" manual triggerKey={reviewTrigger} orderId={reviewOrderId} />
     </div>
   );
 }
@@ -335,11 +343,12 @@ function OrdersTab() {
 const PLAN_BLANK = { product_id: "", qty: 1, address: "", billing_day: 1 };
 
 function SubscriptionTab() {
-  const { addresses }           = useContext(DashCtx);
+  const { addresses, paymentMethods } = useContext(DashCtx);
   const [sub, setSub]           = useState(undefined);
   const [products, setProducts] = useState([]);
   const [sheet, setSheet]       = useState(null);   // "plan" | "pause"
   const [form, setForm]         = useState(PLAN_BLANK);
+  const [planStep, setPlanStep] = useState(0);
   const [pauseMonths, setPauseMonths] = useState(1);
   const [busy, setBusy]         = useState(false);
 
@@ -367,13 +376,21 @@ function SubscriptionTab() {
     const a = addresses.find(x => x.is_default) || addresses[0];
     return a ? [a.line1, a.line2, a.district, a.city].filter(Boolean).join(", ") : "";
   }
+  function defaultPaymentLabel() {
+    const p = paymentMethods?.find(x => x.is_default) || paymentMethods?.[0];
+    if (!p) return "Cash on delivery";
+    const labels = { bkash: "bKash", nagad: "Nagad", rocket: "Rocket", card: "Card", cod: "Cash on delivery" };
+    return `${labels[p.type] || p.type}${p.number ? ` · ${String(p.number).slice(-4)}` : ""}`;
+  }
 
   function openCreate() {
     setForm({ product_id: products[0]?.id || "", qty: 1, address: defaultAddressString(), billing_day: 1 });
+    setPlanStep(0);
     setSheet("plan");
   }
   function openEdit() {
     setForm({ product_id: sub.product_id || "", qty: sub.qty, address: sub.address, billing_day: sub.billing_day });
+    setPlanStep(0);
     setSheet("plan");
   }
 
@@ -406,6 +423,38 @@ function SubscriptionTab() {
     try {
       const res = await mpApi.fetch("/subscriptions/pause", { method: "POST", body: JSON.stringify({ months: pauseMonths }) });
       if (res?.ok) { setSub(res.data); setSheet(null); }
+      else apiError(res);
+    } finally { setBusy(false); }
+  }
+  async function handleSkipNext() {
+    const result = await Swal.fire({
+      title: "Skip next delivery?",
+      text: "Your next delivery will move one month ahead. The plan stays active.",
+      icon: "question",
+      showCancelButton: true,
+      confirmButtonText: "Yes, Skip It",
+      cancelButtonText: "Keep Delivery",
+      confirmButtonColor: "#FF9100",
+      cancelButtonColor: "transparent",
+      customClass: { cancelButton: "swal-cancel-dark" },
+      reverseButtons: true,
+    });
+    if (!result.isConfirmed) return;
+    setBusy(true);
+    try {
+      // No skip endpoint — pause 1 month, then resume, so the date moves but the plan stays active
+      const paused = await mpApi.fetch("/subscriptions/pause", { method: "POST", body: JSON.stringify({ months: 1 }) });
+      if (!paused?.ok) { apiError(paused); return; }
+      const res = await mpApi.fetch("/subscriptions/resume", { method: "POST" });
+      if (res?.ok) setSub(res.data);
+      else apiError(res);
+    } finally { setBusy(false); }
+  }
+  async function handleAddPouch() {
+    setBusy(true);
+    try {
+      const res = await mpApi.fetch("/subscriptions", { method: "PATCH", body: JSON.stringify({ qty: Math.min(20, sub.qty + 1) }) });
+      if (res?.ok) setSub(res.data);
       else apiError(res);
     } finally { setBusy(false); }
   }
@@ -452,14 +501,26 @@ function SubscriptionTab() {
   const selectedProd = products.find(p => p.id === form.product_id);
   const unitPrice    = selectedProd ? parseInt(selectedProd.price, 10) : (editing ? sub.unit_price : 699);
   const formTotal    = unitPrice * form.qty;
+  const setupSteps = ["Choose coffee", "Choose quantity", "Confirm monthly delivery", "Delivery address", "Confirm plan"];
+  const canContinue = planStep === 0 ? (!!form.product_id || products.length === 0 || editing)
+    : planStep === 3 ? form.address.trim().length >= 5
+    : true;
 
   const planSheet = sheet === "plan" && (
     <div className="overlay" onClick={() => setSheet(null)}>
       <div className="sheet" onClick={e => e.stopPropagation()}>
         <div className="sheet-handle" />
         <div className="sheet-title">{editing ? "Edit Plan" : "Start Monthly Plan"}</div>
+        <div className="sheet-body" style={{ marginBottom: 14 }}>
+          {editing ? "Update the parts of your plan that need changing." : setupSteps[planStep]}
+        </div>
+        <div className="plan-stepper" aria-label="Monthly plan setup progress">
+          {setupSteps.map((step, i) => (
+            <span key={step} className={i === planStep ? "active" : i < planStep ? "done" : ""} />
+          ))}
+        </div>
 
-        <div className="input-group">
+        {planStep === 0 && <div className="input-group">
           <label className="input-label">Blend</label>
           <div style={{ position: "relative" }}>
             <select
@@ -468,16 +529,21 @@ function SubscriptionTab() {
               value={form.product_id}
               onChange={e => setForm(f => ({ ...f, product_id: e.target.value }))}
             >
-              {products.length === 0 && <option value="">Midnight Blend — 95g Pouch (৳699)</option>}
+              {(products.length === 0 || (editing && !sub.product_id)) && (
+                <option value="">{editing ? `${sub.product_name} (৳${Number(sub.unit_price).toLocaleString()})` : "Midnight Blend — 95g Pouch (৳699)"}</option>
+              )}
+              {editing && sub.product_id && !products.some(p => p.id === sub.product_id) && (
+                <option value={sub.product_id}>{sub.product_name} (৳{Number(sub.unit_price).toLocaleString()})</option>
+              )}
               {products.map(p => (
                 <option key={p.id} value={p.id}>{p.name} (৳{parseInt(p.price, 10).toLocaleString()})</option>
               ))}
             </select>
             <i className="fa fa-chevron-down" style={{ position: "absolute", right: 13, top: "50%", transform: "translateY(-50%)", fontSize: 11, color: "var(--cream-65)", pointerEvents: "none" }} />
           </div>
-        </div>
+        </div>}
 
-        <div className="input-group">
+        {planStep === 1 && <div className="input-group">
           <label className="input-label">Packs per month</label>
           <div className="row" style={{ gap: 12 }}>
             <button
@@ -494,18 +560,27 @@ function SubscriptionTab() {
               onClick={() => setForm(f => ({ ...f, qty: Math.min(20, f.qty + 1) }))}
             ><i className="fa fa-plus" style={{ fontSize: 11 }} /></button>
           </div>
-        </div>
+        </div>}
 
-        <div className="input-group">
+        {planStep === 2 && <div className="input-group">
+          <label className="input-label">Monthly Delivery</label>
+          <div className="sub-confirm-card">
+            <div><strong>Delivered monthly</strong><span>Your pouch is dispatched before public stock.</span></div>
+            <i className="fa fa-calendar-check" />
+          </div>
+          <div className="input-note">Free delivery is included with every monthly order.</div>
+        </div>}
+
+        {planStep === 3 && <div className="input-group">
           <label className="input-label">Delivery Address</label>
           <input className="input" placeholder="House / Road / Area, City" value={form.address}
             onChange={e => setForm(f => ({ ...f, address: e.target.value }))} />
           {form.address.trim().length > 0 && form.address.trim().length < 5 && (
             <div className="input-note" style={{ color: "var(--red)" }}>Address is too short.</div>
           )}
-        </div>
+        </div>}
 
-        <div className="input-group">
+        {planStep === 2 && <div className="input-group">
           <label className="input-label">Delivery Day</label>
           <div style={{ position: "relative" }}>
             <select
@@ -520,17 +595,29 @@ function SubscriptionTab() {
             </select>
             <i className="fa fa-chevron-down" style={{ position: "absolute", right: 13, top: "50%", transform: "translateY(-50%)", fontSize: 11, color: "var(--cream-65)", pointerEvents: "none" }} />
           </div>
-        </div>
+        </div>}
 
-        <div className="row-between mb16" style={{ paddingTop: 4 }}>
-          <span className="text-sm text-muted">Monthly total</span>
-          <span style={{ fontSize: 18, fontWeight: 700, color: "var(--orange)" }}>৳{formTotal.toLocaleString()}<span className="text-muted text-sm" style={{ fontWeight: 400 }}>/mo</span></span>
-        </div>
+        {planStep === 4 && <div className="plan-summary">
+          <div className="plan-summary-title">Review your monthly plan</div>
+          <div className="row-between text-sm"><span>Product</span><strong>{selectedProd?.name || (editing ? sub.product_name : "Midnight Blend")} × {form.qty}</strong></div>
+          <div className="row-between text-sm"><span>Delivery</span><strong>Delivered monthly</strong></div>
+          <div className="row-between text-sm"><span>Monthly price</span><strong>৳{formTotal.toLocaleString()}/month</strong></div>
+          <div className="row-between text-sm"><span>Delivery fee</span><strong className="text-green">Free delivery included</strong></div>
+          <div className="row-between text-sm"><span>Payment method</span><strong>{defaultPaymentLabel()}</strong></div>
+          <div className="text-sm" style={{ marginTop: 8 }}><span className="text-muted">Delivery address</span><br /><strong>{form.address || "Add address"}</strong></div>
+        </div>}
 
         <div className="col-gap">
-          <button className="btn btn-primary btn-full" disabled={busy || form.address.trim().length < 5} onClick={savePlan}>
-            {busy ? <><i className="fa fa-spinner fa-spin" /> Saving…</> : editing ? "Update Plan" : "Start Plan"}
-          </button>
+          {planStep < 4 ? (
+            <button className="btn btn-primary btn-full" disabled={!canContinue} onClick={() => setPlanStep(s => Math.min(4, s + 1))}>
+              Continue
+            </button>
+          ) : (
+            <button className="btn btn-primary btn-full" disabled={busy || form.address.trim().length < 5} onClick={savePlan}>
+              {busy ? <><i className="fa fa-spinner fa-spin" /> Saving…</> : editing ? "Update Plan" : "Confirm Plan"}
+            </button>
+          )}
+          {planStep > 0 && <button className="btn btn-ghost btn-full" onClick={() => setPlanStep(s => Math.max(0, s - 1))}>Back</button>}
           <button className="btn btn-ghost btn-full" onClick={() => setSheet(null)}>Cancel</button>
         </div>
       </div>
@@ -541,22 +628,27 @@ function SubscriptionTab() {
   if (!sub) {
     return (
       <div>
-        <div className="page-title mb4">Monthly Plan</div>
-        <div className="page-sub">Coffee on autopilot.</div>
+        <div className="page-title mb4">Start Your Monthly Plan</div>
+        <div className="page-sub">Set it once and never run out of your favourite blend again.</div>
 
-        <div className="sub-empty">
-          <div className="sub-empty-icon">
-            <i className="fa fa-calendar-check" style={{ color: "var(--orange)" }} />
+        <div className="monthly-plan-layout">
+          <div className="sub-empty">
+            <div className="sub-empty-icon">
+              <i className="fa fa-calendar-check" style={{ color: "var(--orange)" }} />
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>Start Your Monthly Plan</div>
+            <div className="text-sm text-muted" style={{ lineHeight: 1.7, marginBottom: 0 }}>
+              Set it once and never run out of your favourite blend again.
+            </div>
+            <button className="btn btn-primary btn-full mt20" onClick={openCreate}>
+              <i className="fa fa-calendar-check" /> Start Monthly Plan
+            </button>
+            <div className="input-note" style={{ marginTop: 10 }}>No commitment. Manage everything from your Midnight account.</div>
           </div>
-          <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>Start Your Monthly Plan</div>
-          <div className="text-sm text-muted" style={{ lineHeight: 1.7, marginBottom: 0 }}>
-            Set it once and never run out of your favourite blend again.
-          </div>
-
           <ul className="sub-benefits">
             {[
               "Free delivery on every monthly order",
-              "Locked-in pricing — no surprise increases",
+              "Locked-in pricing - no surprise increases",
               "Skip, pause, or cancel anytime",
               "Priority dispatch before public stock",
             ].map((b, i) => (
@@ -566,10 +658,6 @@ function SubscriptionTab() {
               </li>
             ))}
           </ul>
-
-          <button className="btn btn-primary btn-full" onClick={openCreate}>
-            <i className="fa fa-calendar-check" /> Start Monthly Plan
-          </button>
         </div>
 
         {planSheet}
@@ -585,10 +673,11 @@ function SubscriptionTab() {
   const countdown  = Math.ceil((nextDate - today) / 86400000);
 
   return (
-    <div style={{ maxWidth: 560 }}>
-      <div className="page-title mb20">Subscription</div>
+    <div className="monthly-plan-active">
+      <div className="page-title mb4">Monthly Plan</div>
+      <div className="page-sub">Manage everything from your Midnight account.</div>
 
-      <div className="card mb10">
+      <div className="card mb10 plan-management-card">
         <div className="row-between mb12">
           <div>
             <div style={{ fontSize: 17, fontWeight: 700 }}>{sub.product_name}</div>
@@ -599,12 +688,16 @@ function SubscriptionTab() {
         <div style={{ fontSize: 24, fontWeight: 700, color: "var(--orange)" }}>
           ৳{totalPrice.toLocaleString()}<span className="text-muted text-sm" style={{ fontWeight: 400 }}>/mo</span>
         </div>
-      </div>
-
-      <div className="card mb10">
-        <div className="eyebrow">Next Delivery</div>
-        <div style={{ fontSize: 18, fontWeight: 700 }} className="mb4">
-          {nextDate.toLocaleDateString("en-BD", { day: "numeric", month: "long", year: "numeric" })}
+        <div className="divider" />
+        <div className="grid-2">
+          <div>
+            <div className="profile-label">Next delivery date</div>
+            <div className="profile-value">{nextDate.toLocaleDateString("en-BD", { day: "numeric", month: "long", year: "numeric" })}</div>
+          </div>
+          <div>
+            <div className="profile-label">Status</div>
+            <StatusBadge status={isPaused ? "Paused" : "Active"} />
+          </div>
         </div>
         {isPaused
           ? <div className="text-sm text-orange">Paused — resumes {nextDate.toLocaleDateString("en-BD", { month: "short", year: "numeric" })}</div>
@@ -613,38 +706,30 @@ function SubscriptionTab() {
         <div className="text-sm text-muted mt8">
           <i className="fa fa-map-marker-alt" style={{ fontSize: 11, marginRight: 5 }} />{sub.address}
         </div>
-      </div>
 
-      <div className="card mb16">
-        <div className="row-between text-sm mb6">
-          <span className="text-muted">Delivery day</span>
-          <span style={{ fontWeight: 600 }}>{sub.billing_day}{sfx(sub.billing_day)} of each month</span>
-        </div>
-        <div className="row-between text-sm">
-          <span className="text-muted">Monthly total</span>
-          <span style={{ fontWeight: 600 }}>৳{totalPrice.toLocaleString()}</span>
-        </div>
-      </div>
-
-      <div className="col-gap">
+        <div className="plan-action-grid">
+          {!isPaused && <button className="btn btn-ghost btn-full" onClick={handleSkipNext} disabled={busy}>
+            <i className="fa fa-forward" style={{ fontSize: 12 }} /> Skip Next Delivery
+          </button>}
+          {isPaused ? (
+            <button className="btn btn-primary btn-full" onClick={handleResume} disabled={busy}>
+              {busy ? <><i className="fa fa-spinner fa-spin" /> Resuming…</> : "Resume Plan"}
+            </button>
+          ) : (
+            <button className="btn btn-ghost btn-full" onClick={() => { setPauseMonths(1); setSheet("pause"); }} disabled={busy}>
+              <i className="fa fa-pause" style={{ fontSize: 12 }} /> Pause Plan
+            </button>
+          )}
         <button className="btn btn-ghost btn-full" onClick={openEdit} disabled={busy}>
-          <i className="fa fa-pen" style={{ fontSize: 12 }} /> Edit Plan
+            <i className="fa fa-sliders" style={{ fontSize: 12 }} /> Change Quantity
         </button>
-        {isPaused ? (
-          <button className="btn btn-primary btn-full" onClick={handleResume} disabled={busy}>
-            {busy ? <><i className="fa fa-spinner fa-spin" /> Resuming…</> : "Resume Subscription"}
+          <button className="btn btn-ghost btn-full" onClick={handleAddPouch} disabled={busy || sub.qty >= 20}>
+            <i className="fa fa-plus" style={{ fontSize: 12 }} /> Add Another Pouch
           </button>
-        ) : (
-          <button className="btn btn-ghost btn-full" onClick={() => { setPauseMonths(1); setSheet("pause"); }} disabled={busy}>
-            <i className="fa fa-pause" style={{ fontSize: 12 }} /> Pause Plan
+          <button className="btn btn-ghost-danger btn-full" onClick={handleCancel} disabled={busy}>
+            Cancel Plan
           </button>
-        )}
-      </div>
-
-      <div style={{ textAlign: "center", marginTop: 20 }}>
-        <button className="btn-link" style={{ color: "var(--red)", fontSize: 12 }} onClick={handleCancel} disabled={busy}>
-          Cancel Subscription
-        </button>
+        </div>
       </div>
 
       {planSheet}
@@ -1424,6 +1509,7 @@ function UserDashboard() {
         </div>
       </div>
       <BottomNav tab={tab} setTab={setTab} />
+      <MPReviewPrompt source="dashboard" delay={1100} suppress={tab === "orders"} />
     </DashCtx.Provider>
   );
 }

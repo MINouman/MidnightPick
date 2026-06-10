@@ -346,16 +346,19 @@ async function trackOrder(orderRef) {
 
 const GUEST_PRODUCT_NAME = 'Midnight Blend — 95g Pouch'
 const GUEST_UNIT_PRICE   = 699
+const { normalizeBdMobile } = require('./phone')
 
 async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, otp, product_id }) {
+  const normalizedPhone = normalizeBdMobile(phone)
   // Verify OTP before touching any order data
   const { verifyOtp } = require('./otp')
-  await verifyOtp(phone.trim(), otp)
+  await verifyOtp(normalizedPhone, otp)
 
   return withTransaction(async (client) => {
     // Resolve product price — use DB price if product_id provided, else hardcoded default
     let productName = GUEST_PRODUCT_NAME
     let unitPrice   = GUEST_UNIT_PRICE
+    let itemProductId = null
     if (product_id) {
       const { rows: pRows } = await client.query(
         `SELECT name, price FROM products WHERE id = $1 AND LOWER(status) = 'active'`,
@@ -364,6 +367,7 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
       if (pRows.length) {
         productName = pRows[0].name
         unitPrice   = parseInt(pRows[0].price, 10)
+        itemProductId = product_id
       }
     }
 
@@ -392,7 +396,7 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
           coupon_code, discount_amount, subtotal, delivery_fee, total, notes)
        VALUES ($1, NULL, $2, $3, $4, 'cod', $3, $5, $6, $7, $8, $9, $10)
        RETURNING id, order_ref, status, created_at`,
-      [orderRef, name.trim(), phone.trim(),
+      [orderRef, name.trim(), normalizedPhone,
        JSON.stringify(addrSnap),
        coupon_code?.toUpperCase() ?? null,
        discountAmount, subtotal, DELIVERY_FEE, total,
@@ -401,9 +405,9 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
     const order = orderRows[0]
 
     await client.query(
-      `INSERT INTO order_items (order_id, name_snapshot, qty, unit_price, subtotal)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [order.id, productName, qty, unitPrice, unitPrice * qty]
+      `INSERT INTO order_items (order_id, product_id, name_snapshot, qty, unit_price, subtotal)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [order.id, itemProductId, productName, qty, unitPrice, unitPrice * qty]
     )
 
     if (couponId) {
@@ -426,12 +430,12 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
          order_count  = customers.order_count + 1,
          total_spent  = customers.total_spent + EXCLUDED.total_spent,
          last_seen    = NOW()`,
-      [phone.trim(), name.trim(), address, total]
+      [normalizedPhone, name.trim(), address, total]
     )
 
     try {
       const { sendOrderConfirmation } = require('./sms')
-      await sendOrderConfirmation(phone.trim(), orderRef, total)
+      await sendOrderConfirmation(normalizedPhone, orderRef, total)
     } catch (err) {
       console.error('[orders] SMS send failed:', err.message)
     }
@@ -442,7 +446,7 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
       console.log(`╠══════════════════════════════════════════════╣`)
       console.log(`║  Order ID  : ${orderRef.padEnd(31)}║`)
       console.log(`║  Customer  : ${name.trim().substring(0, 31).padEnd(31)}║`)
-      console.log(`║  Phone     : ${phone.trim().padEnd(31)}║`)
+      console.log(`║  Phone     : ${normalizedPhone.padEnd(31)}║`)
       console.log(`║  Total     : BDT ${String(total).padEnd(27)}║`)
       console.log(`║  Status    : ${order.status.padEnd(31)}║`)
       console.log(`║  Track at  : /track?ref=${orderRef.padEnd(21)}║`)
@@ -471,11 +475,12 @@ async function placeQuickOrder(userId, { product_id, qty, address, coupon_code, 
     )
     if (!uRows.length) throw { code: 'NOT_FOUND', message: 'User not found.' }
     const name  = uRows[0].name  || 'Customer'
-    const phone = uRows[0].phone || ''
+    const phone = normalizeBdMobile(uRows[0].phone || '')
 
     // Resolve product price
     let productName = GUEST_PRODUCT_NAME
     let unitPrice   = GUEST_UNIT_PRICE
+    let itemProductId = null
     if (product_id) {
       const { rows: pRows } = await client.query(
         `SELECT name, price FROM products WHERE id = $1 AND LOWER(status) = 'active'`,
@@ -484,6 +489,7 @@ async function placeQuickOrder(userId, { product_id, qty, address, coupon_code, 
       if (pRows.length) {
         productName = pRows[0].name
         unitPrice   = parseInt(pRows[0].price, 10)
+        itemProductId = product_id
       }
     }
 
@@ -521,9 +527,9 @@ async function placeQuickOrder(userId, { product_id, qty, address, coupon_code, 
     const order = orderRows[0]
 
     await client.query(
-      `INSERT INTO order_items (order_id, name_snapshot, qty, unit_price, subtotal)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [order.id, productName, qty, unitPrice, unitPrice * qty]
+      `INSERT INTO order_items (order_id, product_id, name_snapshot, qty, unit_price, subtotal)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [order.id, itemProductId, productName, qty, unitPrice, unitPrice * qty]
     )
 
     if (couponId) {

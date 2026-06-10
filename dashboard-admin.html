@@ -81,6 +81,7 @@ function Ic({n,size=22,color='currentColor',style:xs,strokeWidth=2}){
   const paths={
     home:<svg {...p}><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg>,
     package:<svg {...p}><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>,
+    truck:<svg {...p}><path d="M10 17h4V5H2v12h3"/><path d="M14 17h1"/><path d="M19 17h3v-6h-3l-3-4h-2"/><circle cx="7.5" cy="17.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/></svg>,
     repeat:<svg {...p}><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>,
     star:<svg {...p}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>,
     user:<svg {...p}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>,
@@ -1051,12 +1052,18 @@ function AdminOrdersTab(){
                   <OrangeBtn full onClick={()=>updateStatus(detail.id,'packed')}>Mark as Packaged</OrangeBtn>
                 )}
                 {detail.status==='packed'&&(
-                  <OrangeBtn full onClick={()=>updateStatus(detail.id,'shipped')}>Hand to Delivery Service</OrangeBtn>
+                  <>
+                    <OrangeBtn full onClick={()=>updateStatus(detail.id,'shipped')}><Ic n="truck" size={14}/>Hand to Delivery Service</OrangeBtn>
+                    <GhostBtn full onClick={()=>updateStatus(detail.id,'delivered')}><Ic n="check" size={14} color={C.green}/>Personally Delivered</GhostBtn>
+                  </>
                 )}
                 {detail.status==='shipped'&&(
-                  <div style={{...sans,fontSize:12,color:C.blue,padding:'10px 14px',background:'rgba(100,181,246,0.1)',borderRadius:8}}>
-                    Tracking will auto-update via the delivery service API.
-                  </div>
+                  <>
+                    <div style={{...sans,fontSize:12,color:C.blue,padding:'10px 14px',background:'rgba(100,181,246,0.1)',borderRadius:8}}>
+                      Tracking will auto-update via the delivery service API.
+                    </div>
+                    <OrangeBtn full onClick={()=>updateStatus(detail.id,'delivered')}><Ic n="check" size={14}/>Mark as Delivered</OrangeBtn>
+                  </>
                 )}
                 <GhostBtn full onClick={()=>setEditMode(true)}><Ic n="pencil" size={14} color={C.mutedCard}/>Edit Order</GhostBtn>
               </Col>
@@ -2954,14 +2961,24 @@ function Orders() {
                         </button>
                       )}
                       {panel.status === "packed" && (
-                        <button className="btn btn-primary btn-sm" onClick={() => updateStatus("shipped")}>
-                          <i className="fa fa-truck" style={{ fontSize: 11 }} /> Hand to Delivery Service
-                        </button>
+                        <>
+                          <button className="btn btn-primary btn-sm" onClick={() => updateStatus("shipped")}>
+                            <i className="fa fa-truck" style={{ fontSize: 11 }} /> Hand to Delivery Service
+                          </button>
+                          <button className="btn btn-ghost btn-sm" onClick={() => updateStatus("delivered")}>
+                            <i className="fa fa-person-walking" style={{ fontSize: 11 }} /> Personally Delivered
+                          </button>
+                        </>
                       )}
                       {panel.status === "shipped" && (
-                        <div style={{ fontSize: 12, color: "var(--blue)", padding: "8px 12px", background: "rgba(100,181,246,0.1)", border: "1px solid rgba(100,181,246,0.2)", borderRadius: 8 }}>
-                          <i className="fa fa-info-circle" style={{ marginRight: 6 }} />Tracking status will auto-update via the delivery service API.
-                        </div>
+                        <>
+                          <div style={{ fontSize: 12, color: "var(--blue)", padding: "8px 12px", background: "rgba(100,181,246,0.1)", border: "1px solid rgba(100,181,246,0.2)", borderRadius: 8 }}>
+                            <i className="fa fa-info-circle" style={{ marginRight: 6 }} />Tracking status will auto-update via the delivery service API.
+                          </div>
+                          <button className="btn btn-primary btn-sm" onClick={() => updateStatus("delivered")}>
+                            <i className="fa fa-check-circle" style={{ fontSize: 11 }} /> Mark as Delivered
+                          </button>
+                        </>
                       )}
                     </div>
                   </div>
@@ -4498,7 +4515,8 @@ function Sidebar({ section, setSection, onLogout }) {
     { id: "customers",  icon: "fa-users",           label: "Customers" },
     { id: "subs",       icon: "fa-calendar-check",  label: "Subscriptions" },
     { id: "coupons",    icon: "fa-ticket-alt",      label: "Coupons" },
-    // { id: "reviews",    icon: "fa-star-half-alt",   label: "Reviews" },
+    { id: "feedback",   icon: "fa-comment-dots",    label: "Feedback" },
+    { id: "reviews",    icon: "fa-star-half-alt",   label: "Reviews" },
     // { id: "crew",       icon: "fa-fire",            label: "Crew" },
     { id: "influencer", icon: "fa-bolt",            label: "Influencers" },
     { id: "points",     icon: "fa-star",            label: "Points" },
@@ -4591,7 +4609,8 @@ function AdminDashboard() {
       case "customers":  return <Customers />;
       case "subs":       return <Subscriptions />;
       case "coupons":    return <Coupons />;
-      // case "reviews":    return <Reviews />;
+      case "feedback":   return <CustomerFeedback />;
+      case "reviews":    return <ReviewsAdmin />;
       // case "crew":       return <CrewManagement />;
       case "influencer": return <InfluencersSection />;
       case "points":     return <PointsAdmin />;
@@ -4816,75 +4835,282 @@ function InfluencersSection() {
   );
 }
 
-// ── Reviews ────────────────────────────────────────────
-function Reviews() {
-  const [filter, setFilter] = useState('pending');
+// ── Customer Feedback (private ordering-experience insights) ──
+const EMOTION_META = {
+  very_easy: { label: "Very easy", badge: "badge-green",  icon: "fa-face-laugh-beam" },
+  okay:      { label: "Okay",      badge: "badge-orange", icon: "fa-face-meh" },
+  confusing: { label: "Confusing", badge: "badge-red",    icon: "fa-face-frown" },
+};
+
+const ISSUE_LABELS = {
+  checkout: "Checkout", payment: "Payment", delivery_address: "Delivery address",
+  coupon: "Coupon", website_speed: "Website speed", product_info: "Product info", other: "Other",
+};
+
+const HIGHLIGHT_LABELS = {
+  taste: "Taste", aroma: "Aroma", easy_to_make: "Easy to make",
+  energy_focus: "Energy / Focus", packaging: "Packaging", delivery: "Delivery",
+};
+
+function CustomerFeedback() {
+  const [feedbacks, setFeedbacks] = useState([]);
+  const [stats, setStats]   = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [panel, setPanel]   = useState(null);
+  const [filter, setFilter] = useState({ emotion: "", device: "", tag: "", from: "", to: "", search: "" });
+
+  async function load() {
+    setLoading(true);
+    const params = new URLSearchParams({ limit: 100 });
+    Object.entries(filter).forEach(([k, v]) => { if (v) params.set(k, v); });
+    const res = await window.mpApi.fetch(`/admin/feedback?${params}`).catch(() => null);
+    setFeedbacks(res?.data?.feedbacks || []);
+    setStats(res?.data?.stats || null);
+    setLoading(false);
+  }
+
+  useEffect(() => { load(); }, [filter]);
+
+  const statCards = [
+    { label: "Average Ordering Experience", value: stats ? `${stats.avg_score} / 5` : "…", icon: "fa-gauge-high" },
+    { label: "Total Feedback",              value: stats?.total ?? "…",                    icon: "fa-comment-dots" },
+    { label: "Confusing Responses",         value: stats ? `${stats.confusing_pct}%` : "…", icon: "fa-circle-question" },
+    { label: "Most Common Issue",           value: stats?.top_issue ? (ISSUE_LABELS[stats.top_issue] || stats.top_issue) : "—", icon: "fa-triangle-exclamation" },
+  ];
+
+  return (
+    <div className="dash-inner-wide">
+      <div className="row-between mb20" style={{ alignItems: "flex-start" }}>
+        <div>
+          <div className="page-title" style={{ marginBottom: 2 }}>Customer Feedback</div>
+          <div className="page-sub">Private ordering-experience feedback — never shown publicly.</div>
+        </div>
+        <button className="btn btn-ghost btn-sm" onClick={load}><i className="fa fa-sync" style={{ fontSize: 12 }} /> Refresh</button>
+      </div>
+
+      <div className="stat-row" style={{ marginBottom: 16 }}>
+        {statCards.map((s, i) => (
+          <div key={i} className="stat-card">
+            <div className="stat-label">{s.label}</div>
+            <div className="stat-value" style={{ fontSize: 22 }}>{s.value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
+        <input className="input" placeholder="Search order, name, phone…" style={{ width: 210 }} value={filter.search}
+               onChange={e => setFilter(f => ({ ...f, search: e.target.value }))} />
+        <select className="select" style={{ width: 150 }} value={filter.emotion} onChange={e => setFilter(f => ({ ...f, emotion: e.target.value }))}>
+          <option value="">All experiences</option>
+          {Object.entries(EMOTION_META).map(([v, m]) => <option key={v} value={v}>{m.label}</option>)}
+        </select>
+        <select className="select" style={{ width: 130 }} value={filter.device} onChange={e => setFilter(f => ({ ...f, device: e.target.value }))}>
+          <option value="">All devices</option>
+          <option value="mobile">Mobile</option>
+          <option value="tablet">Tablet</option>
+          <option value="desktop">Desktop</option>
+        </select>
+        <select className="select" style={{ width: 160 }} value={filter.tag} onChange={e => setFilter(f => ({ ...f, tag: e.target.value }))}>
+          <option value="">All issues</option>
+          {Object.entries(ISSUE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>
+        <input className="input" type="date" style={{ width: 145 }} value={filter.from} onChange={e => setFilter(f => ({ ...f, from: e.target.value }))} title="From date" />
+        <input className="input" type="date" style={{ width: 145 }} value={filter.to} onChange={e => setFilter(f => ({ ...f, to: e.target.value }))} title="To date" />
+      </div>
+
+      <SectionCard style={{ padding: 0, overflow: "hidden" }}>
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead>
+              <tr><th>Date</th><th>Order</th><th>Customer</th><th>Experience</th><th>Issues</th><th>Comment</th><th>Device</th><th>Action</th></tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={8} style={{ textAlign: "center", padding: 24, color: "var(--text-65)" }}>Loading…</td></tr>
+              ) : feedbacks.length === 0 ? (
+                <tr><td colSpan={8} style={{ textAlign: "center", padding: 32, color: "var(--text-65)" }}>No feedback yet. It appears here as customers respond after placing orders.</td></tr>
+              ) : feedbacks.map(f => {
+                const em = EMOTION_META[f.emotion] || {};
+                return (
+                  <tr key={f.id}>
+                    <td className="muted">{fmtDate(f.created_at)}</td>
+                    <td className="mono text-xs" style={{ color: "var(--blue)" }}>{f.order_ref}</td>
+                    <td style={{ fontWeight: 600, cursor: "pointer" }} onClick={() => setPanel(f)}>{f.customer_name || "Guest"}</td>
+                    <td><span className={`badge ${em.badge || "badge-gray"}`}>{em.label || f.emotion}</span></td>
+                    <td>
+                      {f.issue_tags?.length
+                        ? f.issue_tags.map(t => <span key={t} className="badge badge-gray" style={{ marginRight: 4 }}>{ISSUE_LABELS[t] || t}</span>)
+                        : <span className="muted">—</span>}
+                    </td>
+                    <td className="muted" style={{ maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.comment || "—"}</td>
+                    <td className="muted" style={{ textTransform: "capitalize" }}>{f.device_type || "—"}</td>
+                    <td><button className="btn btn-sm btn-ghost" style={{ padding: "5px 10px", fontSize: 11 }} onClick={() => setPanel(f)}>View</button></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </SectionCard>
+
+      {panel && (
+        <>
+          <div className="panel-overlay" onClick={() => setPanel(null)} />
+          <div className="slide-panel">
+            <div className="panel-hd">
+              <div>
+                <div className="mono text-xs" style={{ color: "var(--blue)", marginBottom: 4 }}>{panel.order_ref}</div>
+                <div style={{ fontWeight: 700, fontSize: 16 }}>{panel.customer_name || "Guest"}</div>
+              </div>
+              <button className="icon-btn" onClick={() => setPanel(null)}><i className="fa fa-times" /></button>
+            </div>
+
+            <div className="eyebrow mb10">Feedback</div>
+            <div className="card" style={{ marginBottom: 14 }}>
+              <div className="row-between mb8">
+                <span className="text-sm text-muted">Was it easy to place the order?</span>
+                <span className={`badge ${EMOTION_META[panel.emotion]?.badge || "badge-gray"}`}>{EMOTION_META[panel.emotion]?.label || panel.emotion}</span>
+              </div>
+              <div className="row-between mb8">
+                <span className="text-sm text-muted">Score</span>
+                <span style={{ fontWeight: 700, color: "var(--orange)" }}>{panel.score} / 5</span>
+              </div>
+              {panel.issue_tags?.length > 0 && (
+                <div className="row-between mb8" style={{ alignItems: "flex-start" }}>
+                  <span className="text-sm text-muted">Detected issues</span>
+                  <span style={{ textAlign: "right" }}>{panel.issue_tags.map(t => <span key={t} className="badge badge-gray" style={{ marginLeft: 4 }}>{ISSUE_LABELS[t] || t}</span>)}</span>
+                </div>
+              )}
+              {panel.comment && (
+                <div style={{ marginTop: 10, padding: "10px 12px", background: "var(--bg-soft)", borderRadius: 8, fontSize: 13, lineHeight: 1.6 }}>
+                  “{panel.comment}”
+                </div>
+              )}
+            </div>
+
+            <div className="eyebrow mb10">Customer & Order</div>
+            <div className="card" style={{ marginBottom: 14 }}>
+              <div className="row-between mb8"><span className="text-sm text-muted">Phone</span><span className="text-sm">{panel.customer_phone || "—"}</span></div>
+              <div className="row-between mb8"><span className="text-sm text-muted">Order</span><span className="mono text-xs" style={{ color: "var(--blue)" }}>{panel.order_ref}</span></div>
+              <div className="row-between mb8"><span className="text-sm text-muted">Order status</span><StatusBadge status={panel.order_status || "—"} /></div>
+            </div>
+
+            <div className="eyebrow mb10">Context</div>
+            <div className="card">
+              <div className="row-between mb8"><span className="text-sm text-muted">Device</span><span className="text-sm" style={{ textTransform: "capitalize" }}>{panel.device_type || "—"}</span></div>
+              <div className="row-between mb8"><span className="text-sm text-muted">Page source</span><span className="text-sm">{panel.page_source}</span></div>
+              <div className="row-between"><span className="text-sm text-muted">Submitted</span><span className="text-sm">{new Date(panel.created_at).toLocaleString("en-GB")}</span></div>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── Reviews (live immediately — hide or remove only) ──
+function ReviewsAdmin() {
+  const [filter, setFilter]   = useState("all");
   const [reviews, setReviews] = useState([]);
+  const [stats, setStats]     = useState(null);
   const [loading, setLoading] = useState(true);
 
-  async function load(f) {
+  async function load(f = filter) {
     setLoading(true);
-    const q = f === 'pending' ? '?approved=false' : f === 'approved' ? '?approved=true' : '';
+    const q = f === "all" ? "?limit=100" : `?limit=100&status=${f}`;
     const res = await window.mpApi.fetch(`/admin/reviews${q}`).catch(() => null);
     setReviews(res?.data?.reviews || []);
+    setStats(res?.data?.stats || null);
     setLoading(false);
   }
 
   useEffect(() => { load(filter); }, [filter]);
 
-  async function approve(id, approved) {
-    const res = await window.mpApi.fetch(`/admin/reviews/${id}/approve`, {
-      method: 'PATCH',
-      body: JSON.stringify({ approved }),
+  async function setStatus(id, status) {
+    const res = await window.mpApi.fetch(`/admin/reviews/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
     }).catch(() => null);
-    if (res?.ok) setReviews(prev => prev.map(r => r.id === id ? { ...r, is_approved: approved } : r));
+    if (res?.ok) {
+      setReviews(prev => prev.map(r => r.id === id ? { ...r, status } : r));
+      load(filter);
+    }
   }
 
   async function remove(id) {
-    if (!window.confirm('Permanently delete this review?')) return;
-    const res = await window.mpApi.fetch(`/admin/reviews/${id}`, { method: 'DELETE' }).catch(() => null);
+    if (!window.confirm("Permanently delete this review?")) return;
+    const res = await window.mpApi.fetch(`/admin/reviews/${id}`, { method: "DELETE" }).catch(() => null);
     if (res?.ok) setReviews(prev => prev.filter(r => r.id !== id));
   }
+
+  const statCards = [
+    { label: "Average Product Rating", value: stats ? `${stats.avg_rating} ★` : "…" },
+    { label: "Live Reviews",           value: stats?.visible ?? "…" },
+    { label: "Hidden Reviews",         value: stats?.hidden ?? "…" },
+    { label: "Most Mentioned",         value: stats?.top_tag ? (HIGHLIGHT_LABELS[stats.top_tag] || stats.top_tag) : "—" },
+  ];
 
   return (
     <div className="dash-inner-wide">
       <div className="row-between mb20" style={{ alignItems: "flex-start" }}>
-        <div className="page-title" style={{ marginBottom: 0 }}>Reviews</div>
+        <div>
+          <div className="page-title" style={{ marginBottom: 2 }}>Reviews</div>
+          <div className="page-sub">Verified-purchase reviews go live immediately. Hide or remove anything inappropriate.</div>
+        </div>
         <button className="btn btn-ghost btn-sm" onClick={() => load(filter)}><i className="fa fa-sync" style={{ fontSize: 12 }} /> Refresh</button>
       </div>
-      <div className="toggle-group" style={{ marginBottom: 16 }}>
-        {[['pending', 'Pending'], ['approved', 'Approved'], ['all', 'All']].map(([val, label]) => (
-          <button key={val} className={`toggle-btn ${filter === val ? 'active' : ''}`} onClick={() => setFilter(val)}>{label}</button>
+
+      <div className="stat-row" style={{ marginBottom: 16 }}>
+        {statCards.map((s, i) => (
+          <div key={i} className="stat-card">
+            <div className="stat-label">{s.label}</div>
+            <div className="stat-value" style={{ fontSize: 22 }}>{s.value}</div>
+          </div>
         ))}
       </div>
-      <SectionCard style={{ padding: 0, overflow: 'hidden' }}>
+
+      <div className="toggle-group" style={{ marginBottom: 16 }}>
+        {[["all", "All"], ["visible", "Live"], ["hidden", "Hidden"]].map(([val, label]) => (
+          <button key={val} className={`toggle-btn ${filter === val ? "active" : ""}`} onClick={() => setFilter(val)}>{label}</button>
+        ))}
+      </div>
+
+      <SectionCard style={{ padding: 0, overflow: "hidden" }}>
         <div className="table-wrap">
           <table className="data-table">
             <thead>
-              <tr><th>Reviewer</th><th>Rating</th><th>Review</th><th>Date</th><th>Status</th><th>Actions</th></tr>
+              <tr><th>Date</th><th>Customer</th><th>Rating</th><th>Highlights</th><th>Review</th><th>Order</th><th>Status</th><th>Actions</th></tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={6} style={{ textAlign: 'center', padding: 24, color: 'var(--text-65)' }}>Loading…</td></tr>
+                <tr><td colSpan={8} style={{ textAlign: "center", padding: 24, color: "var(--text-65)" }}>Loading…</td></tr>
               ) : reviews.length === 0 ? (
-                <tr><td colSpan={6} style={{ textAlign: 'center', padding: 32, color: 'var(--text-65)' }}>No reviews found.</td></tr>
+                <tr><td colSpan={8} style={{ textAlign: "center", padding: 32, color: "var(--text-65)" }}>No reviews found.</td></tr>
               ) : reviews.map(r => (
                 <tr key={r.id}>
-                  <td style={{ fontWeight: 600 }}>{r.reviewer_name}</td>
-                  <td style={{ color: '#FF9100', letterSpacing: 1 }}>
-                    {'★'.repeat(r.rating)}{'☆'.repeat(5 - r.rating)}
-                    <span style={{ color: 'var(--text-65)', fontSize: 11, marginLeft: 4 }}>{r.rating}/5</span>
+                  <td className="muted">{fmtDate(r.created_at)}</td>
+                  <td>
+                    <div style={{ fontWeight: 600 }}>{r.reviewer_name}</div>
+                    <div className="text-xs text-muted">shown as “{r.display_name}”{r.is_verified ? " · Verified" : ""}</div>
                   </td>
-                  <td style={{ maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.comment}</td>
-                  <td className="muted">{new Date(r.created_at).toLocaleDateString()}</td>
-                  <td><span className={`badge ${r.is_approved ? 'badge-green' : 'badge-gray'}`}>{r.is_approved ? 'Approved' : 'Pending'}</span></td>
+                  <td style={{ color: "#FF9100", letterSpacing: 1, whiteSpace: "nowrap" }}>
+                    {"★".repeat(r.rating)}{"☆".repeat(5 - r.rating)}
+                  </td>
+                  <td>
+                    {r.highlight_tags?.length
+                      ? r.highlight_tags.map(t => <span key={t} className="badge badge-gray" style={{ marginRight: 4 }}>{HIGHLIGHT_LABELS[t] || t}</span>)
+                      : <span className="muted">—</span>}
+                  </td>
+                  <td className="muted" style={{ maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.comment || "—"}</td>
+                  <td className="mono text-xs" style={{ color: "var(--blue)" }}>{r.order_ref || "—"}</td>
+                  <td><span className={`badge ${r.status === "visible" ? "badge-green" : "badge-gray"}`}>{r.status === "visible" ? "Live" : "Hidden"}</span></td>
                   <td>
                     <div className="cell-action">
-                      {!r.is_approved
-                        ? <button className="btn btn-sm btn-primary" style={{ padding: '5px 10px', fontSize: 11 }} onClick={() => approve(r.id, true)}>Approve</button>
-                        : <button className="btn btn-sm btn-ghost" style={{ padding: '5px 10px', fontSize: 11 }} onClick={() => approve(r.id, false)}>Unapprove</button>
+                      {r.status === "visible"
+                        ? <button className="btn btn-sm btn-ghost" style={{ padding: "5px 10px", fontSize: 11 }} onClick={() => setStatus(r.id, "hidden")}>Hide</button>
+                        : <button className="btn btn-sm btn-primary" style={{ padding: "5px 10px", fontSize: 11 }} onClick={() => setStatus(r.id, "visible")}>Unhide</button>
                       }
-                      <button className="btn btn-sm btn-ghost" style={{ padding: '5px 10px', fontSize: 11, color: 'var(--red)', borderColor: 'rgba(229,92,92,.4)' }} onClick={() => remove(r.id)}>Delete</button>
+                      <button className="btn btn-sm btn-ghost" style={{ padding: "5px 10px", fontSize: 11, color: "var(--red)", borderColor: "rgba(229,92,92,.4)" }} onClick={() => remove(r.id)}>Delete</button>
                     </div>
                   </td>
                 </tr>

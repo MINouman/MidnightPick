@@ -5,8 +5,7 @@ const { registerUser, loginUser, findOrCreateGoogleUser, findOrCreateUser } = re
 const { createTokenPair, rotateRefreshToken, revokeTokens } = require('../services/tokens')
 const { adminLogin }                      = require('../services/admin')
 const { verifyGoogleCredential }          = require('../services/google')
-
-const BD_PHONE_PATTERN = '^01[3-9]\\d{8}$'
+const { normalizeBdMobile }               = require('../services/phone')
 
 module.exports = async function authRoutes(app) {
 
@@ -98,14 +97,14 @@ module.exports = async function authRoutes(app) {
       body: {
         type: 'object', required: ['phone'],
         properties: {
-          phone: { type: 'string', pattern: BD_PHONE_PATTERN, minLength: 11, maxLength: 11 },
+          phone: { type: 'string', minLength: 10, maxLength: 20 },
         },
         additionalProperties: false,
       },
     },
     config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
   }, async (req, reply) => {
-    const result = await sendOtp(req.body.phone)
+    const result = await sendOtp(normalizeBdMobile(req.body.phone))
     return reply.send({ ok: true, data: result })
   })
 
@@ -115,7 +114,7 @@ module.exports = async function authRoutes(app) {
       body: {
         type: 'object', required: ['phone', 'otp'],
         properties: {
-          phone: { type: 'string', pattern: BD_PHONE_PATTERN, minLength: 11, maxLength: 11 },
+          phone: { type: 'string', minLength: 10, maxLength: 20 },
           otp:   { type: 'string', pattern: '^\\d{6}$' },
         },
         additionalProperties: false,
@@ -123,7 +122,8 @@ module.exports = async function authRoutes(app) {
     },
     config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
   }, async (req, reply) => {
-    const { phone, otp } = req.body
+    const { otp } = req.body
+    const phone = normalizeBdMobile(req.body.phone)
     await verifyOtp(phone, otp)
     const { user, isNew } = await findOrCreateUser(phone)
     const tokens = await createTokenPair(app, user)

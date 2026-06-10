@@ -68,6 +68,7 @@ function Ic({n,size=22,color='currentColor',style:xs,strokeWidth=2}){
   const paths={
     home:<svg {...p}><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg>,
     package:<svg {...p}><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>,
+    truck:<svg {...p}><path d="M10 17h4V5H2v12h3"/><path d="M14 17h1"/><path d="M19 17h3v-6h-3l-3-4h-2"/><circle cx="7.5" cy="17.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/></svg>,
     repeat:<svg {...p}><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>,
     star:<svg {...p}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>,
     user:<svg {...p}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>,
@@ -1039,12 +1040,18 @@ function AdminOrdersTab(){
                   <OrangeBtn full onClick={()=>updateStatus(detail.id,'packed')}>Mark as Packaged</OrangeBtn>
                 )}
                 {detail.status==='packed'&&(
-                  <OrangeBtn full onClick={()=>updateStatus(detail.id,'shipped')}>Hand to Delivery Service</OrangeBtn>
+                  <>
+                    <OrangeBtn full onClick={()=>updateStatus(detail.id,'shipped')}><Ic n="truck" size={14}/>Hand to Delivery Service</OrangeBtn>
+                    <GhostBtn full onClick={()=>updateStatus(detail.id,'delivered')}><Ic n="check" size={14} color={C.green}/>Personally Delivered</GhostBtn>
+                  </>
                 )}
                 {detail.status==='shipped'&&(
-                  <div style={{...sans,fontSize:12,color:C.blue,padding:'10px 14px',background:'rgba(100,181,246,0.1)',borderRadius:8}}>
-                    Tracking will auto-update via the delivery service API.
-                  </div>
+                  <>
+                    <div style={{...sans,fontSize:12,color:C.blue,padding:'10px 14px',background:'rgba(100,181,246,0.1)',borderRadius:8}}>
+                      Tracking will auto-update via the delivery service API.
+                    </div>
+                    <OrangeBtn full onClick={()=>updateStatus(detail.id,'delivered')}><Ic n="check" size={14}/>Mark as Delivered</OrangeBtn>
+                  </>
                 )}
                 <GhostBtn full onClick={()=>setEditMode(true)}><Ic n="pencil" size={14} color={C.mutedCard}/>Edit Order</GhostBtn>
               </Col>

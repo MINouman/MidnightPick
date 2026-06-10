@@ -68,6 +68,7 @@ async function build() {
     TOKEN_REVOKED:       401,
     TOKEN_EXPIRED:       401,
     INVALID_TOKEN:       401,
+    INVALID_PHONE:       400,
     OTP_RATE_LIMIT:      429,
     RATE_LIMITED:        429,
     OTP_MAX_ATTEMPTS:    400,
@@ -82,6 +83,8 @@ async function build() {
     INSUFFICIENT_STOCK:  409,
     EMAIL_EXISTS:        409,
     SUBSCRIPTION_EXISTS: 409,
+    ALREADY_REVIEWED:    409,
+    NOT_ELIGIBLE:        403,
   }
 
   app.setErrorHandler((err, req, reply) => {
@@ -117,12 +120,14 @@ async function build() {
   await app.register(require('./routes/coupons'),      { prefix: '/api/v1/coupons' })
   await app.register(require('./routes/orders-guest'), { prefix: '/api/v1/orders' })
   await app.register(require('./routes/reviews'),      { prefix: '/api/v1/reviews' })
+  await app.register(require('./routes/feedback'),     { prefix: '/api/v1/feedback' })
 
   // Protected (JWT required on every request)
   await app.register(async (api) => {
     api.addHook('onRequest', app.authenticate)
     await api.register(require('./routes/users'),         { prefix: '/me' })
     await api.register(require('./routes/orders'),        { prefix: '/orders' })
+    await api.register(require('./routes/reviews-user'),  { prefix: '/reviews' })
     await api.register(require('./routes/subscriptions'), { prefix: '/subscriptions' })
     await api.register(require('./routes/admin'),         { prefix: '/admin' })
   }, { prefix: '/api/v1' })

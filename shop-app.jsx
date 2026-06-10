@@ -21,6 +21,19 @@ const PRODUCT_DEFAULT = {
 
 const API_BASE = window.MIDNIGHT_API_BASE || "http://localhost:3000/api/v1";
 const THUMB_LABELS = ["Front", "Back"];
+const BD_MOBILE_PATTERN = /^01[3-9]\d{8}$/;
+
+function normalizeBdMobile(raw) {
+  const digits = String(raw || "").replace(/\D/g, "");
+  if (/^008801[3-9]\d{8}$/.test(digits)) return digits.slice(4);
+  if (/^8801[3-9]\d{8}$/.test(digits)) return `0${digits.slice(3)}`;
+  if (/^1[3-9]\d{8}$/.test(digits)) return `0${digits}`;
+  return digits;
+}
+
+function isValidBdMobile(raw) {
+  return BD_MOBILE_PATTERN.test(normalizeBdMobile(raw));
+}
 
 // ── Bangladesh city → area map ────────────────────────────────────────────────
 const BD_AREAS = {
@@ -169,7 +182,7 @@ function ShopToastStack({ toasts }) {
 }
 
 // ── Order Modal ───────────────────────────────────────────────────────────────
-function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser }) {
+function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser, onCreateAccount }) {
   const [step, setStep]           = useState("form"); // form | otp | loading | success | error
   const [name, setName]           = useState("");
   const [phone, setPhone]         = useState("");
@@ -226,6 +239,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser 
   if (!open) return null;
 
   const composedAddress = [street.trim(), area, city].filter(Boolean).join(", ");
+  const normalizedPhone = normalizeBdMobile(phone);
 
   // ── Shared styles ──────────────────────────────────────────────────────────
   const overlay = { position: "fixed", inset: 0, background: "rgba(0,0,0,.52)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" };
@@ -252,19 +266,28 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser 
   // ── Success ────────────────────────────────────────────────────────────────
   if (step === "success") return (
     <div style={overlay} onClick={e => e.target === e.currentTarget && onClose()}>
-      <div style={panel}>
-        <div style={{ padding: "36px 28px", textAlign: "center" }}>
-          <div style={{ width: 60, height: 60, borderRadius: "50%", background: "rgba(46,94,31,.1)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px" }}>
-            <i className="fa-solid fa-circle-check" style={{ fontSize: 28, color: "#2E5E1F" }} aria-hidden="true" />
+      <div style={{ ...panel, maxHeight: "90dvh", overflowY: "auto" }}>
+        <div style={{ padding: "28px 24px", textAlign: "center" }}>
+          <div style={{ width: 54, height: 54, borderRadius: "50%", background: "rgba(46,94,31,.1)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
+            <i className="fa-solid fa-circle-check" style={{ fontSize: 26, color: "#2E5E1F" }} aria-hidden="true" />
           </div>
           <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 22, color: "#571F29", margin: "0 0 6px" }}>Order Placed!</h2>
-          <p style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 18, color: "#FF9100", margin: "0 0 14px" }}>#{orderRef}</p>
-          <p style={{ fontFamily: "var(--font-body)", fontSize: 14, color: "rgba(87,31,41,.7)", margin: "0 0 6px", lineHeight: 1.5 }}>
+          <p style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 18, color: "#FF9100", margin: "0 0 10px" }}>#{orderRef}</p>
+          <p style={{ fontFamily: "var(--font-body)", fontSize: 13.5, color: "rgba(87,31,41,.65)", margin: "0 0 18px", lineHeight: 1.5 }}>
             A confirmation SMS has been sent to <strong>{phone}</strong>.
           </p>
-          <p style={{ fontFamily: "var(--font-body)", fontSize: 13, color: "rgba(87,31,41,.5)", margin: "0 0 26px", lineHeight: 1.5 }}>
+          <p style={{ fontFamily: "var(--font-body)", fontSize: 13, color: "rgba(87,31,41,.5)", margin: "0 0 18px", lineHeight: 1.5 }}>
             Our team will contact you shortly to confirm delivery.
           </p>
+          {typeof MPFeedbackCard === "function" && <MPFeedbackCard orderRef={orderRef} />}
+          {!loggedUser && (
+            <div className="shop-post-order-member">
+              <div className="shop-post-order-badge">MIDNIGHT CIRCLE</div>
+              <strong>Save this order and collect points.</strong>
+              <span>Create an account to track your pouch, save your address, collect Midnight Points, and manage future monthly plans.</span>
+              <button onClick={() => { onClose(); onCreateAccount?.(); }}>Create My Account</button>
+            </div>
+          )}
           <button onClick={onClose} style={{ padding: "12px 36px", background: "#571F29", color: "#F7E3C9", borderRadius: 8, fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 14, border: "none", cursor: "pointer" }}>Done</button>
         </div>
       </div>
@@ -325,7 +348,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser 
         const res  = await fetch(`${API_BASE}/orders/guest`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: name.trim(), phone: phone.trim(), address: composedAddress, qty, otp: otpDigits.join(""), ...(coupon ? { coupon_code: coupon } : {}), ...(product?.id ? { product_id: product.id } : {}) }),
+          body: JSON.stringify({ name: name.trim(), phone: normalizedPhone, address: composedAddress, qty, otp: otpDigits.join(""), ...(coupon ? { coupon_code: coupon } : {}), ...(product?.id ? { product_id: product.id } : {}) }),
         });
         const json = await res.json();
         if (!res.ok) {
@@ -352,7 +375,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser 
       try {
         await fetch(`${API_BASE}/orders/request-otp`, {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ phone: phone.trim() }),
+          body: JSON.stringify({ phone: normalizedPhone }),
         });
         setOtpDigits(["","","","","",""]); setOtpError("");
         setTimerKey(k => k + 1);
@@ -380,8 +403,8 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser 
               <strong style={{ color: "#571F29" }}>{phone}</strong>
             </p>
 
-            {/* 6-box input */}
-            <div style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: 18 }}>
+            {/* 6-box input — flexes down so all six always fit the panel width */}
+            <div style={{ display: "flex", gap: 7, justifyContent: "center", marginBottom: 18 }}>
               {[0,1,2,3,4,5].map(i => (
                 <input
                   key={i}
@@ -392,7 +415,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser 
                   onKeyDown={e => handleKey(i, e)}
                   onPaste={handlePaste}
                   disabled={isBusy}
-                  style={{ width: 44, height: 52, textAlign: "center", fontSize: 22, fontWeight: 800, fontFamily: "var(--font-display)", border: `2px solid ${otpDigits[i] ? "#571F29" : "rgba(87,31,41,.22)"}`, borderRadius: 10, background: otpDigits[i] ? "rgba(87,31,41,.04)" : "#fff", color: "#571F29", outline: "none", transition: "border-color .15s, background .15s" }}
+                  style={{ flex: "1 1 0", minWidth: 0, maxWidth: 46, height: 52, padding: 0, boxSizing: "border-box", textAlign: "center", fontSize: 22, fontWeight: 800, fontFamily: "var(--font-display)", border: `2px solid ${otpDigits[i] ? "#571F29" : "rgba(87,31,41,.22)"}`, borderRadius: 10, background: otpDigits[i] ? "rgba(87,31,41,.04)" : "#fff", color: "#571F29", outline: "none", transition: "border-color .15s, background .15s" }}
                 />
               ))}
             </div>
@@ -435,6 +458,11 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser 
   const handleFormSubmit = async (e) => {
     e.preventDefault();
     if (!name.trim() || !phone.trim() || !city || !street.trim() || isBusy) return;
+    if (!isValidBdMobile(phone)) {
+      setErrorMsg("Enter a valid Bangladesh mobile number, e.g. 017XXXXXXXX or +88017XXXXXXXX.");
+      return;
+    }
+    setPhone(normalizedPhone);
     setIsBusy(true);
 
     if (loggedUser?.phone) {
@@ -473,7 +501,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser 
       const res = await fetch(`${API_BASE}/orders/request-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: phone.trim() }),
+        body: JSON.stringify({ phone: normalizedPhone }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error?.message || "Failed to send OTP.");
@@ -487,7 +515,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser 
     }
   };
 
-  const canSubmit = name.trim() && phone.trim().length >= 11 && city && street.trim() && !isBusy;
+  const canSubmit = name.trim() && isValidBdMobile(phone) && city && street.trim() && !isBusy;
 
   return (
     <div style={overlay} onClick={e => e.target === e.currentTarget && onClose()}>
@@ -514,7 +542,12 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser 
           <div style={{ marginBottom: 14 }}>
             <label style={lbl}>Phone Number</label>
             <input style={{ ...field, ...(loggedUser?.phone ? { background: "rgba(87,31,41,.04)", color: "rgba(26,10,13,.6)" } : {}) }} type="tel" placeholder="01XXXXXXXXX" value={phone}
-              onChange={e => !loggedUser?.phone && setPhone(e.target.value)} required minLength={11} disabled={isBusy || !!(loggedUser?.phone)} />
+              onChange={e => !loggedUser?.phone && setPhone(e.target.value.replace(/[^\d+\s-]/g, "").slice(0, 20))} required disabled={isBusy || !!(loggedUser?.phone)} autoComplete="tel" />
+            {phone.trim() && !isValidBdMobile(phone) && (
+              <div style={{ fontFamily: "var(--font-body)", fontSize: 12, color: "#C82828", marginTop: 6 }}>
+                Use a Bangladesh mobile number: 013-019, 11 digits locally or +880 format.
+              </div>
+            )}
           </div>
           {/* ── Delivery Address — structured ── */}
           <div style={{ marginBottom: 14 }}>
@@ -585,7 +618,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser 
 }
 
 // ── Buy Sheet (mobile) ────────────────────────────────────────────────────────
-function BuySheet({ open, onClose, qty, setQty, coupon, setCoupon, couponStatus, setCouponStatus, couponError, discount, verifyCoupon, addToCart, addedAnim, product, onBuyNow }) {
+function BuySheet({ open, onClose, qty, setQty, coupon, setCoupon, couponStatus, setCouponStatus, couponError, discount, verifyCoupon, addToCart, addedAnim, product, onBuyNow, onCreateAccount }) {
   const finalPrice = product.price - discount;
   const totalPrice = finalPrice * qty;
 
@@ -651,175 +684,194 @@ function BuySheet({ open, onClose, qty, setQty, coupon, setCoupon, couponStatus,
           </div>
           <button className="shop-add-btn" onClick={onBuyNow}>Order Now</button>
         </div>
+        <div className="shop-member-note shop-member-note--sheet">
+          <i className="fa-solid fa-star" aria-hidden="true" />
+          <span>Create an account and earn points from this order. Save your address, track your pouch, and reorder faster next time.</span>
+          <button className="shop-member-note-cta" onClick={() => { onClose(); onCreateAccount?.(); }}>
+            Join the Midnight Circle
+          </button>
+        </div>
       </div>
     </div>
   );
 }
 
 // ── Reviews Section ───────────────────────────────────────────────────────────
-const AVATAR_COLORS = ["#7B2D38","#B84A1A","#5E3A1E","#2B5C30","#1A4D6E","#6A3D72"];
-function avatarColor(name) {
+const REVIEW_TAG_LABELS = {
+  taste: "Taste",
+  aroma: "Aroma",
+  easy_to_make: "Easy to make",
+  energy_focus: "Energy / Focus",
+  packaging: "Packaging",
+  delivery: "Delivery",
+};
+const REVIEW_AVATAR_COLORS = ["#7B2D38","#B84A1A","#5E3A1E","#2B5C30","#1A4D6E","#6A3D72"];
+
+function reviewAvatarColor(name) {
   let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) & 0xfffff;
-  return AVATAR_COLORS[h % AVATAR_COLORS.length];
+  for (let i = 0; i < (name || "").length; i++) h = (h * 31 + name.charCodeAt(i)) & 0xfffff;
+  return REVIEW_AVATAR_COLORS[h % REVIEW_AVATAR_COLORS.length];
 }
 
-function ReviewsSection({ productSlug = "midnight-blend", onStats }) {
-  const [reviews, setReviews]         = useState([]);
-  const [total, setTotal]             = useState(0);
-  const [avgRating, setAvgRating]     = useState(0);
-  const [page, setPage]               = useState(1);
-  const [loading, setLoading]         = useState(true);
-  const [showForm, setShowForm]       = useState(false);
-  const [formRating, setFormRating]   = useState(0);
-  const [hoverRating, setHoverRating] = useState(0);
-  const [formName, setFormName]       = useState("");
-  const [formComment, setFormComment] = useState("");
-  const [submitting, setSubmitting]   = useState(false);
-  const [submitDone, setSubmitDone]   = useState(false);
-  const formRef = useRef(null);
-  const LIMIT = 5;
+function ReviewsSection({ productSlug = "midnight-blend", onStats, loggedIn, onSignIn, onOrderNow }) {
+  const [reviews, setReviews] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [avgRating, setAvgRating] = useState(0);
+  const [topTags, setTopTags] = useState([]);
+  const [page, setPage] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [lockedOpen, setLockedOpen] = useState(false);
+  const [reviewTrigger, setReviewTrigger] = useState(0);
+  const [reviewOrderId, setReviewOrderId] = useState(null);
+  const [reviewNotice, setReviewNotice] = useState("");
+  const LIMIT = 6;
 
   const fetchReviews = async (p = 1) => {
     setLoading(true);
     try {
-      const res  = await fetch(`${API_BASE}/reviews?product=${productSlug}&page=${p}&limit=${LIMIT}`);
+      const res = await fetch(`${API_BASE}/reviews?product=${productSlug}&page=${p}&limit=${LIMIT}`);
       const json = await res.json();
-      if (json.ok) {
-        setReviews(prev => p === 1 ? json.data.reviews : [...prev, ...json.data.reviews]);
-        setTotal(json.data.total);
-        if (p === 1) {
-          const avg = json.data.avg_rating || 0;
-          setAvgRating(avg);
-          if (onStats) onStats({ rating: avg, count: json.data.total });
-        }
-        setPage(p);
-      }
-    } catch { /* non-critical */ } finally { setLoading(false); }
+      if (!json?.ok) return;
+      const nextReviews = json.data?.reviews || [];
+      setReviews(prev => p === 1 ? nextReviews : [...prev, ...nextReviews]);
+      setTotal(json.data?.total || 0);
+      setAvgRating(json.data?.avg_rating || 0);
+      setTopTags(json.data?.top_tags || []);
+      setPage(p);
+      onStats?.({ rating: json.data?.avg_rating || 0, count: json.data?.total || 0 });
+    } catch {
+      /* reviews are non-critical to checkout */
+    } finally {
+      setLoading(false);
+    }
   };
 
-  useEffect(() => { fetchReviews(1); }, []);
+  useEffect(() => { fetchReviews(1); }, [productSlug]);
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!formRating || !formName.trim() || formComment.trim().length < 5) return;
-    setSubmitting(true);
-    try {
-      await fetch(`${API_BASE}/reviews`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ product_slug: productSlug, reviewer_name: formName.trim(), rating: formRating, comment: formComment.trim() }),
-      });
-      setSubmitDone(true);
-      setFormRating(0); setFormName(""); setFormComment("");
-    } catch { /* keep form open */ } finally { setSubmitting(false); }
-  };
+  const fmtMonth = (dateStr) =>
+    dateStr ? new Date(dateStr).toLocaleDateString("en-GB", { month: "long", year: "numeric" }) : "";
 
-  const openForm = () => {
-    setShowForm(true);
-    setSubmitDone(false);
-    setTimeout(() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 60);
-  };
-
-  const timeAgo = (dateStr) => {
-    const d = Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000);
-    if (d === 0) return "Today";
-    if (d === 1) return "Yesterday";
-    if (d < 7)  return `${d} days ago`;
-    if (d < 30) return `${Math.floor(d / 7)}w ago`;
-    return new Date(dateStr).toLocaleDateString("en-GB", { month: "short", year: "numeric" });
-  };
+  const tagChip = (tag, key, active) => (
+    <span key={key} style={{
+      display: "inline-flex", alignItems: "center", gap: 5,
+      padding: active ? "7px 14px" : "4px 11px",
+      borderRadius: 999,
+      background: active ? "rgba(255,145,0,.1)" : "rgba(87,31,41,.06)",
+      border: `1px solid ${active ? "rgba(255,145,0,.45)" : "rgba(87,31,41,.12)"}`,
+      fontFamily: "var(--font-body)", fontSize: active ? 12.5 : 11.5, fontWeight: 700,
+      color: active ? "#571F29" : "rgba(87,31,41,.65)", whiteSpace: "nowrap",
+    }}>
+      {REVIEW_TAG_LABELS[tag] || tag}
+    </span>
+  );
 
   const hasMore = reviews.length < total;
-  const displayRating = hoverRating || formRating;
-  const displayCount  = total;
-  const inField = { width: "100%", padding: "10px 13px", fontFamily: "var(--font-body)", fontSize: 14, border: "1.5px solid rgba(87,31,41,.15)", borderRadius: 8, background: "rgba(255,255,255,.7)", color: "#1A0A0D", outline: "none", boxSizing: "border-box" };
+  const reviewIntentKey = `mp_review_intent_${productSlug}`;
+
+  const openReviewCta = async () => {
+    setReviewNotice("");
+    if (!loggedIn) {
+      localStorage.setItem(reviewIntentKey, "1");
+      onSignIn?.();
+      return;
+    }
+
+    const token = localStorage.getItem("mp_access_token");
+    try {
+      const q = new URLSearchParams({ prompt: "false", product: productSlug });
+      const res = await fetch(`${API_BASE}/reviews/eligibility?${q.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const json = await res.json();
+      if (json?.data?.eligible) {
+        setReviewOrderId(json.data.order_id);
+        setReviewTrigger(Date.now());
+      } else if (json?.data?.reason === "already_reviewed") {
+        setReviewNotice("You’ve already submitted a review.");
+      } else {
+        setLockedOpen(true);
+      }
+    } catch {
+      setReviewNotice("We could not check your review status. Please try again.");
+    }
+  };
+
+  useEffect(() => {
+    if (!loggedIn || localStorage.getItem(reviewIntentKey) !== "1") return;
+    localStorage.removeItem(reviewIntentKey);
+    setTimeout(openReviewCta, 500);
+  }, [loggedIn, productSlug]);
+
+  const reviewCta = (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: window.innerWidth > 760 ? "flex-end" : "flex-start", gap: 7 }}>
+      <button
+        type="button"
+        onClick={openReviewCta}
+        style={{
+          display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8,
+          padding: "11px 20px", minHeight: 44, borderRadius: 14,
+          background: "rgba(255,145,0,.12)", border: "1.5px solid rgba(255,145,0,.58)",
+          color: "#571F29", fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 14,
+          cursor: "pointer", boxShadow: "0 8px 22px rgba(87,31,41,.08)",
+          transition: "transform .15s, box-shadow .15s, background .15s",
+        }}
+        onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-1px)"; e.currentTarget.style.boxShadow = "0 12px 26px rgba(255,145,0,.18)"; e.currentTarget.style.background = "rgba(255,145,0,.18)"; }}
+        onMouseLeave={e => { e.currentTarget.style.transform = "none"; e.currentTarget.style.boxShadow = "0 8px 22px rgba(87,31,41,.08)"; e.currentTarget.style.background = "rgba(255,145,0,.12)"; }}
+      >
+        <i className="fa-solid fa-pen-nib" aria-hidden="true" />
+        Write a Review
+      </button>
+      <span style={{ fontFamily: "var(--font-body)", fontSize: 12, color: "rgba(87,31,41,.52)", maxWidth: 300, lineHeight: 1.45, textAlign: window.innerWidth > 760 ? "right" : "left" }}>
+        Order first, then share your experience as a verified customer.
+      </span>
+    </div>
+  );
 
   return (
     <section id="reviews-section" style={{ borderTop: "1px solid rgba(87,31,41,.1)", marginTop: 36 }}>
       <div style={{ maxWidth: 900, margin: "0 auto", padding: "40px 24px 64px" }}>
-
-        {/* ── Header ── */}
-        <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginBottom: 32, flexWrap: "wrap", gap: 16 }}>
+        <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginBottom: 18, flexWrap: "wrap", gap: 16 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
-            {/* Big number */}
             <div style={{ textAlign: "center" }}>
-              <div style={{ fontFamily: "var(--font-display)", fontWeight: 900, fontSize: 48, lineHeight: 1, color: "#571F29" }}>{avgRating > 0 ? avgRating : "- "}</div>
+              <div style={{ fontFamily: "var(--font-display)", fontWeight: 900, fontSize: 48, lineHeight: 1, color: "#571F29" }}>{avgRating > 0 ? avgRating : "–"}</div>
               <div style={{ display: "flex", gap: 3, justifyContent: "center", marginTop: 4 }}>
                 {[1,2,3,4,5].map(i => <Star key={i} size={14} filled={i <= Math.round(avgRating)} />)}
               </div>
             </div>
-            {/* Divider */}
             <div style={{ width: 1, height: 52, background: "rgba(87,31,41,.15)" }} />
-            {/* Label */}
             <div>
               <div style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 18, color: "#571F29", marginBottom: 2 }}>Customer Reviews</div>
-              <div style={{ fontFamily: "var(--font-body)", fontSize: 13, color: "rgba(87,31,41,.55)" }}>{displayCount.toLocaleString()} verified reviews</div>
+              <div style={{ fontFamily: "var(--font-body)", fontSize: 13, color: "rgba(87,31,41,.55)" }}>
+                Based on {total.toLocaleString()} verified purchase{total === 1 ? "" : "s"}
+              </div>
             </div>
           </div>
-          {/* Write a Review button -  commented out for now
-          <button
-            onClick={showForm ? () => setShowForm(false) : openForm}
-            style={{ display: "flex", alignItems: "center", gap: 7, padding: "10px 20px", background: showForm ? "rgba(87,31,41,.08)" : "#571F29", color: showForm ? "#571F29" : "#F7E3C9", borderRadius: 8, fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 13, border: showForm ? "1px solid rgba(87,31,41,.18)" : "none", cursor: "pointer", transition: "all .2s", whiteSpace: "nowrap" }}>
-            <i className={"fa-solid " + (showForm ? "fa-xmark" : "fa-pen-to-square")} aria-hidden="true" />
-            {showForm ? "Cancel" : "Write a Review"}
-          </button>
-          */}
+          {window.innerWidth > 760 && reviewCta}
         </div>
 
-        {/* ── Write Review Form -  commented out for now
-        {showForm && (
-          <div ref={formRef} style={{ background: "rgba(255,255,255,.55)", backdropFilter: "blur(8px)", borderRadius: 14, padding: "24px 22px", marginBottom: 28, border: "1px solid rgba(87,31,41,.12)", boxShadow: "0 2px 16px rgba(87,31,41,.06)" }}>
-            {submitDone ? (
-              <div style={{ textAlign: "center", padding: "16px 0" }}>
-                <i className="fa-solid fa-circle-check" style={{ fontSize: 32, color: "#2E5E1F", display: "block", marginBottom: 12 }} aria-hidden="true" />
-                <p style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16, color: "#571F29", margin: "0 0 5px" }}>Thank you!</p>
-                <p style={{ fontFamily: "var(--font-body)", fontSize: 13, color: "rgba(87,31,41,.6)", margin: 0 }}>Your review will appear here after approval.</p>
-              </div>
-            ) : (
-              <form onSubmit={handleSubmit}>
-                <p style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 14, color: "#571F29", margin: "0 0 12px", textTransform: "uppercase", letterSpacing: ".05em" }}>Rate your experience</p>
-                <div style={{ marginBottom: 18 }}>
-                  <div style={{ display: "flex", gap: 4 }}>
-                    {[1,2,3,4,5].map(i => (
-                      <button key={i} type="button"
-                        onMouseEnter={() => setHoverRating(i)} onMouseLeave={() => setHoverRating(0)}
-                        onClick={() => setFormRating(i)} aria-label={`${i} star${i > 1 ? "s" : ""}`}
-                        style={{ background: "none", border: "none", cursor: "pointer", padding: "2px 3px", transition: "transform .12s", transform: displayRating >= i ? "scale(1.2)" : "scale(1)" }}>
-                        <Star size={28} filled={displayRating >= i} />
-                      </button>
-                    ))}
-                  </div>
-                  {formRating > 0 && (
-                    <span style={{ display: "block", marginTop: 6, fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 13, color: "#FF9100" }}>
-                      {["","Poor","Fair","Good","Great","Excellent!"][formRating]}
-                    </span>
-                  )}
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
-                  <input style={inField} type="text" placeholder="Your name" value={formName}
-                    onChange={e => setFormName(e.target.value)} required disabled={submitting} />
-                </div>
-                <div style={{ marginBottom: 16 }}>
-                  <textarea style={{ ...inField, resize: "vertical", minHeight: 88 }}
-                    placeholder="Share your honest experience with this product…"
-                    value={formComment} onChange={e => setFormComment(e.target.value)}
-                    required minLength={5} disabled={submitting} />
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                  <button type="submit"
-                    disabled={submitting || !formRating || !formName.trim() || formComment.trim().length < 5}
-                    style={{ padding: "11px 26px", background: "#571F29", color: "#F7E3C9", borderRadius: 8, fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 13, border: "none", cursor: (submitting || !formRating || !formName.trim() || formComment.trim().length < 5) ? "not-allowed" : "pointer", opacity: (submitting || !formRating || !formName.trim() || formComment.trim().length < 5) ? .45 : 1, transition: "opacity .2s" }}>
-                    {submitting ? "Submitting…" : "Submit Review"}
-                  </button>
-                </div>
-              </form>
-            )}
+        {topTags.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 26 }}>
+            <span style={{ fontFamily: "var(--font-display)", fontSize: 11, fontWeight: 800, letterSpacing: ".07em", textTransform: "uppercase", color: "rgba(87,31,41,.45)" }}>
+              Most mentioned
+            </span>
+            {topTags.map(t => tagChip(t.tag, t.tag, true))}
           </div>
         )}
-        ── end commented-out Write Review Form */}
+        <div style={{ display: window.innerWidth > 760 ? "none" : "block", marginBottom: 22 }}>
+          {reviewCta}
+        </div>
+        {reviewNotice && (
+          <div style={{
+            display: "inline-flex", alignItems: "center", gap: 8, marginBottom: 22,
+            padding: "10px 14px", borderRadius: 12,
+            background: "rgba(76,175,132,.1)", border: "1px solid rgba(76,175,132,.22)",
+            color: "#2E7D4F", fontFamily: "var(--font-body)", fontSize: 13, fontWeight: 700,
+          }}>
+            <i className="fa-solid fa-circle-check" aria-hidden="true" />
+            {reviewNotice}
+          </div>
+        )}
 
-        {/* ── Review List ── */}
         {loading && reviews.length === 0 ? (
           <div style={{ textAlign: "center", padding: "36px 0", color: "rgba(87,31,41,.4)", fontFamily: "var(--font-body)", fontSize: 13 }}>
             <i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 8 }} aria-hidden="true" />Loading reviews…
@@ -828,39 +880,54 @@ function ReviewsSection({ productSlug = "midnight-blend", onStats }) {
           <div style={{ textAlign: "center", padding: "40px 0" }}>
             <i className="fa-regular fa-comment-dots" style={{ fontSize: 32, color: "rgba(87,31,41,.2)", display: "block", marginBottom: 12 }} aria-hidden="true" />
             <p style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 14, color: "rgba(87,31,41,.5)", margin: "0 0 4px" }}>No reviews yet</p>
-            <p style={{ fontFamily: "var(--font-body)", fontSize: 13, color: "rgba(87,31,41,.4)", margin: 0 }}>Be the first to share your experience!</p>
+            <p style={{ fontFamily: "var(--font-body)", fontSize: 13, color: "rgba(87,31,41,.4)", margin: 0 }}>Reviews open once members receive their coffee.</p>
           </div>
         ) : (
           <>
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ display: "grid", gridTemplateColumns: window.innerWidth > 760 ? "1fr 1fr" : "1fr", gap: 14 }}>
               {reviews.map(r => (
-                <div key={r.id} style={{ background: "rgba(255,255,255,.5)", backdropFilter: "blur(6px)", borderRadius: 12, padding: "16px 18px", border: "1px solid rgba(87,31,41,.09)", boxShadow: "0 1px 8px rgba(87,31,41,.05)" }}>
-                  <div style={{ display: "flex", gap: 13, alignItems: "flex-start" }}>
-                    {/* Avatar */}
-                    <div style={{ width: 42, height: 42, borderRadius: "50%", background: avatarColor(r.reviewer_name), display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 16, flexShrink: 0, boxShadow: "0 2px 8px rgba(0,0,0,.15)" }}>
-                      {r.reviewer_name.charAt(0).toUpperCase()}
+                <div key={r.id} style={{ background: "rgba(255,255,255,.55)", backdropFilter: "blur(6px)", borderRadius: 16, padding: "18px 20px", border: "1px solid rgba(87,31,41,.1)", boxShadow: "0 2px 12px rgba(87,31,41,.05)", display: "flex", flexDirection: "column" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                    <div style={{ display: "flex", gap: 2 }}>
+                      {[1,2,3,4,5].map(i => <Star key={i} size={14} filled={i <= r.rating} />)}
                     </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      {/* Name + date */}
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4, gap: 8, flexWrap: "wrap" }}>
-                        <span style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 14, color: "#571F29" }}>{r.reviewer_name}</span>
-                        <span style={{ fontFamily: "var(--font-body)", fontSize: 11, color: "rgba(87,31,41,.4)", whiteSpace: "nowrap" }}>{timeAgo(r.created_at)}</span>
-                      </div>
-                      {/* Stars */}
-                      <div style={{ display: "flex", gap: 2, marginBottom: 8 }}>
-                        {[1,2,3,4,5].map(i => <Star key={i} size={13} filled={i <= r.rating} />)}
-                      </div>
-                      {/* Comment */}
-                      <p style={{ fontFamily: "var(--font-body)", fontSize: 13, color: "rgba(87,31,41,.78)", margin: 0, lineHeight: 1.65 }}>{r.comment}</p>
+                    <span style={{ fontFamily: "var(--font-body)", fontSize: 11, color: "rgba(87,31,41,.4)", whiteSpace: "nowrap" }}>{fmtMonth(r.created_at)}</span>
+                  </div>
+
+                  {r.comment && (
+                    <p style={{ fontFamily: "var(--font-body)", fontSize: 13.5, color: "rgba(44,24,16,.82)", margin: "0 0 12px", lineHeight: 1.65 }}>
+                      “{r.comment}”
+                    </p>
+                  )}
+
+                  {r.highlight_tags?.length > 0 && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
+                      {r.highlight_tags.map((t, i) => tagChip(t, i, false))}
+                    </div>
+                  )}
+
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: "auto" }}>
+                    <div style={{ width: 34, height: 34, borderRadius: "50%", background: reviewAvatarColor(r.display_name || "M"), display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 14, flexShrink: 0 }}>
+                      {(r.display_name || "M").charAt(0).toUpperCase()}
+                    </div>
+                    <div>
+                      <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 13.5, color: "#571F29" }}>{r.display_name || "Verified Customer"}</div>
+                      {r.is_verified && (
+                        <div style={{ display: "inline-flex", alignItems: "center", gap: 4, fontFamily: "var(--font-body)", fontSize: 11, fontWeight: 700, color: "#2E7D4F" }}>
+                          <i className="fa-solid fa-circle-check" style={{ fontSize: 11 }} aria-hidden="true" />
+                          Verified Purchase
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
               ))}
             </div>
+
             {hasMore && (
               <div style={{ textAlign: "center", marginTop: 20 }}>
                 <button onClick={() => fetchReviews(page + 1)} disabled={loading}
-                  style={{ padding: "10px 30px", background: "none", color: "#571F29", borderRadius: 8, fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 13, border: "1.5px solid rgba(87,31,41,.22)", cursor: "pointer", transition: "background .2s" }}>
+                  style={{ padding: "11px 32px", background: "none", color: "#571F29", borderRadius: 10, fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 13, border: "1.5px solid rgba(87,31,41,.22)", cursor: "pointer" }}>
                   {loading ? "Loading…" : `Load more · ${total - reviews.length} remaining`}
                 </button>
               </div>
@@ -868,6 +935,46 @@ function ReviewsSection({ productSlug = "midnight-blend", onStats }) {
           </>
         )}
       </div>
+      {lockedOpen && (
+        <div
+          style={{ position: "fixed", inset: 0, zIndex: 1320, background: "rgba(33,16,13,.48)", backdropFilter: "blur(5px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+          onClick={e => e.target === e.currentTarget && setLockedOpen(false)}
+          role="dialog" aria-modal="true" aria-label="Unlock verified reviews"
+        >
+          <div style={{
+            width: "100%", maxWidth: 430, borderRadius: 24, background: "#FFFDF7",
+            border: "1px solid rgba(87,31,41,.12)", boxShadow: "0 28px 80px rgba(58,31,26,.32)",
+            padding: "28px 26px 24px", position: "relative", textAlign: "left",
+          }}>
+            <button type="button" onClick={() => setLockedOpen(false)} aria-label="Close" style={{ position: "absolute", top: 14, right: 14, width: 32, height: 32, border: "none", borderRadius: 10, background: "rgba(44,24,16,.06)", color: "#2C1810", cursor: "pointer" }}>
+              <i className="fa-solid fa-xmark" aria-hidden="true" />
+            </button>
+            <div style={{ width: 48, height: 48, borderRadius: "50%", background: "rgba(255,145,0,.14)", color: "#FF9100", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 16 }}>
+              <i className="fa-solid fa-lock-open" aria-hidden="true" />
+            </div>
+            <p style={{ margin: "0 0 6px", fontFamily: "var(--font-display)", fontSize: 11, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: "#FF9100" }}>
+              Verified reviews unlock after your first order
+            </p>
+            <h3 style={{ margin: "0 0 8px", fontFamily: "var(--font-display)", fontWeight: 900, fontSize: 24, color: "#571F29", lineHeight: 1.15 }}>Unlock verified reviews</h3>
+            <p style={{ margin: "0 0 20px", fontFamily: "var(--font-body)", fontSize: 14, color: "rgba(44,24,16,.65)", lineHeight: 1.6 }}>
+              Place your first order to share your experience as a verified customer.
+            </p>
+            <button
+              type="button"
+              onClick={() => { setLockedOpen(false); onOrderNow?.(); }}
+              style={{ width: "100%", minHeight: 48, border: "none", borderRadius: 14, background: "#FF9100", color: "#2C1810", fontFamily: "var(--font-display)", fontWeight: 900, fontSize: 15, cursor: "pointer", boxShadow: "0 8px 24px rgba(255,145,0,.28)" }}
+            >
+              Order Now
+            </button>
+            <p style={{ margin: "12px 0 0", textAlign: "center", fontFamily: "var(--font-body)", fontSize: 12, color: "rgba(44,24,16,.48)", lineHeight: 1.5 }}>
+              Your review will appear after delivery and approval.
+            </p>
+          </div>
+        </div>
+      )}
+      {typeof MPReviewPrompt === "function" && (
+        <MPReviewPrompt source="shop_review_cta" manual triggerKey={reviewTrigger} orderId={reviewOrderId} productSlug={productSlug} />
+      )}
     </section>
   );
 }
@@ -889,6 +996,7 @@ function ShopPage() {
   const [toasts, setToasts] = useState([]);
   const [addedAnim, setAddedAnim] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
+  const [reviewAuthIntent, setReviewAuthIntent] = useState(false);
   const [shopAuth, setShopAuth] = useState(getShopAuthState);
 
   const handleLogout = () => {
@@ -999,7 +1107,7 @@ function ShopPage() {
   if (productLoading) {
     return (
       <div className="shop-page">
-        <ShopHeader onSignIn={() => setAuthOpen(true)} loggedIn={shopAuth.loggedIn} dashUrl={shopAuth.dashUrl} onLogout={handleLogout} />
+        <ShopHeader onSignIn={() => { setReviewAuthIntent(false); setAuthOpen(true); }} loggedIn={shopAuth.loggedIn} dashUrl={shopAuth.dashUrl} onLogout={handleLogout} />
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "60vh", flexDirection: "column", gap: 16 }}>
           <div className="loader" aria-label="Loading product" role="status">
             <div className="cup">
@@ -1017,7 +1125,7 @@ function ShopPage() {
 
   return (
     <div className="shop-page">
-      <ShopHeader onSignIn={() => setAuthOpen(true)} productName={product.name} loggedIn={shopAuth.loggedIn} dashUrl={shopAuth.dashUrl} onLogout={handleLogout} />
+      <ShopHeader onSignIn={() => { setReviewAuthIntent(false); setAuthOpen(true); }} productName={product.name} loggedIn={shopAuth.loggedIn} dashUrl={shopAuth.dashUrl} onLogout={handleLogout} />
 
       <div className="shop-layout">
 
@@ -1120,6 +1228,10 @@ function ShopPage() {
                 </button>
               )}
             </div>
+            <div className="shop-member-note">
+              <i className="fa-solid fa-star" aria-hidden="true" />
+              <span>Create an account and earn points from this order. Save your address, track your pouch, and reorder faster next time.</span>
+            </div>
           </div>
 
           {/* Trust row — hidden on mobile */}
@@ -1172,9 +1284,13 @@ function ShopPage() {
 
       </div>
 
-      {/* Reviews — commented out for now
-      <ReviewsSection productSlug="midnight-blend" onStats={setReviewStats} />
-      */}
+      <ReviewsSection
+        productSlug="midnight-blend"
+        onStats={setReviewStats}
+        loggedIn={shopAuth.loggedIn}
+        onSignIn={() => { setReviewAuthIntent(true); setAuthOpen(true); }}
+        onOrderNow={buyNow}
+      />
 
       {/* Sticky mobile CTA */}
       <div className="shop-sticky-cta">
@@ -1194,7 +1310,16 @@ function ShopPage() {
       </div>
 
       <ShopToastStack toasts={toasts} />
-      <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} />
+      {typeof MPReviewPrompt === "function" && <MPReviewPrompt source="site_revisit" suppress={orderModalOpen || buySheetOpen || authOpen} productSlug="midnight-blend" />}
+      <AuthModal
+        open={authOpen}
+        onClose={() => setAuthOpen(false)}
+        title="Join the Midnight Circle"
+        subtitle={reviewAuthIntent
+          ? "Create your account to order, collect Midnight Points, and share a verified review later."
+          : "Track orders, collect Midnight Points, reorder faster, and manage your monthly coffee plan."}
+        postAuthRedirect={reviewAuthIntent ? `${window.location.href.split("#")[0]}#reviews-section` : null}
+      />
       <BuySheet
         open={buySheetOpen}
         onClose={() => setBuySheetOpen(false)}
@@ -1211,6 +1336,7 @@ function ShopPage() {
         addedAnim={addedAnim}
         product={product}
         onBuyNow={openOrderModal}
+        onCreateAccount={() => setAuthOpen(true)}
       />
       <OrderModal
         open={orderModalOpen}
@@ -1220,6 +1346,7 @@ function ShopPage() {
         discount={discount}
         coupon={coupon}
         loggedUser={shopAuth.user}
+        onCreateAccount={() => setAuthOpen(true)}
       />
     </div>
   );

@@ -359,6 +359,108 @@ body {
   display: flex; align-items: center; justify-content: center;
   color: var(--green); font-size: 10px;
 }
+.monthly-plan-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.9fr);
+  gap: 16px;
+  align-items: stretch;
+  max-width: 860px;
+}
+.monthly-plan-layout .sub-empty {
+  background: var(--card);
+  border: 1px solid var(--text-08);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  max-width: none;
+  margin: 0;
+}
+.monthly-plan-layout .sub-benefits {
+  margin: 0;
+  height: 100%;
+}
+.monthly-plan-active {
+  max-width: 720px;
+}
+.plan-management-card {
+  border-radius: var(--radius-xl);
+}
+.plan-action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 18px;
+}
+.plan-stepper {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 18px;
+}
+.plan-stepper span {
+  flex: 1;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(247,227,201,.15);
+}
+.plan-stepper span.active,
+.plan-stepper span.done {
+  background: var(--orange);
+}
+.sub-confirm-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  background: rgba(247,227,201,.08);
+  border: 1px solid rgba(247,227,201,.18);
+  border-radius: var(--radius);
+  padding: 14px;
+  color: var(--cream);
+}
+.sub-confirm-card strong,
+.sub-confirm-card span {
+  display: block;
+}
+.sub-confirm-card strong {
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+.sub-confirm-card span {
+  font-size: 12px;
+  color: var(--cream-65);
+  line-height: 1.5;
+}
+.sub-confirm-card i {
+  color: var(--orange);
+  font-size: 22px;
+}
+.plan-summary {
+  background: rgba(247,227,201,.08);
+  border: 1px solid rgba(247,227,201,.18);
+  border-radius: var(--radius);
+  padding: 14px;
+  margin-bottom: 16px;
+  color: var(--cream);
+}
+.plan-summary-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--orange);
+  margin-bottom: 12px;
+}
+.plan-summary .row-between {
+  padding: 7px 0;
+  border-bottom: 1px solid rgba(247,227,201,.08);
+}
+.plan-summary .row-between:last-of-type {
+  border-bottom: none;
+}
+.plan-summary span {
+  color: var(--cream-65);
+}
+.plan-summary strong {
+  color: var(--cream);
+  text-align: right;
+}
 
 /* ── Points page ──────────────────────── */
 .pts-balance-card {
@@ -583,6 +685,9 @@ body {
 
   .home-grid { grid-template-columns: 1fr; }
   .pts-layout { grid-template-columns: 1fr; }
+  .monthly-plan-layout { grid-template-columns: 1fr; }
+  .monthly-plan-active { max-width: none; }
+  .plan-action-grid { grid-template-columns: 1fr; }
 
   .greeting-banner { padding: 22px 20px; border-radius: var(--radius-xl); }
   .greeting-name { font-size: 22px; }

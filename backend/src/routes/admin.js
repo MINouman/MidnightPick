@@ -676,77 +676,6 @@ module.exports = async function adminRoutes(app) {
     return reply.code(200).send({ ok: true, data: { code: rows[0].code } })
   })
 
-  // ── Review management ───────────────────────────────────────────────────────
-
-  // GET /admin/reviews
-  app.get('/reviews', {
-    schema: {
-      querystring: {
-        type: 'object',
-        properties: {
-          approved: { type: 'string' },
-          page:     { type: 'integer', minimum: 1, default: 1 },
-          limit:    { type: 'integer', minimum: 1, maximum: 100, default: 50 },
-        },
-      },
-    },
-  }, async (req) => {
-    const { approved, page = 1, limit = 50 } = req.query
-    const offset = (page - 1) * limit
-    const conditions = []
-    const params = []
-
-    if (approved !== undefined) {
-      params.push(approved === 'true')
-      conditions.push(`is_approved = $${params.length}`)
-    }
-
-    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
-    const { rows: countRows } = await query(`SELECT COUNT(*) FROM reviews ${where}`, params)
-    const total = parseInt(countRows[0].count, 10)
-
-    const dataParams = [...params, limit, offset]
-    const { rows } = await query(
-      `SELECT id, product_slug, reviewer_name, rating, comment, is_approved, created_at
-       FROM reviews ${where}
-       ORDER BY created_at DESC
-       LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
-      dataParams
-    )
-    return { ok: true, data: { reviews: rows, total, page, limit } }
-  })
-
-  // PATCH /admin/reviews/:id/approve
-  app.patch('/reviews/:id/approve', {
-    schema: {
-      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
-      body: {
-        type: 'object',
-        properties: { approved: { type: 'boolean' } },
-        additionalProperties: false,
-      },
-    },
-  }, async (req) => {
-    const approved = req.body?.approved !== false
-    const { rows } = await query(
-      `UPDATE reviews SET is_approved = $1 WHERE id = $2 RETURNING id, reviewer_name, is_approved`,
-      [approved, req.params.id]
-    )
-    if (!rows.length) throw { code: 'NOT_FOUND', message: 'Review not found.' }
-    return { ok: true, data: rows[0] }
-  })
-
-  // DELETE /admin/reviews/:id
-  app.delete('/reviews/:id', {
-    schema: {
-      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
-    },
-  }, async (req, reply) => {
-    const { rows } = await query(`DELETE FROM reviews WHERE id = $1 RETURNING id`, [req.params.id])
-    if (!rows.length) throw { code: 'NOT_FOUND', message: 'Review not found.' }
-    return reply.code(200).send({ ok: true, data: { id: rows[0].id } })
-  })
-
   // ── Point Rewards CRUD ──────────────────────────────────────────────────────
 
   // GET /admin/point-rewards
@@ -829,5 +758,85 @@ module.exports = async function adminRoutes(app) {
     )
     if (!rows.length) throw { code: 'NOT_FOUND', message: 'Reward not found.' }
     return reply.code(200).send({ ok: true, data: { id: rows[0].id } })
+  })
+
+  // ── Customer Feedback (private ordering-experience insights) ────────────
+
+  // GET /admin/feedback
+  app.get('/feedback', {
+    schema: {
+      querystring: {
+        type: 'object',
+        properties: {
+          page:    { type: 'integer', minimum: 1, default: 1 },
+          limit:   { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+          emotion: { type: 'string', enum: ['very_easy', 'okay', 'confusing'] },
+          device:  { type: 'string', enum: ['mobile', 'tablet', 'desktop'] },
+          tag:     { type: 'string', maxLength: 30 },
+          from:    { type: 'string', maxLength: 30 },
+          to:      { type: 'string', maxLength: 30 },
+          search:  { type: 'string', maxLength: 50 },
+        },
+      },
+    },
+  }, async (req) => {
+    const feedbackSvc = require('../services/feedback')
+    const q = { ...req.query, to: toEndOfDayDhaka(req.query.to) }
+    const [list, stats] = await Promise.all([
+      feedbackSvc.listFeedback(q),
+      feedbackSvc.feedbackStats(),
+    ])
+    return { ok: true, data: { ...list, stats } }
+  })
+
+  // ── Review management (no approval gate — hide/remove only) ─────────────
+
+  // GET /admin/reviews
+  app.get('/reviews', {
+    schema: {
+      querystring: {
+        type: 'object',
+        properties: {
+          page:   { type: 'integer', minimum: 1, default: 1 },
+          limit:  { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+          status: { type: 'string', enum: ['visible', 'hidden'] },
+          rating: { type: 'integer', minimum: 1, maximum: 5 },
+        },
+      },
+    },
+  }, async (req) => {
+    const reviewsSvc = require('../services/reviews')
+    const [list, stats] = await Promise.all([
+      reviewsSvc.listAllReviews(req.query),
+      reviewsSvc.reviewAdminStats(),
+    ])
+    return { ok: true, data: { ...list, stats } }
+  })
+
+  // PATCH /admin/reviews/:id — toggle visible/hidden
+  app.patch('/reviews/:id', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+      body: {
+        type: 'object', required: ['status'],
+        properties: { status: { type: 'string', enum: ['visible', 'hidden'] } },
+        additionalProperties: false,
+      },
+    },
+  }, async (req) => {
+    const reviewsSvc = require('../services/reviews')
+    const result = await reviewsSvc.setReviewStatus(req.params.id, req.body.status)
+    return { ok: true, data: result }
+  })
+
+  // DELETE /admin/reviews/:id
+  app.delete('/reviews/:id', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+    },
+  }, async (req) => {
+    const reviewsSvc = require('../services/reviews')
+    const result = await reviewsSvc.deleteReview(req.params.id)
+    return { ok: true, data: result }
   })
 }

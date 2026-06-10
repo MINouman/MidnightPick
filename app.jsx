@@ -198,6 +198,29 @@ function Hero({ headline, showMountain }) {
 
 }
 
+function MemberAccessCard({ onJoin }) {
+  const chips = ["Order Tracking", "Midnight Points", "Monthly Plan", "Faster Checkout"];
+  return (
+    <section className="member-access-section" aria-label="Midnight Circle member access">
+      <div className="member-access-card">
+        <div className="member-access-copy">
+          <div className="member-access-badge">MIDNIGHT MEMBER ACCESS</div>
+          <h2>Join the Midnight Circle</h2>
+          <p>Track your orders, collect Midnight Points, reorder faster, and manage your monthly coffee plan from one quiet place.</p>
+          <div className="member-access-chips">
+            {chips.map(chip => (
+              <span key={chip}>{chip}</span>
+            ))}
+          </div>
+        </div>
+        <button className="member-access-cta" onClick={onJoin}>
+          Create Account <ArrowRight size={14} />
+        </button>
+      </div>
+    </section>
+  );
+}
+
 // ----------------- story -----------------
 function Story() {
   return (
@@ -1036,6 +1059,7 @@ function App() {
       <Nav onSubscribe={() => setModalOpen(true)} onSignIn={() => setAuthOpen(true)} loggedIn={auth.loggedIn} dashUrl={auth.dashUrl} onLogout={handleLogout} />
       <Hero headline={t.headline} showMountain={t.showMountain} />
       <Story />
+      <MemberAccessCard onJoin={() => setAuthOpen(true)} />
       <Collection onAdd={addToCart} />
       <Promo onShop={onShop} />
       <TheJournal />
@@ -1049,6 +1073,7 @@ function App() {
       <SubscribeModal open={modalOpen} onClose={() => setModalOpen(false)} />
       <TrackOrderModal open={trackOpen} onClose={() => setTrackOpen(false)} />
       <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} />
+      <MPReviewPrompt source="site_revisit" suppress={modalOpen || trackOpen || authOpen} />
 
       <TweaksPanel title="Tweaks">
         <TweakSection label="Theme">

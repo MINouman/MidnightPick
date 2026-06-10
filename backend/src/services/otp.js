@@ -4,6 +4,7 @@ const crypto = require('crypto')
 const { redis }  = require('../config/redis')
 const { query }  = require('../config/db')
 const { env }    = require('../config/env')
+const { normalizeBdMobile } = require('./phone')
 
 function generateOtp() {
   return String(crypto.randomInt(100000, 999999))
@@ -31,6 +32,7 @@ async function checkRateLimit(phone) {
 }
 
 async function sendOtp(phone) {
+  phone = normalizeBdMobile(phone)
   const allowed = await checkRateLimit(phone)
   if (!allowed) {
     throw { code: 'OTP_RATE_LIMIT', message: 'Too many OTP requests. Please wait before trying again.' }
@@ -64,6 +66,7 @@ async function sendOtp(phone) {
 }
 
 async function verifyOtp(phone, otp) {
+  phone = normalizeBdMobile(phone)
   const hash = hashOtp(otp, phone)
 
   // Fetch the latest active token for this phone+hash pair

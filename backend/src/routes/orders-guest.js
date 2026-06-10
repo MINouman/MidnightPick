@@ -2,6 +2,7 @@
 
 const ordersSvc = require('../services/orders')
 const otpSvc    = require('../services/otp')
+const { normalizeBdMobile } = require('../services/phone')
 
 module.exports = async function guestOrderRoutes(app) {
 
@@ -13,13 +14,13 @@ module.exports = async function guestOrderRoutes(app) {
         type: 'object',
         required: ['phone'],
         properties: {
-          phone: { type: 'string', minLength: 11, maxLength: 15 },
+          phone: { type: 'string', minLength: 10, maxLength: 20 },
         },
         additionalProperties: false,
       },
     },
   }, async (req, reply) => {
-    const result = await otpSvc.sendOtp(req.body.phone.trim())
+    const result = await otpSvc.sendOtp(normalizeBdMobile(req.body.phone))
     return reply.send({ ok: true, data: result })
   })
 
@@ -32,7 +33,7 @@ module.exports = async function guestOrderRoutes(app) {
         required: ['name', 'phone', 'address', 'qty', 'otp'],
         properties: {
           name:        { type: 'string', minLength: 1,  maxLength: 100 },
-          phone:       { type: 'string', minLength: 11, maxLength: 15 },
+          phone:       { type: 'string', minLength: 10, maxLength: 20 },
           address:     { type: 'string', minLength: 5,  maxLength: 500 },
           qty:         { type: 'integer', minimum: 1,   maximum: 50 },
           otp:         { type: 'string', minLength: 6,  maxLength: 6 },
