@@ -199,6 +199,8 @@ body {
   gap: 14px;
   align-items: start;
 }
+.mobile-only { display: none; }
+.desktop-only { display: block; }
 
 /* ── Points mini (dark card) ──────────── */
 .pts-mini {
@@ -684,6 +686,8 @@ body {
   .tabbar { display: block; }
 
   .home-grid { grid-template-columns: 1fr; }
+  .mobile-only { display: block; }
+  .desktop-only { display: none; }
   .pts-layout { grid-template-columns: 1fr; }
   .monthly-plan-layout { grid-template-columns: 1fr; }
   .monthly-plan-active { max-width: none; }

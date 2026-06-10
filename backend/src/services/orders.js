@@ -1,37 +1,15 @@
 'use strict'
 
 const { query, withTransaction } = require('../config/db')
+const { validateCoupon, recordCouponUsage, reverseCommissionForOrder } = require('./crew')
 
 const DELIVERY_FEE = 0  // free delivery; update when zone-based fees are added
 
 // ── Internal helpers ────────────────────────────────────────────────────────
 
-async function validateAndLockCoupon(client, code, subtotal) {
-  const { rows } = await client.query(
-    `SELECT id, type, discount_type, discount_value, min_order, max_uses, used_count
-     FROM   coupons
-     WHERE  code = $1
-       AND  is_active = true
-       AND  (expires_at IS NULL OR expires_at > NOW())
-     FOR UPDATE`,
-    [code]
-  )
-
-  if (!rows.length) throw { code: 'INVALID_COUPON', message: 'Coupon not found or has expired.' }
-
-  const c = rows[0]
-  if (subtotal < c.min_order) {
-    throw { code: 'COUPON_MIN_ORDER', message: `This coupon requires a minimum order of ৳${c.min_order}.` }
-  }
-  if (c.max_uses !== null && c.used_count >= c.max_uses) {
-    throw { code: 'COUPON_EXHAUSTED', message: 'This coupon has reached its usage limit.' }
-  }
-
-  const discount = c.discount_type === 'pct'
-    ? Math.floor(subtotal * c.discount_value / 100)
-    : Math.min(c.discount_value, subtotal)
-
-  return { couponId: c.id, discount }
+async function validateAndLockCoupon(client, code, subtotal, customerPhone = null) {
+  const res = await validateCoupon(client, { code, subtotal, customerPhone, lock: true })
+  return { couponId: res.coupon.id, coupon: res.coupon, discount: res.discount }
 }
 
 async function lookupVariants(client, items) {
@@ -116,11 +94,11 @@ async function placeOrder(userId, body) {
 
     // 4. Coupon
     let discountAmount = 0
-    let couponId       = null
+    let coupon         = null
     if (coupon_code) {
-      const c = await validateAndLockCoupon(client, coupon_code.toUpperCase(), subtotal)
+      const c = await validateAndLockCoupon(client, coupon_code.toUpperCase(), subtotal, payment_number)
       discountAmount = c.discount
-      couponId       = c.couponId
+      coupon         = c.coupon
     }
 
     const total = subtotal - discountAmount + DELIVERY_FEE
@@ -159,10 +137,15 @@ async function placeOrder(userId, body) {
     await decrementStock(client, items)
 
     // 9. Increment coupon usage
-    if (couponId) {
-      await client.query(
-        `UPDATE coupons SET used_count = used_count + 1 WHERE id = $1`, [couponId]
-      )
+    if (coupon) {
+      await recordCouponUsage(client, {
+        coupon,
+        orderId: order.id,
+        userId,
+        customerPhone: payment_number,
+        discountAmount,
+        orderTotal: total,
+      })
     }
 
     // 10. First tracking event: confirmed
@@ -302,6 +285,7 @@ async function cancelOrder(userId, orderId) {
         `UPDATE coupons SET used_count = GREATEST(0, used_count - 1) WHERE code = $1`,
         [order.coupon_code]
       )
+      await reverseCommissionForOrder(client, order.id)
     }
 
     return { order_ref: order.order_ref, status: 'cancelled' }
@@ -374,12 +358,12 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
     const subtotal = unitPrice * qty
 
     let discountAmount = 0
-    let couponId       = null
+    let coupon         = null
     if (coupon_code) {
       try {
-        const c = await validateAndLockCoupon(client, coupon_code.toUpperCase(), subtotal)
+        const c = await validateCoupon(client, { code: coupon_code.toUpperCase(), subtotal, customerPhone: normalizedPhone, lock: true })
         discountAmount = c.discount
-        couponId       = c.couponId
+        coupon         = c.coupon
       } catch {
         // ignore invalid coupon for guest checkout
       }
@@ -410,10 +394,15 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
       [order.id, itemProductId, productName, qty, unitPrice, unitPrice * qty]
     )
 
-    if (couponId) {
-      await client.query(
-        `UPDATE coupons SET used_count = used_count + 1 WHERE id = $1`, [couponId]
-      )
+    if (coupon) {
+      await recordCouponUsage(client, {
+        coupon,
+        orderId: order.id,
+        userId: null,
+        customerPhone: normalizedPhone,
+        discountAmount,
+        orderTotal: total,
+      })
     }
 
     await client.query(
@@ -496,12 +485,12 @@ async function placeQuickOrder(userId, { product_id, qty, address, coupon_code, 
     const subtotal = unitPrice * qty
 
     let discountAmount = 0
-    let couponId       = null
+    let coupon         = null
     if (coupon_code) {
       try {
-        const c = await validateAndLockCoupon(client, coupon_code.toUpperCase(), subtotal)
+        const c = await validateCoupon(client, { code: coupon_code.toUpperCase(), subtotal, customerPhone: phone, lock: true })
         discountAmount = c.discount
-        couponId       = c.couponId
+        coupon         = c.coupon
       } catch {
         // ignore invalid coupon silently
       }
@@ -532,10 +521,15 @@ async function placeQuickOrder(userId, { product_id, qty, address, coupon_code, 
       [order.id, itemProductId, productName, qty, unitPrice, unitPrice * qty]
     )
 
-    if (couponId) {
-      await client.query(
-        `UPDATE coupons SET used_count = used_count + 1 WHERE id = $1`, [couponId]
-      )
+    if (coupon) {
+      await recordCouponUsage(client, {
+        coupon,
+        orderId: order.id,
+        userId,
+        customerPhone: phone,
+        discountAmount,
+        orderTotal: total,
+      })
     }
 
     await client.query(

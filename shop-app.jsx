@@ -93,7 +93,7 @@ const BD_AREAS = {
 };
 
 // ── minimal header ────────────────────────────────────────────────────────────
-const ROLE_DASH = { user: "dashboard-user.html", crew: "dashboard-crew.html", influencer: "dashboard-influencer.html", admin: "dashboard-admin.html" };
+const ROLE_DASH = { user: "dashboard-user.html", crew: "dashboard-user.html", influencer: "dashboard-influencer.html", admin: "dashboard-admin.html" };
 
 function getShopAuthState() {
   try {

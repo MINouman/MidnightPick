@@ -40,13 +40,14 @@
 <body>
   <div id="root"></div>
   <script src="mp-api.js"></script>
+  <script type="text/babel" src="dashboard-admin.jsx"></script>
 
   <!-- ═══════════════════════════════════════════════════════
        MOBILE VIEW  (window.innerWidth < 768)
   ═══════════════════════════════════════════════════════ -->
   <script type="text/babel">
 (function(){
-if(window.innerWidth>=768)return;
+if(true)return;
 const{useState,useEffect,useRef,useCallback,useContext,createContext}=React;
 
 /* ── Context ────────────────────────────────────────────── */
@@ -2587,9 +2588,14 @@ ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
   <!-- ═══════════════════════════════════════════════════════
        DESKTOP VIEW  (window.innerWidth >= 768)
   ═══════════════════════════════════════════════════════ -->
+  <script>
+    if (false) {
+      document.write('<script type="text/babel" src="dashboard-admin.jsx"><\/script>');
+    }
+  </script>
   <script type="text/babel">
 (function(){
-if(window.innerWidth<768)return;
+if(true)return;
 // Midnight Pick — Admin Dashboard
 
 const { useState, useRef, useEffect, useContext, createContext } = React;
@@ -3587,8 +3593,8 @@ function Coupons() {
       {coupTab === "Crew" && (
         <div className="empty-state" style={{ marginTop: 40 }}>
           <div className="empty-icon"><i className="fa fa-fire" /></div>
-          <h3>Crew coupons coming soon</h3>
-          <p>Crew referral codes and their usage stats will appear here once the crew management backend is built.</p>
+          <h3>Crew coupons</h3>
+          <p>Open the Crew section to manage referral coupon codes and usage stats.</p>
         </div>
       )}
 
@@ -4611,7 +4617,7 @@ function AdminDashboard() {
       case "coupons":    return <Coupons />;
       case "feedback":   return <CustomerFeedback />;
       case "reviews":    return <ReviewsAdmin />;
-      // case "crew":       return <CrewManagement />;
+      case "crew":       return <CrewManagement />;
       case "influencer": return <InfluencersSection />;
       case "points":     return <PointsAdmin />;
       case "financials": return <Financials />;

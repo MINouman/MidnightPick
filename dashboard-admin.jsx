@@ -731,6 +731,7 @@ function Coupons() {
   const [coupTab, setCoupTab] = useState("Festival");
   const [showForm, setShowForm] = useState(false);
   const [festCoupons, setFestCoupons] = useState([]);
+  const [crewCoupons, setCrewCoupons] = useState([]);
   const [festLoading, setFestLoading] = useState(false);
   const [savingCoupon, setSavingCoupon] = useState(false);
   const emptyForm = { code: "", type: "Percentage", value: "", minOrder: "", cap: "", expiry: "" };
@@ -744,6 +745,14 @@ function Coupons() {
     setFestLoading(true);
     window.mpApi.fetch('/admin/coupons?type=festival').then(res => {
       setFestCoupons(res?.data?.coupons || []);
+    }).catch(() => {}).finally(() => setFestLoading(false));
+  }, [coupTab]);
+
+  useEffect(() => {
+    if (coupTab !== "Crew") return;
+    setFestLoading(true);
+    window.mpApi.fetch('/admin/crew/coupons').then(res => {
+      setCrewCoupons(res?.data?.coupons || []);
     }).catch(() => {}).finally(() => setFestLoading(false));
   }, [coupTab]);
 
@@ -1006,11 +1015,44 @@ function Coupons() {
       )}
 
       {coupTab === "Crew" && (
-        <div className="empty-state" style={{ marginTop: 40 }}>
-          <div className="empty-icon"><i className="fa fa-fire" /></div>
-          <h3>Crew coupons coming soon</h3>
-          <p>Crew referral codes and their usage stats will appear here once the crew management backend is built.</p>
-        </div>
+        <SectionCard style={{ padding: 0, overflow: "hidden" }}>
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead><tr><th>Coupon code</th><th>Crew member</th><th>Discount</th><th>Usage</th><th>Max phone</th><th>Total sales</th><th>Commission</th><th>Status</th><th>Actions</th></tr></thead>
+              <tbody>
+                {festLoading ? (
+                  <tr><td colSpan={9} style={{ textAlign: "center", padding: 24, color: "var(--text-65)" }}>Loading…</td></tr>
+                ) : crewCoupons.length === 0 ? (
+                  <tr><td colSpan={9} style={{ textAlign: "center", padding: 32, color: "var(--text-65)" }}>Crew-created coupons will appear here.</td></tr>
+                ) : crewCoupons.map(c => (
+                  <tr key={c.id}>
+                    <td className="mono fw700" style={{ color: "var(--blue)" }}>{c.code}</td>
+                    <td>{c.crew_member || "—"}</td>
+                    <td>{c.discount_type === "pct" ? `${c.discount_value}%` : `৳${c.discount_value}`}</td>
+                    <td>{c.used_count || 0} / {c.max_uses || "∞"}</td>
+                    <td>{c.max_usage_per_phone || "—"}</td>
+                    <td>৳{Number(c.total_sales || 0).toLocaleString()}</td>
+                    <td>৳{Number(c.commission_generated || 0).toLocaleString()}</td>
+                    <td><span className={`badge ${c.status === "active" ? "badge-green" : c.status === "pending_approval" ? "badge-orange" : "badge-gray"}`}>{c.status === "pending_approval" ? "Pending Approval" : fmtStatus(c.status)}</span></td>
+                    <td>
+                      <div className="cell-action">
+                        {c.status === "pending_approval" && <button className="btn btn-sm btn-ghost" style={{ padding: "5px 10px", fontSize: 11 }} onClick={async () => {
+                          const res = await window.mpApi.fetch(`/admin/coupons/${c.code}`, { method: "PATCH", body: JSON.stringify({ status: "active", is_active: true }) }).catch(() => null);
+                          if (res?.ok) setCrewCoupons(prev => prev.map(x => x.id === c.id ? { ...x, status: "active", is_active: true } : x));
+                        }}>Approve</button>}
+                        <button className="btn btn-sm btn-ghost" style={{ padding: "5px 10px", fontSize: 11 }} onClick={async () => {
+                          const res = await window.mpApi.fetch(`/admin/coupons/${c.code}`, { method: "PATCH", body: JSON.stringify({ status: "disabled", is_active: false }) }).catch(() => null);
+                          if (res?.ok) setCrewCoupons(prev => prev.map(x => x.id === c.id ? { ...x, status: "disabled", is_active: false } : x));
+                        }}>Disable</button>
+                        <button className="btn btn-sm btn-ghost" style={{ padding: "5px 10px", fontSize: 11 }} onClick={() => navigator.clipboard?.writeText(c.code)}>Copy</button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </SectionCard>
       )}
 
       {coupTab === "Influencer" && (
@@ -1055,29 +1097,227 @@ function Coupons() {
 
 // ── Section: Crew Management ───────────────────────────
 function CrewManagement() {
-  const [crewTab, setCrewTab] = useState("Pending");
+  const [crewTab, setCrewTab] = useState("Applications");
+  const [apps, setApps] = useState([]);
+  const [members, setMembers] = useState([]);
+  const [coupons, setCoupons] = useState([]);
+  const [settings, setSettings] = useState(null);
+  const [commissions, setCommissions] = useState([]);
+  const [panel, setPanel] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  function loadCrew() {
+    Promise.all([
+      window.mpApi.fetch('/admin/crew/applications').catch(() => null),
+      window.mpApi.fetch('/admin/crew/members').catch(() => null),
+      window.mpApi.fetch('/admin/crew/coupons').catch(() => null),
+      window.mpApi.fetch('/admin/crew/settings').catch(() => null),
+      window.mpApi.fetch('/admin/crew/commissions').catch(() => null),
+    ]).then(([a, m, c, s, p]) => {
+      setApps(a?.data?.applications || []);
+      setMembers(m?.data?.members || []);
+      setCoupons(c?.data?.coupons || []);
+      setSettings(s?.data || null);
+      setCommissions(p?.data?.commissions || []);
+    });
+  }
+
+  useEffect(loadCrew, []);
+
+  async function approve(app) {
+    const r = await Swal.fire({
+      title: "Approve crew application?",
+      text: "This will allow the user to create referral codes within your crew settings.",
+      icon: "question",
+      showCancelButton: true,
+      confirmButtonText: "Approve Crew Member",
+      confirmButtonColor: "#FF9100",
+      cancelButtonColor: "#F7E3C9",
+      customClass: { cancelButton: "swal-cancel-dark" },
+    });
+    if (!r.isConfirmed) return;
+    setBusy(true);
+    await window.mpApi.fetch(`/admin/crew/applications/${app.id}/approve`, { method: "PATCH" }).catch(() => null);
+    setBusy(false); setPanel(null); loadCrew();
+  }
+
+  async function reject(app) {
+    const r = await Swal.fire({
+      title: "Reject crew application?",
+      text: "The user will not receive crew access.",
+      input: "textarea",
+      inputPlaceholder: "Optional admin note",
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonText: "Reject Application",
+      confirmButtonColor: "#D94040",
+      cancelButtonColor: "#F7E3C9",
+      customClass: { cancelButton: "swal-cancel-dark" },
+    });
+    if (!r.isConfirmed) return;
+    setBusy(true);
+    await window.mpApi.fetch(`/admin/crew/applications/${app.id}/reject`, { method: "PATCH", body: JSON.stringify({ admin_note: r.value || "" }) }).catch(() => null);
+    setBusy(false); setPanel(null); loadCrew();
+  }
+
+  async function updateMember(member, body) {
+    await window.mpApi.fetch(`/admin/crew/members/${member.id}`, { method: "PATCH", body: JSON.stringify(body) }).catch(() => null);
+    loadCrew();
+  }
+
+  async function updateCoupon(coupon, body) {
+    const res = await window.mpApi.fetch(`/admin/coupons/${coupon.code}`, { method: "PATCH", body: JSON.stringify(body) }).catch(() => null);
+    if (res?.ok) loadCrew();
+  }
+
+  async function saveSettings() {
+    if (!settings) return;
+    setBusy(true);
+    const res = await window.mpApi.fetch('/admin/crew/settings', { method: "PATCH", body: JSON.stringify(settings) }).catch(() => null);
+    setBusy(false);
+    if (res?.ok) {
+      setSettings(res.data);
+      Swal.fire({ title: "Crew settings updated.", icon: "success", timer: 1200, showConfirmButton: false });
+    }
+  }
+
+  async function markPaid(comm) {
+    await window.mpApi.fetch(`/admin/crew/commissions/${comm.id}/mark-paid`, { method: "PATCH" }).catch(() => null);
+    loadCrew();
+  }
+
+  const pendingApps = apps.filter(a => a.status === "pending");
 
   return (
-    <div className="dash-inner">
+    <div className="dash-inner-wide">
       <div className="page-title">Crew Management</div>
       <div className="toggle-group">
-        <button className={`toggle-btn ${crewTab === "Pending" ? "active" : ""}`} onClick={() => setCrewTab("Pending")}>Pending (0)</button>
-        <button className={`toggle-btn ${crewTab === "Active" ? "active" : ""}`} onClick={() => setCrewTab("Active")}>Active</button>
+        {["Applications", "Active Crew", "Crew Coupons", "Settings", "Payouts"].map(t => (
+          <button key={t} className={`toggle-btn ${crewTab === t ? "active" : ""}`} onClick={() => setCrewTab(t)}>{t}{t === "Applications" ? ` (${pendingApps.length})` : ""}</button>
+        ))}
       </div>
 
-      {crewTab === "Pending" && (
-        <div className="empty-state">
-          <div className="empty-icon"><i className="fa fa-check-circle" /></div>
-          <h3>All caught up!</h3>
-          <p>No pending applications. Crew applications backend is not yet built.</p>
-        </div>
+      {crewTab === "Applications" && (
+        <SectionCard style={{ padding: 0, overflow: "hidden" }}>
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead><tr><th>Date</th><th>Applicant</th><th>Phone</th><th>Social</th><th>Sharing</th><th>Status</th><th>Action</th></tr></thead>
+              <tbody>{apps.length === 0 ? (
+                <tr><td colSpan={7} style={{ textAlign: "center", padding: 28, color: "var(--text-65)" }}>No crew applications yet.</td></tr>
+              ) : apps.map(a => (
+                <tr key={a.id}><td>{fmtDate(a.created_at)}</td><td style={{ fontWeight: 700 }}>{a.name}</td><td>{a.phone}</td><td className="muted">{a.social_link || "—"}</td><td>{(a.sharing_methods || []).join(", ") || "—"}</td><td><StatusBadge status={a.status} /></td><td><button className="btn btn-sm btn-ghost" onClick={() => setPanel(a)}>View</button></td></tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </SectionCard>
       )}
 
-      {crewTab === "Active" && (
-        <div className="empty-state">
-          <div className="empty-icon"><i className="fa fa-fire" /></div>
-          <h3>No active crew members</h3>
-          <p>Active crew members will appear here once the crew backend is built.</p>
+      {crewTab === "Active Crew" && (
+        <SectionCard style={{ padding: 0, overflow: "hidden" }}>
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead><tr><th>Name</th><th>Phone</th><th>Codes</th><th>Orders</th><th>Sales</th><th>Pending</th><th>Paid</th><th>Status</th><th>Actions</th></tr></thead>
+              <tbody>{members.length === 0 ? (
+                <tr><td colSpan={9} style={{ textAlign: "center", padding: 28, color: "var(--text-65)" }}>No active crew members yet.</td></tr>
+              ) : members.map(m => (
+                <tr key={m.id}><td style={{ fontWeight: 700 }}>{m.name}</td><td>{m.phone}</td><td>{m.active_coupon_codes || 0}</td><td>{m.referral_orders || 0}</td><td>৳{Number(m.total_referral_sales || 0).toLocaleString()}</td><td>৳{Number(m.pending_commission || 0).toLocaleString()}</td><td>৳{Number(m.paid_commission || 0).toLocaleString()}</td><td><StatusBadge status={m.status} /></td><td><div className="cell-action"><button className="btn btn-sm btn-ghost" onClick={() => setPanel(m)}>View</button><button className="btn btn-sm btn-ghost" onClick={() => updateMember(m, { status: m.status === "active" ? "paused" : "active" })}>{m.status === "active" ? "Pause" : "Activate"}</button><button className="btn btn-sm btn-ghost" onClick={() => updateMember(m, { status: "disabled" })}>Disable</button></div></td></tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </SectionCard>
+      )}
+
+      {crewTab === "Crew Coupons" && (
+        <SectionCard style={{ padding: 0, overflow: "hidden" }}>
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead><tr><th>Code</th><th>Crew</th><th>Discount</th><th>Usage</th><th>Max Phone</th><th>Sales</th><th>Commission</th><th>Status</th><th>Actions</th></tr></thead>
+              <tbody>{coupons.length === 0 ? (
+                <tr><td colSpan={9} style={{ textAlign: "center", padding: 28, color: "var(--text-65)" }}>Crew-created coupons will appear here.</td></tr>
+              ) : coupons.map(c => (
+                <tr key={c.id}><td className="mono fw700" style={{ color: "var(--blue)" }}>{c.code}</td><td>{c.crew_member || "—"}</td><td>{c.discount_type === "pct" ? `${c.discount_value}%` : `৳${c.discount_value}`}</td><td>{c.used_count || 0} / {c.max_uses || "∞"}</td><td>{c.max_usage_per_phone || "—"}</td><td>৳{Number(c.total_sales || 0).toLocaleString()}</td><td>৳{Number(c.commission_generated || 0).toLocaleString()}</td><td><span className={`badge ${c.status === "active" ? "badge-green" : c.status === "pending_approval" ? "badge-orange" : "badge-gray"}`}>{c.status === "pending_approval" ? "Pending Approval" : fmtStatus(c.status)}</span></td><td><div className="cell-action">{c.status === "pending_approval" && <button className="btn btn-sm btn-ghost" onClick={() => updateCoupon(c, { status: "active", is_active: true })}>Approve</button>}<button className="btn btn-sm btn-ghost" onClick={() => updateCoupon(c, { status: "disabled", is_active: false })}>Disable</button><button className="btn btn-sm btn-ghost" onClick={() => navigator.clipboard?.writeText(c.code)}>Copy</button></div></td></tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </SectionCard>
+      )}
+
+      {crewTab === "Settings" && settings && (
+        <SectionCard>
+          <div className="grid-2">
+            {[
+              ["Maximum percentage discount", "max_pct_discount"],
+              ["Maximum flat amount discount", "max_flat_discount"],
+              ["Minimum order amount", "min_order"],
+              ["Maximum orders per coupon", "max_uses_per_coupon"],
+              ["Maximum usage per customer phone", "max_usage_per_phone"],
+              ["Maximum active coupons per crew", "max_active_coupons_per_crew"],
+              ["Commission value", "commission_value"],
+              ["Payout threshold", "payout_threshold"],
+            ].map(([label, key]) => (
+              <div className="input-group" key={key}><label className="input-label">{label}</label><input className="input" type="number" value={settings[key] ?? ""} onChange={e => setSettings(s => ({ ...s, [key]: Number(e.target.value) }))} /></div>
+            ))}
+            <div className="input-group"><label className="input-label">Crew commission type</label><select className="select" value={settings.commission_type} onChange={e => setSettings(s => ({ ...s, commission_type: e.target.value }))}><option value="percentage">Percentage of net order value</option><option value="flat">Fixed amount per delivered order</option></select></div>
+            <div className="input-group"><label className="input-label">Commission calculation basis</label><select className="select" value={settings.commission_base} onChange={e => setSettings(s => ({ ...s, commission_base: e.target.value }))}><option value="after_discount">After discount</option><option value="before_discount">Before discount</option></select></div>
+          </div>
+          <div className="grid-2">
+            {[
+              ["Require admin approval for new crew coupons", "require_coupon_approval"],
+              ["Allow crew to edit active coupons", "allow_crew_edit_active_coupon"],
+              ["Allow crew to deactivate coupons", "allow_crew_deactivate_coupon"],
+              ["Allow coupon expiry date", "allow_coupon_expiry"],
+            ].map(([label, key]) => (
+              <label key={key} className="row mb10" style={{ gap: 8 }}><input type="checkbox" checked={!!settings[key]} onChange={e => setSettings(s => ({ ...s, [key]: e.target.checked }))} /> <span className="text-sm">{label}</span></label>
+            ))}
+          </div>
+          <button className="btn btn-primary" disabled={busy} onClick={saveSettings}>{busy ? "Saving..." : "Save Settings"}</button>
+        </SectionCard>
+      )}
+
+      {crewTab === "Payouts" && (
+        <SectionCard style={{ padding: 0, overflow: "hidden" }}>
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead><tr><th>Date</th><th>Crew</th><th>Order</th><th>Code</th><th>Base</th><th>Commission</th><th>Status</th><th>Action</th></tr></thead>
+              <tbody>{commissions.length === 0 ? (
+                <tr><td colSpan={8} style={{ textAlign: "center", padding: 28, color: "var(--text-65)" }}>No crew commissions yet.</td></tr>
+              ) : commissions.map(c => (
+                <tr key={c.id}><td>{fmtDate(c.created_at)}</td><td>{c.crew_member}</td><td>{c.order_ref}</td><td>{c.coupon_code}</td><td>৳{Number(c.commission_base_amount || 0).toLocaleString()}</td><td style={{ fontWeight: 700, color: "var(--orange)" }}>৳{Number(c.commission_amount || 0).toLocaleString()}</td><td><StatusBadge status={c.status} /></td><td>{c.status !== "paid" && <button className="btn btn-sm btn-ghost" onClick={() => markPaid(c)}>Mark Paid</button>}</td></tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </SectionCard>
+      )}
+
+      {panel && (
+        <div className="overlay" onClick={() => setPanel(null)}>
+          <div className="slide-panel" onClick={e => e.stopPropagation()}>
+            <div className="panel-hd">
+              <div>
+                <div className="eyebrow">Crew Detail</div>
+                <div style={{ fontSize: 20, fontWeight: 700 }}>{panel.name}</div>
+              </div>
+              <button className="icon-btn" onClick={() => setPanel(null)}><i className="fa fa-times" /></button>
+            </div>
+            <div className="panel-bd">
+              <div className="grid-2">
+                <div><div className="profile-label">Phone</div><div className="profile-value">{panel.phone || "—"}</div></div>
+                <div><div className="profile-label">Email</div><div className="profile-value">{panel.email || panel.user_email || "—"}</div></div>
+                <div><div className="profile-label">Existing order count</div><div className="profile-value">{panel.order_count ?? panel.referral_orders ?? 0}</div></div>
+                <div><div className="profile-label">Total spent / sales</div><div className="profile-value">৳{Number(panel.total_spent ?? panel.total_referral_sales ?? 0).toLocaleString()}</div></div>
+                <div><div className="profile-label">Points balance</div><div className="profile-value">{panel.points_balance ?? "—"}</div></div>
+                <div><div className="profile-label">Status</div><StatusBadge status={panel.status} /></div>
+              </div>
+              {panel.reason && <div className="card mt16"><div className="eyebrow">Application text</div><div className="text-sm text-muted">{panel.reason}</div></div>}
+              {panel.social_link && <div className="card mt16"><div className="eyebrow">Social link</div><div className="text-sm text-muted">{panel.social_link}</div></div>}
+              {panel.status === "pending" && (
+                <div className="row mt16" style={{ gap: 10 }}>
+                  <button className="btn btn-primary" disabled={busy} onClick={() => approve(panel)}>Approve Crew Member</button>
+                  <button className="btn btn-ghost" disabled={busy} onClick={() => reject(panel)}>Reject Application</button>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -1953,9 +2193,9 @@ function Sidebar({ section, setSection, onLogout }) {
     { id: "customers",  icon: "fa-users",           label: "Customers" },
     { id: "subs",       icon: "fa-calendar-check",  label: "Subscriptions" },
     { id: "coupons",    icon: "fa-ticket-alt",      label: "Coupons" },
+    { id: "crew",       icon: "fa-fire",            label: "Crew" },
     { id: "feedback",   icon: "fa-comment-dots",    label: "Feedback" },
     { id: "reviews",    icon: "fa-star-half-alt",   label: "Reviews" },
-    // { id: "crew",       icon: "fa-fire",            label: "Crew" },
     { id: "influencer", icon: "fa-bolt",            label: "Influencers" },
     { id: "points",     icon: "fa-star",            label: "Points" },
     { id: "financials", icon: "fa-chart-line",      label: "Financials" },
@@ -2049,7 +2289,7 @@ function AdminDashboard() {
       case "coupons":    return <Coupons />;
       case "feedback":   return <CustomerFeedback />;
       case "reviews":    return <ReviewsAdmin />;
-      // case "crew":       return <CrewManagement />;
+      case "crew":       return <CrewManagement />;
       case "influencer": return <InfluencersSection />;
       case "points":     return <PointsAdmin />;
       case "financials": return <Financials />;

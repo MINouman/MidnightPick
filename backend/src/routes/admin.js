@@ -3,6 +3,7 @@
 const { query, withTransaction } = require('../config/db')
 const { sendOrderConfirmation }  = require('../services/sms')
 const { calculatePointsForOrder, awardPoints } = require('../services/points')
+const { syncCommissionForDeliveredOrder, reverseCommissionForOrder } = require('../services/crew')
 
 // Convert a date-only string (YYYY-MM-DD) to end-of-day in Dhaka time (UTC+6).
 // Full datetime strings are passed through unchanged.
@@ -109,6 +110,11 @@ module.exports = async function adminRoutes(app) {
           )
           updated[0].points_earned = pts
         }
+      }
+      if (newStatus === 'delivered') {
+        await syncCommissionForDeliveredOrder(client, orderId)
+      } else if (newStatus === 'cancelled') {
+        await reverseCommissionForOrder(client, orderId)
       }
 
       return updated[0]
@@ -596,8 +602,21 @@ module.exports = async function adminRoutes(app) {
   }, async (req) => {
     const type = req.query.type || 'festival'
     const { rows } = await query(
-      `SELECT id, code, type, discount_type, discount_value, min_order, max_uses, used_count, is_active, expires_at, created_at
-       FROM coupons WHERE type = $1 ORDER BY created_at DESC`,
+      `SELECT c.id, c.code, c.type, COALESCE(c.source, c.type::text) AS source,
+              c.discount_type, c.discount_value, c.min_order, c.max_uses,
+              c.max_usage_per_phone, c.used_count, c.is_active, c.status,
+              c.expires_at, c.created_at,
+              u.name AS crew_name,
+              COALESCE(SUM(cu.order_total), 0)::int AS total_sales,
+              COALESCE(SUM(cc.commission_amount), 0)::numeric AS commission_generated
+       FROM coupons c
+       LEFT JOIN crew_profiles cp ON cp.id = c.crew_profile_id
+       LEFT JOIN users u ON u.id = cp.user_id
+       LEFT JOIN coupon_usages cu ON cu.coupon_id = c.id
+       LEFT JOIN crew_commissions cc ON cc.coupon_id = c.id
+       WHERE c.type = $1
+       GROUP BY c.id, u.name
+       ORDER BY c.created_at DESC`,
       [type]
     )
     return { ok: true, data: { coupons: rows } }
@@ -643,6 +662,9 @@ module.exports = async function adminRoutes(app) {
           discount_value: { type: 'number', minimum: 0 },
           min_order:      { type: 'number', minimum: 0 },
           max_uses:       { type: ['integer', 'null'], minimum: 1 },
+          max_usage_per_phone: { type: ['integer', 'null'], minimum: 1 },
+          status:         { type: 'string', maxLength: 30 },
+          is_active:      { type: 'boolean' },
           expires_at:     { type: ['string', 'null'], maxLength: 30 },
         },
         additionalProperties: false,
@@ -651,13 +673,14 @@ module.exports = async function adminRoutes(app) {
     },
   }, async (req, reply) => {
     const code = req.params.code.toUpperCase()
-    const allowed = ['discount_type', 'discount_value', 'min_order', 'max_uses', 'expires_at']
+    const allowed = ['discount_type', 'discount_value', 'min_order', 'max_uses', 'max_usage_per_phone', 'status', 'is_active', 'expires_at']
     const entries = Object.entries(req.body).filter(([k]) => allowed.includes(k))
     const sets = entries.map(([k], i) => `${k} = $${i + 2}`)
     const vals = entries.map(([k, v]) => k === 'expires_at' ? toEndOfDayDhaka(v) : (v !== '' ? v : null))
     const { rows } = await query(
-      `UPDATE coupons SET ${sets.join(', ')} WHERE code = $1
-       RETURNING id, code, type, discount_type, discount_value, min_order, max_uses, used_count, is_active, expires_at, created_at`,
+      `UPDATE coupons SET ${sets.join(', ')}, updated_at = NOW() WHERE code = $1
+       RETURNING id, code, type, COALESCE(source, type::text) AS source, discount_type, discount_value,
+                 min_order, max_uses, max_usage_per_phone, used_count, is_active, status, expires_at, created_at`,
       [code, ...vals]
     )
     if (!rows.length) throw { code: 'NOT_FOUND', message: 'Coupon not found.' }
@@ -674,6 +697,188 @@ module.exports = async function adminRoutes(app) {
     const { rows } = await query(`DELETE FROM coupons WHERE code = $1 RETURNING code`, [code])
     if (!rows.length) throw { code: 'NOT_FOUND', message: 'Coupon not found.' }
     return reply.code(200).send({ ok: true, data: { code: rows[0].code } })
+  })
+
+  // ── Midnight Crew Management ──────────────────────────────────────────────
+
+  app.get('/crew/applications', async () => {
+    const { rows } = await query(
+      `SELECT ca.*, u.email AS user_email, u.points_balance,
+              COALESCE(c.order_count, 0) AS order_count,
+              COALESCE(c.total_spent, 0) AS total_spent
+       FROM crew_applications ca
+       JOIN users u ON u.id = ca.user_id
+       LEFT JOIN customers c ON c.phone = ca.phone
+       ORDER BY ca.created_at DESC`
+    )
+    return { ok: true, data: { applications: rows } }
+  })
+
+  app.patch('/crew/applications/:id/approve', {
+    schema: { params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } } },
+  }, async (req) => {
+    const result = await withTransaction(async (client) => {
+      const { rows: apps } = await client.query(`SELECT * FROM crew_applications WHERE id = $1 FOR UPDATE`, [req.params.id])
+      if (!apps.length) throw { code: 'NOT_FOUND', message: 'Application not found.' }
+      const appRow = apps[0]
+      const settings = (await client.query(`SELECT * FROM crew_settings WHERE id = 1`)).rows[0]
+      await client.query(
+        `UPDATE crew_applications
+         SET status = 'approved', reviewed_by = $2, reviewed_at = NOW(), updated_at = NOW()
+         WHERE id = $1`,
+        [req.params.id, req.user.sub]
+      )
+      await client.query(`UPDATE users SET role = 'crew', updated_at = NOW() WHERE id = $1`, [appRow.user_id])
+      const { rows: profiles } = await client.query(
+        `INSERT INTO crew_profiles
+           (user_id, status, default_commission_type, default_commission_value,
+            custom_max_pct_discount, custom_max_flat_discount,
+            custom_max_uses_per_coupon, custom_max_usage_per_phone)
+         VALUES ($1, 'active', $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (user_id) DO UPDATE SET status = 'active', updated_at = NOW()
+         RETURNING *`,
+        [appRow.user_id, settings.commission_type, settings.commission_value,
+         settings.max_pct_discount, settings.max_flat_discount,
+         settings.max_uses_per_coupon, settings.max_usage_per_phone]
+      )
+      return profiles[0]
+    })
+    return { ok: true, data: result }
+  })
+
+  app.patch('/crew/applications/:id/reject', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+      body: { type: 'object', properties: { admin_note: { type: 'string', maxLength: 1000 } }, additionalProperties: false },
+    },
+  }, async (req) => {
+    const { rows } = await query(
+      `UPDATE crew_applications
+       SET status = 'rejected', admin_note = $2, reviewed_by = $3, reviewed_at = NOW(), updated_at = NOW()
+       WHERE id = $1 RETURNING *`,
+      [req.params.id, req.body.admin_note || null, req.user.sub]
+    )
+    if (!rows.length) throw { code: 'NOT_FOUND', message: 'Application not found.' }
+    return { ok: true, data: rows[0] }
+  })
+
+  app.get('/crew/members', async () => {
+    const { rows } = await query(
+      `SELECT cp.*, u.name, u.phone, u.email,
+              COUNT(c.id) FILTER (WHERE c.is_active = true AND c.status = 'active')::int AS active_coupon_codes,
+              COUNT(DISTINCT cu.order_id)::int AS referral_orders,
+              COALESCE(SUM(cu.order_total), 0)::int AS total_referral_sales,
+              COALESCE(SUM(cc.commission_amount) FILTER (WHERE cc.status IN ('pending','approved')), 0)::numeric AS pending_commission,
+              COALESCE(SUM(cc.commission_amount) FILTER (WHERE cc.status = 'paid'), 0)::numeric AS paid_commission
+       FROM crew_profiles cp
+       JOIN users u ON u.id = cp.user_id
+       LEFT JOIN coupons c ON c.crew_profile_id = cp.id
+       LEFT JOIN coupon_usages cu ON cu.coupon_id = c.id
+       LEFT JOIN crew_commissions cc ON cc.crew_profile_id = cp.id
+       GROUP BY cp.id, u.id
+       ORDER BY cp.created_at DESC`
+    )
+    return { ok: true, data: { members: rows } }
+  })
+
+  app.patch('/crew/members/:id', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+      body: {
+        type: 'object',
+        properties: {
+          status: { type: 'string', enum: ['active', 'paused', 'disabled'] },
+          custom_max_pct_discount: { type: ['integer', 'null'], minimum: 0 },
+          custom_max_flat_discount: { type: ['integer', 'null'], minimum: 0 },
+          custom_max_uses_per_coupon: { type: ['integer', 'null'], minimum: 1 },
+          custom_max_usage_per_phone: { type: ['integer', 'null'], minimum: 1 },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req) => {
+    const allowed = Object.keys(req.body)
+    if (!allowed.length) throw { code: 'VALIDATION_ERROR', message: 'No fields to update.' }
+    const sets = allowed.map((k, i) => `${k} = $${i + 2}`)
+    const vals = allowed.map(k => req.body[k])
+    const { rows } = await query(
+      `UPDATE crew_profiles SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $1 RETURNING *`,
+      [req.params.id, ...vals]
+    )
+    if (!rows.length) throw { code: 'NOT_FOUND', message: 'Crew member not found.' }
+    if (req.body.status && req.body.status !== 'active') {
+      await query(`UPDATE coupons SET is_active = false, status = 'disabled', updated_at = NOW() WHERE crew_profile_id = $1`, [req.params.id])
+    }
+    return { ok: true, data: rows[0] }
+  })
+
+  app.get('/crew/coupons', async () => {
+    const { rows } = await query(
+      `SELECT c.id, c.code, COALESCE(c.source, c.type::text) AS source, c.discount_type,
+              c.discount_value, c.min_order, c.max_uses, c.max_usage_per_phone,
+              c.used_count, c.status, c.is_active, c.expires_at, c.created_at,
+              u.name AS crew_member,
+              COUNT(DISTINCT cu.order_id)::int AS usage_orders,
+              COALESCE(SUM(cu.order_total), 0)::int AS total_sales,
+              COALESCE(SUM(cc.commission_amount), 0)::numeric AS commission_generated
+       FROM coupons c
+       LEFT JOIN crew_profiles cp ON cp.id = c.crew_profile_id
+       LEFT JOIN users u ON u.id = cp.user_id
+       LEFT JOIN coupon_usages cu ON cu.coupon_id = c.id
+       LEFT JOIN crew_commissions cc ON cc.coupon_id = c.id
+       WHERE c.type = 'crew'
+       GROUP BY c.id, u.name
+       ORDER BY c.created_at DESC`
+    )
+    return { ok: true, data: { coupons: rows } }
+  })
+
+  app.get('/crew/settings', async () => {
+    const { rows } = await query(`SELECT * FROM crew_settings WHERE id = 1`)
+    return { ok: true, data: rows[0] }
+  })
+
+  app.patch('/crew/settings', async (req) => {
+    const allowed = [
+      'max_pct_discount','max_flat_discount','min_order','max_uses_per_coupon',
+      'max_usage_per_phone','max_active_coupons_per_crew','require_coupon_approval',
+      'allow_crew_edit_active_coupon','allow_crew_deactivate_coupon','allow_coupon_expiry',
+      'allow_reapply_after_rejection','commission_type','commission_value','commission_base',
+      'payout_threshold',
+    ]
+    const entries = Object.entries(req.body || {}).filter(([k]) => allowed.includes(k))
+    if (!entries.length) throw { code: 'VALIDATION_ERROR', message: 'No settings to update.' }
+    const sets = entries.map(([k], i) => `${k} = $${i + 1}`)
+    const vals = entries.map(([, v]) => v)
+    const { rows } = await query(
+      `UPDATE crew_settings SET ${sets.join(', ')}, updated_at = NOW() WHERE id = 1 RETURNING *`,
+      vals
+    )
+    return { ok: true, data: rows[0] }
+  })
+
+  app.get('/crew/commissions', async () => {
+    const { rows } = await query(
+      `SELECT cc.*, u.name AS crew_member, c.code AS coupon_code, o.order_ref
+       FROM crew_commissions cc
+       JOIN users u ON u.id = cc.user_id
+       JOIN coupons c ON c.id = cc.coupon_id
+       JOIN orders o ON o.id = cc.order_id
+       ORDER BY cc.created_at DESC`
+    )
+    return { ok: true, data: { commissions: rows } }
+  })
+
+  app.patch('/crew/commissions/:id/mark-paid', {
+    schema: { params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } } },
+  }, async (req) => {
+    const { rows } = await query(
+      `UPDATE crew_commissions SET status = 'paid', paid_at = NOW(), updated_at = NOW()
+       WHERE id = $1 RETURNING *`,
+      [req.params.id]
+    )
+    if (!rows.length) throw { code: 'NOT_FOUND', message: 'Commission not found.' }
+    return { ok: true, data: rows[0] }
   })
 
   // ── Point Rewards CRUD ──────────────────────────────────────────────────────

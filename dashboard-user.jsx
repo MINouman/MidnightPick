@@ -84,6 +84,15 @@ function getGreeting() {
   if (h < 21) return "Good evening";
   return "Good night";
 }
+function money(n) {
+  return `৳${Number(n || 0).toLocaleString()}`;
+}
+function crewState(crew, user) {
+  if (crew?.profile && user?.role === "crew") return "approved";
+  if (crew?.application?.status === "pending") return "pending";
+  if (crew?.application?.status === "rejected") return "rejected";
+  return "none";
+}
 
 // ── Status Badge ──────────────────────────────────────────────
 function StatusBadge({ status }) {
@@ -117,10 +126,11 @@ function Sheet({ title, body, onConfirm, confirmLabel = "Confirm", onClose, chil
 
 // ── HOME TAB ──────────────────────────────────────────────────
 function HomeTab({ setTab }) {
-  const { user, orders } = useContext(DashCtx);
+  const { user, orders, crew } = useContext(DashCtx);
   const pts       = user?.points_balance || 0;
   const lastOrder = orders[0];
-  const isCrew    = user?.role === "crew";
+  const state     = crewState(crew, user);
+  const isCrew    = state === "approved";
   const threshold = 1000;
   const pct       = Math.min(100, Math.round((pts / threshold) * 100));
   const toNext    = Math.max(0, threshold - pts);
@@ -179,6 +189,10 @@ function HomeTab({ setTab }) {
               View All Orders
             </button>
           </div>
+
+          <div className="mobile-only">
+            <CrewHomeCard state={state} crew={crew} setTab={setTab} compact />
+          </div>
         </div>
 
         {/* Right column */}
@@ -214,22 +228,59 @@ function HomeTab({ setTab }) {
             </div>
           </div>
 
-          {/* Crew CTA */}
-          {!isCrew ? (
-            <div className="crew-banner">
-              <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>Join the Midnight Crew</div>
-              <div className="text-sm text-muted mb12">Earn points for every friend you refer.</div>
-              <button className="btn btn-primary btn-sm">Apply Now</button>
-            </div>
-          ) : (
-            <div className="crew-banner">
-              <div className="eyebrow">Midnight Crew</div>
-              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>You're in.</div>
-              <a href="dashboard-crew.html" className="btn btn-primary btn-sm">Crew Dashboard →</a>
-            </div>
-          )}
+          <div className="desktop-only">
+            <CrewHomeCard state={state} crew={crew} setTab={setTab} />
+          </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function CrewHomeCard({ state, crew, setTab, compact = false }) {
+  const summary = crew?.summary || {};
+  const copy = {
+    none: {
+      title: "Join the Midnight Crew",
+      body: "Earn rewards when friends order with your code.",
+      cta: "Apply to Join",
+    },
+    pending: {
+      title: "Crew Application Pending",
+      body: "We're reviewing your application. You'll be notified once approved.",
+      cta: "View Application",
+    },
+    rejected: {
+      title: "Application Not Approved Yet",
+      body: "You can contact support or reapply if available.",
+      cta: "Apply Again",
+    },
+    approved: {
+      title: "Midnight Crew",
+      body: "Create codes, track referrals, and view your earnings.",
+      cta: "Open Crew Tools",
+    },
+  }[state] || {};
+
+  return (
+    <div className="crew-banner" style={compact ? { marginTop: 0 } : null}>
+      <div className="row-between mb8" style={{ alignItems: "flex-start", gap: 12 }}>
+        <div>
+          <div className="eyebrow">{state === "approved" ? "Referral Studio" : "Midnight Crew"}</div>
+          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>{copy.title}</div>
+          <div className="text-sm text-muted">{copy.body}</div>
+        </div>
+        <i className="fa fa-fire" style={{ fontSize: 24, color: "var(--orange)", opacity: .65 }} />
+      </div>
+      {state === "approved" && !compact && (
+        <div className="grid-2 mb12">
+          <div><div className="profile-label">Active codes</div><div className="profile-value">{summary.active_codes || 0}</div></div>
+          <div><div className="profile-label">Referral orders</div><div className="profile-value">{summary.referral_orders || 0}</div></div>
+          <div><div className="profile-label">Estimated commission</div><div className="profile-value">{money(summary.total_commission)}</div></div>
+          <div><div className="profile-label">Pending payout</div><div className="profile-value">{money(summary.pending_payout)}</div></div>
+        </div>
+      )}
+      <button className="btn btn-primary btn-sm" onClick={() => setTab("crew")}>{copy.cta}</button>
     </div>
   );
 }
@@ -893,11 +944,291 @@ function PointsTab() {
   );
 }
 
+// ── CREW TAB ─────────────────────────────────────────────────
+const CREW_METHODS = ["Friends & family", "Facebook", "Instagram", "TikTok", "WhatsApp groups", "Campus / office", "Other"];
+const CREW_COUPON_BLANK = { code: "", discount_type: "pct", discount_value: "", max_uses: "", expires_at: "", internal_note: "" };
+
+function CrewTab() {
+  const { user, crew, reload } = useContext(DashCtx);
+  const state = crewState(crew, user);
+  const [sheet, setSheet] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [applyForm, setApplyForm] = useState({
+    name: user?.name || "",
+    phone: user?.phone || "",
+    social_link: "",
+    reason: "",
+    sharing_methods: [],
+  });
+  const [coupons, setCoupons] = useState([]);
+  const [activity, setActivity] = useState([]);
+  const [commissions, setCommissions] = useState([]);
+  const [couponForm, setCouponForm] = useState(CREW_COUPON_BLANK);
+  const [couponError, setCouponError] = useState("");
+  const settings = crew?.settings || {};
+  const profile = crew?.profile || {};
+  const maxPct = profile.custom_max_pct_discount ?? settings.max_pct_discount ?? 10;
+  const maxFlat = profile.custom_max_flat_discount ?? settings.max_flat_discount ?? 100;
+  const maxUses = profile.custom_max_uses_per_coupon ?? settings.max_uses_per_coupon ?? 50;
+  const maxPhone = profile.custom_max_usage_per_phone ?? settings.max_usage_per_phone ?? 1;
+
+  useEffect(() => {
+    if (state !== "approved") return;
+    Promise.all([
+      mpApi.fetch("/me/crew/coupons").catch(() => null),
+      mpApi.fetch("/me/crew/activity").catch(() => null),
+      mpApi.fetch("/me/crew/commissions").catch(() => null),
+    ]).then(([cRes, aRes, mRes]) => {
+      setCoupons(cRes?.data?.coupons || []);
+      setActivity(aRes?.data?.activity || []);
+      setCommissions(mRes?.data?.commissions || []);
+    });
+  }, [state]);
+
+  function toggleMethod(method) {
+    setApplyForm(f => ({
+      ...f,
+      sharing_methods: f.sharing_methods.includes(method)
+        ? f.sharing_methods.filter(x => x !== method)
+        : [...f.sharing_methods, method],
+    }));
+  }
+
+  async function submitApplication() {
+    if (!applyForm.name.trim() || !applyForm.phone.trim()) return;
+    setBusy(true);
+    try {
+      const res = await mpApi.fetch("/me/crew/apply", {
+        method: "POST",
+        body: JSON.stringify({
+          ...applyForm,
+          name: applyForm.name.trim(),
+          phone: applyForm.phone.trim(),
+        }),
+      });
+      if (res?.ok) {
+        setSheet("submitted");
+        reload();
+      } else {
+        Swal.fire({ title: "Could not apply", text: res?.error?.message || "Please try again.", icon: "error", confirmButtonColor: "#FF9100" });
+      }
+    } finally { setBusy(false); }
+  }
+
+  function validateCouponForm() {
+    const val = Number(couponForm.discount_value || 0);
+    const uses = Number(couponForm.max_uses || 0);
+    if (!couponForm.code.trim()) return "Coupon code is required.";
+    if (couponForm.discount_type === "pct" && val > maxPct) return `Maximum allowed discount is ${maxPct}%.`;
+    if (couponForm.discount_type === "flat" && val > maxFlat) return `Maximum allowed flat discount is ৳${maxFlat}.`;
+    if (uses > maxUses) return `Maximum allowed usage is ${maxUses} orders.`;
+    if (!val || !uses) return "Discount value and maximum orders are required.";
+    return "";
+  }
+
+  async function createCoupon() {
+    const msg = validateCouponForm();
+    if (msg) { setCouponError(msg); return; }
+    setBusy(true); setCouponError("");
+    try {
+      const res = await mpApi.fetch("/me/crew/coupons", {
+        method: "POST",
+        body: JSON.stringify({
+          code: couponForm.code.trim().toUpperCase(),
+          discount_type: couponForm.discount_type,
+          discount_value: Number(couponForm.discount_value),
+          max_uses: Number(couponForm.max_uses),
+          expires_at: couponForm.expires_at || undefined,
+          internal_note: couponForm.internal_note || undefined,
+        }),
+      });
+      if (res?.ok) {
+        setCoupons(prev => [res.data, ...prev]);
+        setCouponForm(CREW_COUPON_BLANK);
+        Swal.fire({
+          title: res.data.status === "pending_approval" ? "Coupon submitted for approval" : "Coupon created",
+          text: res.data.status === "pending_approval" ? "You'll see it here once approved." : "Share it with your circle.",
+          icon: "success",
+          confirmButtonColor: "#FF9100",
+        });
+      } else {
+        setCouponError(res?.error?.message || "Could not create coupon.");
+      }
+    } finally { setBusy(false); }
+  }
+
+  async function toggleCoupon(c) {
+    const res = await mpApi.fetch(`/me/crew/coupons/${c.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ is_active: !c.is_active }),
+    }).catch(() => null);
+    if (res?.ok) setCoupons(prev => prev.map(x => x.id === c.id ? res.data : x));
+  }
+
+  function copyCode(code) {
+    navigator.clipboard?.writeText(code);
+    Swal.fire({ title: "Code copied", timer: 900, showConfirmButton: false, icon: "success" });
+  }
+
+  function shareCode(code) {
+    window.open(`https://wa.me/?text=${encodeURIComponent(`Use my Midnight Pick code ${code} when you order coffee.`)}`, "_blank", "noopener,noreferrer");
+  }
+
+  if (state !== "approved") {
+    const pending = state === "pending";
+    const rejected = state === "rejected";
+    return (
+      <div style={{ maxWidth: 720 }}>
+        <div className="page-title">Crew</div>
+        <div className="page-sub">Share Midnight Pick with your circle and earn rewards when people order using your code.</div>
+        <div className="crew-banner mb16">
+          <div className="row mb8" style={{ gap: 10 }}>
+            <i className="fa fa-fire text-orange" style={{ fontSize: 18 }} />
+            <span style={{ fontWeight: 700, fontSize: 16 }}>{pending ? "Application Pending" : rejected ? "Application Not Approved Yet" : "Join the Midnight Crew"}</span>
+          </div>
+          <div className="text-sm text-muted mb14">
+            {pending ? "We're reviewing your request." : rejected ? "You can contact support or reapply if available." : "Earn rewards when friends order with your code."}
+          </div>
+          {pending ? (
+            <button className="btn btn-ghost btn-sm" onClick={() => setSheet("view")}>View Application</button>
+          ) : (
+            <button className="btn btn-primary btn-sm" onClick={() => setSheet("apply")}>{rejected ? "Apply Again" : "Apply to Join"}</button>
+          )}
+        </div>
+
+        {(sheet === "apply" || sheet === "view") && (
+          <div className="overlay" onClick={() => setSheet(null)}>
+            <div className="sheet" onClick={e => e.stopPropagation()}>
+              <div className="sheet-handle" />
+              <div className="sheet-title">Apply for Midnight Crew</div>
+              <div className="sheet-body">Share Midnight Pick with your circle and earn rewards when people order using your code.</div>
+              {pending ? (
+                <div className="card" style={{ marginBottom: 14 }}>
+                  <div className="eyebrow">Application submitted</div>
+                  <div className="text-sm text-muted">We'll review your request and notify you once approved.</div>
+                </div>
+              ) : (
+                <>
+                  <div className="input-group"><label className="input-label">Full name</label><input className="input" value={applyForm.name} onChange={e => setApplyForm(f => ({ ...f, name: e.target.value }))} /></div>
+                  <div className="input-group"><label className="input-label">Phone number</label><input className="input" value={applyForm.phone} readOnly={!!user?.phone} onChange={e => setApplyForm(f => ({ ...f, phone: e.target.value }))} /></div>
+                  <div className="input-group"><label className="input-label">Facebook / Instagram / TikTok profile link</label><input className="input" value={applyForm.social_link} onChange={e => setApplyForm(f => ({ ...f, social_link: e.target.value }))} placeholder="Optional" /></div>
+                  <div className="input-group"><label className="input-label">Why do you want to join?</label><textarea className="input" rows={2} value={applyForm.reason} onChange={e => setApplyForm(f => ({ ...f, reason: e.target.value }))} placeholder="Optional" /></div>
+                  <div className="input-group">
+                    <label className="input-label">How will you share Midnight Pick?</label>
+                    <div className="filter-row">
+                      {CREW_METHODS.map(m => <button key={m} className={`pill ${applyForm.sharing_methods.includes(m) ? "active" : ""}`} onClick={() => toggleMethod(m)}>{m}</button>)}
+                    </div>
+                  </div>
+                  <div className="input-note mb12">Applying does not guarantee approval. Crew codes are activated after admin review.</div>
+                  <button className="btn btn-primary btn-full" disabled={busy || !applyForm.name || !applyForm.phone} onClick={submitApplication}>{busy ? "Submitting..." : "Submit Application"}</button>
+                </>
+              )}
+              <button className="btn btn-ghost btn-full mt10" onClick={() => setSheet(null)}>Close</button>
+            </div>
+          </div>
+        )}
+
+        {sheet === "submitted" && (
+          <Sheet
+            title="Application submitted"
+            body="We'll review your request and notify you once approved."
+            confirmLabel="Done"
+            onConfirm={() => setSheet(null)}
+            onClose={() => setSheet(null)}
+          />
+        )}
+      </div>
+    );
+  }
+
+  const summary = crew?.summary || {};
+  const paid = commissions.filter(c => c.status === "paid").reduce((s, c) => s + Number(c.commission_amount || 0), 0);
+  const approved = commissions.filter(c => c.status === "approved").reduce((s, c) => s + Number(c.commission_amount || 0), 0);
+  const pending = commissions.filter(c => c.status === "pending").reduce((s, c) => s + Number(c.commission_amount || 0), 0);
+  const totalEarned = commissions.filter(c => c.status !== "reversed").reduce((s, c) => s + Number(c.commission_amount || 0), 0);
+
+  return (
+    <div>
+      <div className="page-title">Midnight Crew</div>
+      <div className="page-sub">Create codes, track referrals, and view earnings.</div>
+
+      <div className="stat-row mb16">
+        <div className="stat-card"><div className="stat-label">Referral Orders</div><div className="stat-value">{summary.referral_orders || 0}</div></div>
+        <div className="stat-card"><div className="stat-label">Total Sales</div><div className="stat-value">{money(summary.total_sales)}</div></div>
+        <div className="stat-card"><div className="stat-label">Estimated Commission</div><div className="stat-value">{money(summary.total_commission)}</div></div>
+        <div className="stat-card"><div className="stat-label">Active Codes</div><div className="stat-value">{summary.active_codes || 0}</div></div>
+      </div>
+
+      <div className="home-grid">
+        <div className="card">
+          <div className="eyebrow mb10">Create Crew Coupon</div>
+          <div className="input-note mb12">Your limits: up to {maxPct}% or ৳{maxFlat} discount, max {maxUses} orders, {maxPhone} use per phone.</div>
+          <div className="grid-2">
+            <div className="input-group"><label className="input-label">Code</label><input className="input" value={couponForm.code} onChange={e => setCouponForm(f => ({ ...f, code: e.target.value.toUpperCase() }))} placeholder="MIDNIGHT10" /></div>
+            <div className="input-group"><label className="input-label">Discount type</label><select className="select" value={couponForm.discount_type} onChange={e => setCouponForm(f => ({ ...f, discount_type: e.target.value }))}><option value="pct">Percentage</option><option value="flat">Flat amount</option></select></div>
+            <div className="input-group"><label className="input-label">Discount value</label><input className="input" type="number" value={couponForm.discount_value} onChange={e => setCouponForm(f => ({ ...f, discount_value: e.target.value }))} /></div>
+            <div className="input-group"><label className="input-label">Maximum orders</label><input className="input" type="number" value={couponForm.max_uses} onChange={e => setCouponForm(f => ({ ...f, max_uses: e.target.value }))} /></div>
+            {settings.allow_coupon_expiry !== false && <div className="input-group"><label className="input-label">Expiry date</label><input className="input" type="date" value={couponForm.expires_at} onChange={e => setCouponForm(f => ({ ...f, expires_at: e.target.value }))} /></div>}
+            <div className="input-group"><label className="input-label">Internal note</label><input className="input" value={couponForm.internal_note} onChange={e => setCouponForm(f => ({ ...f, internal_note: e.target.value }))} placeholder="Optional" /></div>
+          </div>
+          {couponError && <div className="input-note mb12" style={{ color: "var(--red)" }}>{couponError}</div>}
+          <button className="btn btn-primary btn-full" disabled={busy} onClick={createCoupon}>{busy ? "Creating..." : "Create Coupon"}</button>
+        </div>
+
+        <div>
+          <div className="eyebrow mb10">My Coupon Codes</div>
+          {coupons.length === 0 ? (
+            <div className="card text-sm text-muted">Your crew coupon codes will appear here.</div>
+          ) : coupons.map(c => (
+            <div key={c.id} className="card mb10">
+              <div className="row-between mb8">
+                <span className="mono" style={{ fontWeight: 700, color: "var(--orange)" }}>{c.code}</span>
+                <span className={`badge ${c.status === "active" ? "badge-green" : c.status === "pending_approval" ? "badge-orange" : "badge-gray"}`}>{c.status === "pending_approval" ? "Pending Approval" : fmtStatus(c.status)}</span>
+              </div>
+              <div className="text-sm text-muted mb10">{c.discount_type === "pct" ? `${c.discount_value}%` : `৳${c.discount_value}`} off · {c.used_count || 0}/{c.max_uses || "∞"} orders</div>
+              <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                <button className="btn btn-ghost btn-sm" onClick={() => copyCode(c.code)}>Copy</button>
+                <button className="btn btn-ghost btn-sm" onClick={() => shareCode(c.code)}><i className="fab fa-whatsapp" /> Share</button>
+                {settings.allow_crew_deactivate_coupon !== false && <button className="btn btn-ghost btn-sm" onClick={() => toggleCoupon(c)}>{c.is_active ? "Deactivate" : "Activate"}</button>}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="card mt16">
+        <div className="eyebrow mb10">Referral Activity</div>
+        {activity.length === 0 ? <div className="text-sm text-muted">Referral orders will appear after customers use your codes.</div> : (
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead><tr><th>Order</th><th>Date</th><th>Customer</th><th>Code</th><th>Total</th><th>Discount</th><th>Commission</th><th>Status</th></tr></thead>
+              <tbody>{activity.map((a, i) => (
+                <tr key={i}><td>{a.order_ref}</td><td>{fmtDate(a.created_at)}</td><td>{a.customer_name || (a.customer_phone ? `${String(a.customer_phone).slice(0, 5)}••••` : "Customer")}</td><td>{a.coupon_code}</td><td>{money(a.total)}</td><td>{money(a.discount_amount)}</td><td>{money(a.commission_amount)}</td><td><StatusBadge status={fmtStatus(a.status)} /></td></tr>
+              ))}</tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className="card mt16">
+        <div className="eyebrow mb10">Payout / Commission Summary</div>
+        <div className="grid-2">
+          <div><div className="profile-label">Total earned</div><div className="profile-value">{money(totalEarned)}</div></div>
+          <div><div className="profile-label">Pending commission</div><div className="profile-value">{money(pending)}</div></div>
+          <div><div className="profile-label">Approved commission</div><div className="profile-value">{money(approved)}</div></div>
+          <div><div className="profile-label">Paid commission</div><div className="profile-value">{money(paid)}</div></div>
+        </div>
+        <div className="input-note mt12">Payout management is handled by Midnight Pick admin.</div>
+      </div>
+    </div>
+  );
+}
+
 // ── ACCOUNT TAB ───────────────────────────────────────────────
 const ADDR_BLANK = { label: "", line1: "", line2: "", city: "", area: "", is_default: false };
 const PM_BLANK   = { type: "bkash", number: "", is_default: false };
 
-function AccountTab() {
+function AccountTab({ setTab }) {
   const { user, addresses, paymentMethods, reload } = useContext(DashCtx);
   const [editing, setEditing]   = useState(false);
   const [profile, setProfile]   = useState({ name: user?.name || "", email: user?.email || "" });
@@ -1153,7 +1484,7 @@ function AccountTab() {
             <i className="fa fa-fire text-orange" style={{ fontSize: 18 }} />
             <span style={{ fontWeight: 700, fontSize: 15 }}>Midnight Crew Member</span>
           </div>
-          <a href="dashboard-crew.html" className="btn btn-primary btn-sm">Crew Dashboard →</a>
+          <button className="btn btn-primary btn-sm" onClick={() => setTab("crew")}>Open Crew Tools</button>
         </div>
       )}
 
@@ -1330,6 +1661,7 @@ function Sidebar({ tab, setTab }) {
     { id: "orders",       icon: "fa-box",            label: "Orders" },
     { id: "subscription", icon: "fa-calendar-check", label: "Plan" },
     { id: "points",       icon: "fa-star",           label: "Points" },
+    { id: "crew",         icon: "fa-fire",           label: "Crew" },
     { id: "account",      icon: "fa-user",           label: "Account" },
   ];
 
@@ -1359,16 +1691,6 @@ function Sidebar({ tab, setTab }) {
               <span>{l.label}</span>
             </div>
           ))}
-
-          {isCrew && (
-            <>
-              <div className="sidebar-section-label">Crew</div>
-              <a href="dashboard-crew.html" className="sidebar-link">
-                <i className="fa fa-fire s-icon" />
-                <span>Crew Dashboard</span>
-              </a>
-            </>
-          )}
 
           <div className="sidebar-section-label">Website</div>
           <a href="index.html" className="sidebar-link">
@@ -1456,12 +1778,13 @@ function UserDashboard() {
 
   async function loadData() {
     try {
-      const [me, ordersRes, addrsRes, pmsRes, ptsRes] = await Promise.all([
+      const [me, ordersRes, addrsRes, pmsRes, ptsRes, crewRes] = await Promise.all([
         mpApi.fetch("/me"),
         mpApi.fetch("/orders?limit=20"),
         mpApi.fetch("/me/addresses"),
         mpApi.fetch("/me/payment-methods"),
         mpApi.fetch("/me/points/history?limit=30"),
+        mpApi.fetch("/me/crew").catch(() => null),
       ]);
       setData({
         user:           me?.data || null,
@@ -1469,6 +1792,7 @@ function UserDashboard() {
         addresses:      addrsRes?.data || [],
         paymentMethods: pmsRes?.data  || [],
         pointsHistory:  ptsRes?.data?.transactions || [],
+        crew:           crewRes?.data || null,
         loading: false,
       });
     } catch {
@@ -1491,7 +1815,8 @@ function UserDashboard() {
       case "orders":       return <OrdersTab />;
       case "subscription": return <SubscriptionTab />;
       case "points":       return <PointsTab />;
-      case "account":      return <AccountTab />;
+      case "crew":         return <CrewTab />;
+      case "account":      return <AccountTab setTab={setTab} />;
       default:             return null;
     }
   }

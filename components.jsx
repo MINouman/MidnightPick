@@ -926,7 +926,7 @@ const API_BASE = "http://localhost:3000/api/v1";
 
 const ROLE_ROUTES = {
   user:       "dashboard-user.html",
-  crew:       "dashboard-crew.html",
+  crew:       "dashboard-user.html",
   influencer: "dashboard-influencer.html",
   admin:      "dashboard-admin.html",
 };

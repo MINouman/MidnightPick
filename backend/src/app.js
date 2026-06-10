@@ -85,6 +85,9 @@ async function build() {
     SUBSCRIPTION_EXISTS: 409,
     ALREADY_REVIEWED:    409,
     NOT_ELIGIBLE:        403,
+    VALIDATION_ERROR:    400,
+    COUPON_TAKEN:        409,
+    DUPLICATE_APPLICATION: 409,
   }
 
   app.setErrorHandler((err, req, reply) => {

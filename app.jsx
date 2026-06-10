@@ -25,7 +25,7 @@ function applyPalette(name) {
 }
 
 // ----------------- nav -----------------
-const ROLE_DASH = { user: "dashboard-user.html", crew: "dashboard-crew.html", influencer: "dashboard-influencer.html", admin: "dashboard-admin.html" };
+const ROLE_DASH = { user: "dashboard-user.html", crew: "dashboard-user.html", influencer: "dashboard-influencer.html", admin: "dashboard-admin.html" };
 
 function getAuthState() {
   try {
@@ -1068,7 +1068,6 @@ function App() {
       {/* <Pricing onSubscribe={() => setModalOpen(true)} /> */}
       <FAQ onTrack={() => setTrackOpen(true)} />
       <Footer onTrack={() => setTrackOpen(true)} />
-      <StickyCart cartCount={cart.length} onShop={onShop} />
       <ToastStack toasts={toasts} />
       <SubscribeModal open={modalOpen} onClose={() => setModalOpen(false)} />
       <TrackOrderModal open={trackOpen} onClose={() => setTrackOpen(false)} />
