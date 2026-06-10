@@ -2,16 +2,11 @@
 
 const { query, withTransaction } = require('../config/db')
 const { sendOrderConfirmation }  = require('../services/sms')
-const { calculatePointsForOrder, awardPoints } = require('../services/points')
-const { syncCommissionForDeliveredOrder, reverseCommissionForOrder } = require('../services/crew')
-
-// Convert a date-only string (YYYY-MM-DD) to end-of-day in Dhaka time (UTC+6).
-// Full datetime strings are passed through unchanged.
-function toEndOfDayDhaka(dateStr) {
-  if (!dateStr) return null
-  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return `${dateStr}T23:59:59+06:00`
-  return dateStr
-}
+const { calculatePointsForOrder, awardPoints, reversePoints } = require('../services/points')
+const { syncCommissionForDeliveredOrder, reverseCommissionForOrder, validateCoupon, recordCouponUsage, restoreCouponUsageForOrder } = require('../services/crew')
+const { toEndOfDayDhaka } = require('../services/dates')
+const { normalizeBdMobile } = require('../services/phone')
+const { generateOrderRef } = require('../services/orders')
 
 module.exports = async function adminRoutes(app) {
 
@@ -86,12 +81,18 @@ module.exports = async function adminRoutes(app) {
 
     const result = await withTransaction(async (client) => {
       const { rows: prev } = await client.query(
-        `SELECT id, order_ref, status, user_id, total, points_earned
+        `SELECT id, order_ref, status, user_id, total, points_earned, coupon_code
          FROM orders WHERE id = $1 FOR UPDATE`,
         [orderId]
       )
       if (!prev.length) throw { code: 'NOT_FOUND', message: 'Order not found.' }
       const order = prev[0]
+
+      // Cancellation released stock, coupon caps and rewards — reopening would
+      // need to re-take all of them and can silently oversell. Hard stop.
+      if (order.status === 'cancelled' && newStatus !== 'cancelled') {
+        throw { code: 'VALIDATION_ERROR', message: 'Cancelled orders cannot be reopened. Create a new order instead.' }
+      }
 
       const { rows: updated } = await client.query(
         `UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2
@@ -113,8 +114,34 @@ module.exports = async function adminRoutes(app) {
       }
       if (newStatus === 'delivered') {
         await syncCommissionForDeliveredOrder(client, orderId)
-      } else if (newStatus === 'cancelled') {
+      } else if (newStatus === 'cancelled' && order.status !== 'cancelled') {
+        // Mirror customer cancellation: return variant stock, free coupon
+        // caps, reverse commission and claw back loyalty points.
+        const { rows: items } = await client.query(
+          `SELECT variant_id, product_id, qty FROM order_items WHERE order_id = $1`,
+          [orderId]
+        )
+        for (const item of items) {
+          if (item.variant_id) {
+            await client.query(
+              `UPDATE product_variants SET stock = stock + $2 WHERE id = $1`,
+              [item.variant_id, item.qty]
+            )
+          } else if (item.product_id) {
+            await client.query(
+              `UPDATE products SET stock = stock + $2 WHERE id = $1`,
+              [item.product_id, item.qty]
+            )
+          }
+        }
+        if (order.coupon_code) {
+          await restoreCouponUsageForOrder(client, orderId, order.coupon_code)
+        }
         await reverseCommissionForOrder(client, orderId)
+        if (order.user_id && Number(order.points_earned) > 0) {
+          await reversePoints(client, order.user_id, order.points_earned, `Order #${order.order_ref} cancelled`, order.id)
+          await client.query(`UPDATE orders SET points_earned = 0 WHERE id = $1`, [orderId])
+        }
       }
 
       return updated[0]
@@ -236,7 +263,7 @@ module.exports = async function adminRoutes(app) {
          FROM   orders      o
          JOIN   coupons     c ON c.code = o.coupon_code AND c.type = 'influencer'
          JOIN   influencers i ON i.code = c.code
-         WHERE  o.status != 'cancelled'
+         WHERE  o.status = 'delivered'
            AND  o.created_at >= $1::date
            AND  o.created_at <  $1::date + INTERVAL '1 month'`,
         [monthStart]
@@ -262,7 +289,7 @@ module.exports = async function adminRoutes(app) {
     }
   })
 
-  // GET /admin/coupons/validate?code=XXX&subtotal=YYY
+  // GET /admin/coupons/validate?code=XXX&subtotal=YYY&phone=01XXXXXXXXX
   app.get('/coupons/validate', {
     schema: {
       querystring: {
@@ -271,23 +298,16 @@ module.exports = async function adminRoutes(app) {
         properties: {
           code:     { type: 'string', maxLength: 20 },
           subtotal: { type: 'number', minimum: 0 },
+          phone:    { type: 'string', maxLength: 20 },
         },
       },
     },
   }, async (req) => {
-    const { code, subtotal } = req.query
-    const { rows } = await query(
-      `SELECT * FROM coupons WHERE code = $1 AND is_active = true`,
-      [code.toUpperCase()]
-    )
-    if (!rows.length) throw { code: 'INVALID_COUPON', message: 'Coupon not found or inactive.' }
-    const c = rows[0]
-    if (c.expires_at && new Date(c.expires_at) < new Date()) throw { code: 'INVALID_COUPON', message: 'Coupon has expired.' }
-    if (c.max_uses && c.used_count >= c.max_uses) throw { code: 'INVALID_COUPON', message: 'Coupon usage limit reached.' }
-    if (subtotal < c.min_order) throw { code: 'COUPON_MIN_ORDER', message: `Minimum order of ৳${c.min_order} required.` }
-    const discount = c.discount_type === 'pct'
-      ? Math.round((subtotal * c.discount_value) / 100)
-      : Math.min(c.discount_value, subtotal)
+    const { code, subtotal, phone } = req.query
+    let customerPhone = null
+    if (phone) { try { customerPhone = normalizeBdMobile(phone) } catch { customerPhone = phone } }
+    // Same validation path as customer checkout (crew status, expiry, per-phone cap)
+    const { coupon: c, discount } = await validateCoupon({ query }, { code, subtotal, customerPhone })
     return { ok: true, data: { code: c.code, discount, discount_type: c.discount_type, discount_value: c.discount_value } }
   })
 
@@ -309,7 +329,11 @@ module.exports = async function adminRoutes(app) {
     )
 
     const { rows } = await query(
-      `UPDATE coupons SET is_active = NOT is_active WHERE code = $1 RETURNING code, type, is_active`,
+      `UPDATE coupons
+       SET is_active = NOT is_active,
+           disabled_by = CASE WHEN is_active THEN 'admin' ELSE NULL END,
+           updated_at = NOW()
+       WHERE code = $1 RETURNING code, type, is_active`,
       [code]
     )
     if (!rows.length) throw { code: 'NOT_FOUND', message: 'Coupon not found.' }
@@ -407,12 +431,40 @@ module.exports = async function adminRoutes(app) {
 
     const addressSnapshot = JSON.stringify({ address: address || 'Walk-in / Manual Order' })
     const subtotal        = items.reduce((s, it) => s + Math.round(it.unit_price * it.qty), 0)
-    const discountInt     = Math.round(discount_amount)
-    const total           = Math.max(0, subtotal - discountInt)
+
+    // Per-phone coupon caps are tracked against normalized numbers (customer checkout
+    // does the same) — normalize best-effort, fall back to the raw value.
+    let couponPhone = customer_phone || null
+    if (couponPhone) { try { couponPhone = normalizeBdMobile(couponPhone) } catch { /* keep raw */ } }
 
     const order = await withTransaction(async (client) => {
-      const { rows: [{ seq }] } = await client.query(`SELECT nextval('order_ref_seq') AS seq`)
-      const orderRef = `MP-${seq}`
+      // Manual orders go through the same coupon machinery as customer orders:
+      // validate under lock, compute the discount server-side, record the usage.
+      let coupon = null
+      let discountInt = Math.min(Math.round(discount_amount), subtotal)
+      if (coupon_code) {
+        const v = await validateCoupon(client, { code: coupon_code, subtotal, customerPhone: couponPhone, lock: true })
+        coupon = v.coupon
+        discountInt = v.discount
+      }
+      const total = Math.max(0, subtotal - discountInt)
+
+      // Decrement stock for items that reference a real product, same as
+      // customer checkout. Orders entered as already-cancelled skip this.
+      if (status !== 'cancelled') {
+        for (const it of items) {
+          const { rows: p } = await client.query(
+            `SELECT stock FROM products WHERE id = $1 FOR UPDATE`, [it.id]
+          )
+          if (!p.length) continue  // free-form line item, no inventory to track
+          if (Number(p[0].stock) < it.qty) {
+            throw { code: 'INSUFFICIENT_STOCK', message: `Not enough stock for "${it.name}".` }
+          }
+          await client.query(`UPDATE products SET stock = stock - $2 WHERE id = $1`, [it.id, it.qty])
+        }
+      }
+
+      const orderRef = await generateOrderRef(client)
 
       const { rows: [o] } = await client.query(
         `INSERT INTO orders
@@ -425,7 +477,7 @@ module.exports = async function adminRoutes(app) {
                    customer_name, customer_phone`,
         [orderRef, customer_name, customer_phone || null,
          addressSnapshot, paymentEnum, paymentNumber,
-         coupon_code || null, discountInt, subtotal, total, status, notes || null]
+         coupon ? coupon.code : null, discountInt, subtotal, total, status, notes || null]
       )
 
       for (const it of items) {
@@ -434,6 +486,22 @@ module.exports = async function adminRoutes(app) {
            VALUES ($1, $2, $3, $4, $5, $6)`,
           [o.id, it.id, it.name, it.qty, Math.round(it.unit_price), Math.round(it.unit_price * it.qty)]
         )
+      }
+
+      // An order entered as already-cancelled must not burn coupon caps
+      if (coupon && status !== 'cancelled') {
+        await recordCouponUsage(client, {
+          coupon,
+          orderId: o.id,
+          userId: null,
+          customerPhone: couponPhone,
+          discountAmount: discountInt,
+          orderTotal: total,
+        })
+      }
+      // Manual orders can be entered as already delivered
+      if (status === 'delivered') {
+        await syncCommissionForDeliveredOrder(client, o.id)
       }
 
       return o
@@ -601,21 +669,24 @@ module.exports = async function adminRoutes(app) {
     },
   }, async (req) => {
     const type = req.query.type || 'festival'
+    // Usages and commissions aggregated separately — joining both raw tables
+    // fans out and multiplies the sums.
     const { rows } = await query(
       `SELECT c.id, c.code, c.type, COALESCE(c.source, c.type::text) AS source,
               c.discount_type, c.discount_value, c.min_order, c.max_uses,
               c.max_usage_per_phone, c.used_count, c.is_active, c.status,
               c.expires_at, c.created_at,
               u.name AS crew_name,
-              COALESCE(SUM(cu.order_total), 0)::int AS total_sales,
-              COALESCE(SUM(cc.commission_amount), 0)::numeric AS commission_generated
+              COALESCE(cu.total_sales, 0)::int AS total_sales,
+              COALESCE(cc.commission_generated, 0)::numeric AS commission_generated
        FROM coupons c
        LEFT JOIN crew_profiles cp ON cp.id = c.crew_profile_id
        LEFT JOIN users u ON u.id = cp.user_id
-       LEFT JOIN coupon_usages cu ON cu.coupon_id = c.id
-       LEFT JOIN crew_commissions cc ON cc.coupon_id = c.id
+       LEFT JOIN (SELECT coupon_id, SUM(order_total) AS total_sales
+                  FROM coupon_usages GROUP BY coupon_id) cu ON cu.coupon_id = c.id
+       LEFT JOIN (SELECT coupon_id, SUM(commission_amount) AS commission_generated
+                  FROM crew_commissions WHERE status != 'reversed' GROUP BY coupon_id) cc ON cc.coupon_id = c.id
        WHERE c.type = $1
-       GROUP BY c.id, u.name
        ORDER BY c.created_at DESC`,
       [type]
     )
@@ -642,6 +713,9 @@ module.exports = async function adminRoutes(app) {
     },
   }, async (req, reply) => {
     const { code, type = 'festival', discount_type, discount_value, min_order = 0, max_uses, expires_at } = req.body
+    if (discount_type === 'pct' && Number(discount_value) > 100) {
+      throw { code: 'VALIDATION_ERROR', message: 'Percentage discounts cannot exceed 100%.' }
+    }
     const { rows } = await query(
       `INSERT INTO coupons (code, type, discount_type, discount_value, min_order, max_uses, expires_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -663,7 +737,7 @@ module.exports = async function adminRoutes(app) {
           min_order:      { type: 'number', minimum: 0 },
           max_uses:       { type: ['integer', 'null'], minimum: 1 },
           max_usage_per_phone: { type: ['integer', 'null'], minimum: 1 },
-          status:         { type: 'string', maxLength: 30 },
+          status:         { type: 'string', enum: ['active', 'disabled', 'pending_approval'] },
           is_active:      { type: 'boolean' },
           expires_at:     { type: ['string', 'null'], maxLength: 30 },
         },
@@ -673,10 +747,25 @@ module.exports = async function adminRoutes(app) {
     },
   }, async (req, reply) => {
     const code = req.params.code.toUpperCase()
+    if ('discount_value' in req.body || 'discount_type' in req.body) {
+      const { rows: cur } = await query(`SELECT discount_type, discount_value FROM coupons WHERE code = $1`, [code])
+      if (!cur.length) throw { code: 'NOT_FOUND', message: 'Coupon not found.' }
+      const effType  = req.body.discount_type ?? cur[0].discount_type
+      const effValue = Number(req.body.discount_value ?? cur[0].discount_value)
+      if (effType === 'pct' && effValue > 100) {
+        throw { code: 'VALIDATION_ERROR', message: 'Percentage discounts cannot exceed 100%.' }
+      }
+    }
     const allowed = ['discount_type', 'discount_value', 'min_order', 'max_uses', 'max_usage_per_phone', 'status', 'is_active', 'expires_at']
     const entries = Object.entries(req.body).filter(([k]) => allowed.includes(k))
     const sets = entries.map(([k], i) => `${k} = $${i + 2}`)
     const vals = entries.map(([k, v]) => k === 'expires_at' ? toEndOfDayDhaka(v) : (v !== '' ? v : null))
+    // Remember who disabled the coupon so crew cannot undo an admin disable
+    if (req.body.is_active === false || req.body.status === 'disabled') {
+      sets.push(`disabled_by = 'admin'`)
+    } else if (req.body.is_active === true || req.body.status === 'active') {
+      sets.push(`disabled_by = NULL`)
+    }
     const { rows } = await query(
       `UPDATE coupons SET ${sets.join(', ')}, updated_at = NOW() WHERE code = $1
        RETURNING id, code, type, COALESCE(source, type::text) AS source, discount_type, discount_value,
@@ -721,7 +810,7 @@ module.exports = async function adminRoutes(app) {
       const { rows: apps } = await client.query(`SELECT * FROM crew_applications WHERE id = $1 FOR UPDATE`, [req.params.id])
       if (!apps.length) throw { code: 'NOT_FOUND', message: 'Application not found.' }
       const appRow = apps[0]
-      const settings = (await client.query(`SELECT * FROM crew_settings WHERE id = 1`)).rows[0]
+      if (appRow.status === 'approved') throw { code: 'DUPLICATE_APPLICATION', message: 'This application is already approved.' }
       await client.query(
         `UPDATE crew_applications
          SET status = 'approved', reviewed_by = $2, reviewed_at = NOW(), updated_at = NOW()
@@ -729,17 +818,14 @@ module.exports = async function adminRoutes(app) {
         [req.params.id, req.user.sub]
       )
       await client.query(`UPDATE users SET role = 'crew', updated_at = NOW() WHERE id = $1`, [appRow.user_id])
+      // Commission and limits are NOT snapshotted here — NULL overrides mean the
+      // member follows live crew_settings; admin can set per-member overrides later.
       const { rows: profiles } = await client.query(
-        `INSERT INTO crew_profiles
-           (user_id, status, default_commission_type, default_commission_value,
-            custom_max_pct_discount, custom_max_flat_discount,
-            custom_max_uses_per_coupon, custom_max_usage_per_phone)
-         VALUES ($1, 'active', $2, $3, $4, $5, $6, $7)
+        `INSERT INTO crew_profiles (user_id, status)
+         VALUES ($1, 'active')
          ON CONFLICT (user_id) DO UPDATE SET status = 'active', updated_at = NOW()
          RETURNING *`,
-        [appRow.user_id, settings.commission_type, settings.commission_value,
-         settings.max_pct_discount, settings.max_flat_discount,
-         settings.max_uses_per_coupon, settings.max_usage_per_phone]
+        [appRow.user_id]
       )
       return profiles[0]
     })
@@ -763,19 +849,31 @@ module.exports = async function adminRoutes(app) {
   })
 
   app.get('/crew/members', async () => {
+    // Each stat aggregated in its own subquery — a combined join multiplies
+    // usage and commission rows against each other (fan-out).
     const { rows } = await query(
       `SELECT cp.*, u.name, u.phone, u.email,
-              COUNT(c.id) FILTER (WHERE c.is_active = true AND c.status = 'active')::int AS active_coupon_codes,
-              COUNT(DISTINCT cu.order_id)::int AS referral_orders,
-              COALESCE(SUM(cu.order_total), 0)::int AS total_referral_sales,
-              COALESCE(SUM(cc.commission_amount) FILTER (WHERE cc.status IN ('pending','approved')), 0)::numeric AS pending_commission,
-              COALESCE(SUM(cc.commission_amount) FILTER (WHERE cc.status = 'paid'), 0)::numeric AS paid_commission
+              COALESCE(k.active_coupon_codes, 0)::int AS active_coupon_codes,
+              COALESCE(us.referral_orders, 0)::int AS referral_orders,
+              COALESCE(us.total_referral_sales, 0)::int AS total_referral_sales,
+              COALESCE(cm.pending_commission, 0)::numeric AS pending_commission,
+              COALESCE(cm.paid_commission, 0)::numeric AS paid_commission
        FROM crew_profiles cp
        JOIN users u ON u.id = cp.user_id
-       LEFT JOIN coupons c ON c.crew_profile_id = cp.id
-       LEFT JOIN coupon_usages cu ON cu.coupon_id = c.id
-       LEFT JOIN crew_commissions cc ON cc.crew_profile_id = cp.id
-       GROUP BY cp.id, u.id
+       LEFT JOIN (SELECT crew_profile_id, COUNT(*) AS active_coupon_codes
+                  FROM coupons
+                  WHERE is_active = true AND status = 'active' AND crew_profile_id IS NOT NULL
+                  GROUP BY crew_profile_id) k ON k.crew_profile_id = cp.id
+       LEFT JOIN (SELECT c.crew_profile_id, COUNT(*) AS referral_orders, SUM(cu.order_total) AS total_referral_sales
+                  FROM coupon_usages cu
+                  JOIN coupons c ON c.id = cu.coupon_id
+                  WHERE c.crew_profile_id IS NOT NULL
+                  GROUP BY c.crew_profile_id) us ON us.crew_profile_id = cp.id
+       LEFT JOIN (SELECT crew_profile_id,
+                         SUM(commission_amount) FILTER (WHERE status IN ('pending','approved')) AS pending_commission,
+                         SUM(commission_amount) FILTER (WHERE status = 'paid') AS paid_commission
+                  FROM crew_commissions
+                  GROUP BY crew_profile_id) cm ON cm.crew_profile_id = cp.id
        ORDER BY cp.created_at DESC`
     )
     return { ok: true, data: { members: rows } }
@@ -788,6 +886,8 @@ module.exports = async function adminRoutes(app) {
         type: 'object',
         properties: {
           status: { type: 'string', enum: ['active', 'paused', 'disabled'] },
+          default_commission_type: { type: ['string', 'null'], enum: ['percentage', 'flat', null] },
+          default_commission_value: { type: ['number', 'null'], minimum: 0 },
           custom_max_pct_discount: { type: ['integer', 'null'], minimum: 0 },
           custom_max_flat_discount: { type: ['integer', 'null'], minimum: 0 },
           custom_max_uses_per_coupon: { type: ['integer', 'null'], minimum: 1 },
@@ -806,28 +906,32 @@ module.exports = async function adminRoutes(app) {
       [req.params.id, ...vals]
     )
     if (!rows.length) throw { code: 'NOT_FOUND', message: 'Crew member not found.' }
-    if (req.body.status && req.body.status !== 'active') {
+    // Pause is reversible: coupons are left as-is and coupon validation already
+    // rejects crew coupons whose member is not active. Disable is permanent.
+    if (req.body.status === 'disabled') {
       await query(`UPDATE coupons SET is_active = false, status = 'disabled', updated_at = NOW() WHERE crew_profile_id = $1`, [req.params.id])
     }
     return { ok: true, data: rows[0] }
   })
 
   app.get('/crew/coupons', async () => {
+    // Same fan-out guard as GET /coupons: one aggregate pass per table.
     const { rows } = await query(
       `SELECT c.id, c.code, COALESCE(c.source, c.type::text) AS source, c.discount_type,
               c.discount_value, c.min_order, c.max_uses, c.max_usage_per_phone,
               c.used_count, c.status, c.is_active, c.expires_at, c.created_at,
               u.name AS crew_member,
-              COUNT(DISTINCT cu.order_id)::int AS usage_orders,
-              COALESCE(SUM(cu.order_total), 0)::int AS total_sales,
-              COALESCE(SUM(cc.commission_amount), 0)::numeric AS commission_generated
+              COALESCE(cu.usage_orders, 0)::int AS usage_orders,
+              COALESCE(cu.total_sales, 0)::int AS total_sales,
+              COALESCE(cc.commission_generated, 0)::numeric AS commission_generated
        FROM coupons c
        LEFT JOIN crew_profiles cp ON cp.id = c.crew_profile_id
        LEFT JOIN users u ON u.id = cp.user_id
-       LEFT JOIN coupon_usages cu ON cu.coupon_id = c.id
-       LEFT JOIN crew_commissions cc ON cc.coupon_id = c.id
+       LEFT JOIN (SELECT coupon_id, COUNT(*) AS usage_orders, SUM(order_total) AS total_sales
+                  FROM coupon_usages GROUP BY coupon_id) cu ON cu.coupon_id = c.id
+       LEFT JOIN (SELECT coupon_id, SUM(commission_amount) AS commission_generated
+                  FROM crew_commissions WHERE status != 'reversed' GROUP BY coupon_id) cc ON cc.coupon_id = c.id
        WHERE c.type = 'crew'
-       GROUP BY c.id, u.name
        ORDER BY c.created_at DESC`
     )
     return { ok: true, data: { coupons: rows } }
@@ -844,7 +948,7 @@ module.exports = async function adminRoutes(app) {
       'max_usage_per_phone','max_active_coupons_per_crew','require_coupon_approval',
       'allow_crew_edit_active_coupon','allow_crew_deactivate_coupon','allow_coupon_expiry',
       'allow_reapply_after_rejection','commission_type','commission_value','commission_base',
-      'payout_threshold',
+      'commission_mode','commission_min_value','payout_threshold',
     ]
     const entries = Object.entries(req.body || {}).filter(([k]) => allowed.includes(k))
     if (!entries.length) throw { code: 'VALIDATION_ERROR', message: 'No settings to update.' }
@@ -874,10 +978,10 @@ module.exports = async function adminRoutes(app) {
   }, async (req) => {
     const { rows } = await query(
       `UPDATE crew_commissions SET status = 'paid', paid_at = NOW(), updated_at = NOW()
-       WHERE id = $1 RETURNING *`,
+       WHERE id = $1 AND status IN ('pending', 'approved') RETURNING *`,
       [req.params.id]
     )
-    if (!rows.length) throw { code: 'NOT_FOUND', message: 'Commission not found.' }
+    if (!rows.length) throw { code: 'NOT_ELIGIBLE', message: 'Commission not found or not payable (already paid or reversed).' }
     return { ok: true, data: rows[0] }
   })
 

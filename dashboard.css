@@ -557,6 +557,7 @@ body {
 .sheet {
   background: #2C1810; border-radius: 24px 24px 0 0;
   padding: 20px 22px 40px; width: 100%; max-width: 480px; margin: 0 auto;
+  max-height: 92dvh; overflow-y: auto;
 }
 .sheet-handle { width: 40px; height: 4px; background: var(--cream-30); border-radius: 99px; margin: 0 auto 20px; }
 .sheet-title  { font-size: 18px; font-weight: 700; color: var(--cream); margin-bottom: 8px; }
@@ -597,6 +598,14 @@ body {
 .slide-panel .select { background: rgba(247,227,201,.08); border-color: rgba(247,227,201,.18); color: var(--cream); }
 .slide-panel .select option { background: #2C1810; color: var(--cream); }
 .slide-panel .divider { background: var(--cream-10); }
+.slide-panel .text-muted { color: var(--cream-65); }
+.slide-panel .profile-label { color: var(--cream-65); }
+.slide-panel .profile-value { color: var(--cream); }
+.slide-panel .btn-ghost { color: var(--cream); border-color: var(--cream-30); }
+.slide-panel .btn-ghost:hover { color: var(--cream); border-color: var(--cream-65); background: var(--cream-10); }
+.slide-panel .card { background: rgba(247,227,201,.07); border-color: var(--cream-10); box-shadow: none; }
+.slide-panel .btn-ghost-danger { color: #FF7A6B; border-color: rgba(255,122,107,.35); }
+.slide-panel .btn-ghost-danger:hover { background: rgba(255,122,107,.12); border-color: rgba(255,122,107,.55); }
 
 /* ── Misc ─────────────────────────────── */
 .divider  { height: 1px; background: var(--text-08); margin: 16px 0; }
@@ -630,7 +639,7 @@ body {
 
 .loading-screen { display: flex; align-items: center; justify-content: center; height: 100vh; flex-direction: column; gap: 16px; }
 
-.stat-row  { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.stat-row  { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px; }
 .stat-card { background: var(--card); border: 1px solid var(--text-08); border-radius: var(--radius-lg); padding: 16px; box-shadow: var(--shadow); }
 .stat-label { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-65); margin-bottom: 6px; }
 .stat-value { font-size: 22px; font-weight: 700; color: var(--orange); line-height: 1; }
@@ -704,4 +713,14 @@ body {
   .pill { min-height: 40px; }
 
   .card { padding: 16px; }
+}
+
+/* ── Small phones ─────────────────────── */
+@media (max-width: 520px) {
+  .stat-row  { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .stat-card { padding: 14px; }
+  .stat-label { letter-spacing: 0.04em; }
+  .stat-value { font-size: 20px; }
+  .grid-2 { grid-template-columns: 1fr; }
+  .page-title { font-size: 21px; }
 }

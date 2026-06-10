@@ -1,6 +1,23 @@
 // midnight pick -  shop page
 const { useState, useEffect, useRef } = React;
 
+// Resize-aware mobile check — 640px matches the CSS breakpoint used across
+// the shop page (inline controls, buy sheet, sticky CTA).
+function useIsMobile(bp = 640) {
+  const [mobile, setMobile] = useState(() => window.matchMedia(`(max-width: ${bp}px)`).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${bp}px)`);
+    const onChange = e => setMobile(e.matches);
+    if (mq.addEventListener) mq.addEventListener("change", onChange);
+    else mq.addListener(onChange);
+    return () => {
+      if (mq.removeEventListener) mq.removeEventListener("change", onChange);
+      else mq.removeListener(onChange);
+    };
+  }, [bp]);
+  return mobile;
+}
+
 const PRODUCT_DEFAULT = {
   id: null,
   category: "",
@@ -243,7 +260,9 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
 
   // ── Shared styles ──────────────────────────────────────────────────────────
   const overlay = { position: "fixed", inset: 0, background: "rgba(0,0,0,.52)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" };
-  const panel   = { background: "#FFFDF7", borderRadius: 16, width: "100%", maxWidth: 440, boxShadow: "0 20px 60px rgba(0,0,0,.28)", overflow: "hidden" };
+  // maxHeight + scroll: on short viewports (landscape phones, keyboard open)
+  // the form must stay reachable instead of clipping behind overflow:hidden.
+  const panel   = { background: "#FFFDF7", borderRadius: 16, width: "100%", maxWidth: 440, boxShadow: "0 20px 60px rgba(0,0,0,.28)", maxHeight: "92dvh", overflowY: "auto", overflowX: "hidden" };
   const field   = { width: "100%", padding: "11px 14px", fontFamily: "var(--font-body)", fontSize: 14, border: "1.5px solid rgba(87,31,41,.18)", borderRadius: 8, background: "#fff", color: "#1A0A0D", outline: "none", boxSizing: "border-box" };
   const lbl     = { display: "block", fontSize: 12, fontWeight: 600, color: "rgba(87,31,41,.65)", marginBottom: 5, fontFamily: "var(--font-display)", textTransform: "uppercase", letterSpacing: ".04em" };
   const hdr     = { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "18px 22px 14px", borderBottom: "1px solid rgba(87,31,41,.1)" };
@@ -714,6 +733,7 @@ function reviewAvatarColor(name) {
 }
 
 function ReviewsSection({ productSlug = "midnight-blend", onStats, loggedIn, onSignIn, onOrderNow }) {
+  const isMobile = useIsMobile();
   const [reviews, setReviews] = useState([]);
   const [total, setTotal] = useState(0);
   const [avgRating, setAvgRating] = useState(0);
@@ -803,7 +823,7 @@ function ReviewsSection({ productSlug = "midnight-blend", onStats, loggedIn, onS
   }, [loggedIn, productSlug]);
 
   const reviewCta = (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: window.innerWidth > 760 ? "flex-end" : "flex-start", gap: 7 }}>
+    <div style={{ display: "flex", flexDirection: "column", alignItems: isMobile ? "flex-start" : "flex-end", gap: 7 }}>
       <button
         type="button"
         onClick={openReviewCta}
@@ -821,7 +841,7 @@ function ReviewsSection({ productSlug = "midnight-blend", onStats, loggedIn, onS
         <i className="fa-solid fa-pen-nib" aria-hidden="true" />
         Write a Review
       </button>
-      <span style={{ fontFamily: "var(--font-body)", fontSize: 12, color: "rgba(87,31,41,.52)", maxWidth: 300, lineHeight: 1.45, textAlign: window.innerWidth > 760 ? "right" : "left" }}>
+      <span style={{ fontFamily: "var(--font-body)", fontSize: 12, color: "rgba(87,31,41,.52)", maxWidth: 300, lineHeight: 1.45, textAlign: isMobile ? "left" : "right" }}>
         Order first, then share your experience as a verified customer.
       </span>
     </div>
@@ -846,7 +866,7 @@ function ReviewsSection({ productSlug = "midnight-blend", onStats, loggedIn, onS
               </div>
             </div>
           </div>
-          {window.innerWidth > 760 && reviewCta}
+          {!isMobile && reviewCta}
         </div>
 
         {topTags.length > 0 && (
@@ -857,9 +877,11 @@ function ReviewsSection({ productSlug = "midnight-blend", onStats, loggedIn, onS
             {topTags.map(t => tagChip(t.tag, t.tag, true))}
           </div>
         )}
-        <div style={{ display: window.innerWidth > 760 ? "none" : "block", marginBottom: 22 }}>
-          {reviewCta}
-        </div>
+        {isMobile && (
+          <div style={{ marginBottom: 22 }}>
+            {reviewCta}
+          </div>
+        )}
         {reviewNotice && (
           <div style={{
             display: "inline-flex", alignItems: "center", gap: 8, marginBottom: 22,
@@ -884,7 +906,7 @@ function ReviewsSection({ productSlug = "midnight-blend", onStats, loggedIn, onS
           </div>
         ) : (
           <>
-            <div style={{ display: "grid", gridTemplateColumns: window.innerWidth > 760 ? "1fr 1fr" : "1fr", gap: 14 }}>
+            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 14 }}>
               {reviews.map(r => (
                 <div key={r.id} style={{ background: "rgba(255,255,255,.55)", backdropFilter: "blur(6px)", borderRadius: 16, padding: "18px 20px", border: "1px solid rgba(87,31,41,.1)", boxShadow: "0 2px 12px rgba(87,31,41,.05)", display: "flex", flexDirection: "column" }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>

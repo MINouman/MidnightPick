@@ -1,14 +1,17 @@
 'use strict'
 
 const { query, withTransaction } = require('../config/db')
-const { validateCoupon, recordCouponUsage, reverseCommissionForOrder } = require('./crew')
+const { validateCoupon, recordCouponUsage, restoreCouponUsageForOrder, reverseCommissionForOrder } = require('./crew')
+const { normalizeBdMobile } = require('./phone')
+
+const crypto = require('crypto')
 
 const DELIVERY_FEE = 0  // free delivery; update when zone-based fees are added
 
 // ── Internal helpers ────────────────────────────────────────────────────────
 
-async function validateAndLockCoupon(client, code, subtotal, customerPhone = null) {
-  const res = await validateCoupon(client, { code, subtotal, customerPhone, lock: true })
+async function validateAndLockCoupon(client, code, subtotal, customerPhone = null, userId = null) {
+  const res = await validateCoupon(client, { code, subtotal, customerPhone, userId, lock: true })
   return { couponId: res.coupon.id, coupon: res.coupon, discount: res.discount }
 }
 
@@ -58,7 +61,10 @@ async function decrementStock(client, items) {
 
 async function generateOrderRef(client) {
   const { rows } = await client.query(`SELECT nextval('order_ref_seq') AS seq`)
-  return `MP-${rows[0].seq}`
+  // Random suffix keeps refs non-enumerable on the public /track endpoint;
+  // the sequence still guarantees uniqueness.
+  const suffix = crypto.randomInt(0, 36 ** 4).toString(36).padStart(4, '0').toUpperCase()
+  return `MP-${rows[0].seq}-${suffix}`
 }
 
 // ── Place Order ─────────────────────────────────────────────────────────────
@@ -92,11 +98,16 @@ async function placeOrder(userId, body) {
       subtotal += variantMap[item.variant_id].price * item.qty
     }
 
-    // 4. Coupon
+    // 4. Coupon — per-customer caps key on normalized phone numbers, but
+    // payment_number may be a wallet/card number; normalize best-effort and
+    // let the user_id count catch what the phone can't.
+    let couponPhone = payment_number || null
+    if (couponPhone) { try { couponPhone = normalizeBdMobile(couponPhone) } catch { couponPhone = null } }
+
     let discountAmount = 0
     let coupon         = null
     if (coupon_code) {
-      const c = await validateAndLockCoupon(client, coupon_code.toUpperCase(), subtotal, payment_number)
+      const c = await validateAndLockCoupon(client, coupon_code, subtotal, couponPhone, userId)
       discountAmount = c.discount
       coupon         = c.coupon
     }
@@ -115,7 +126,7 @@ async function placeOrder(userId, body) {
        RETURNING id, order_ref, status, created_at`,
       [orderRef, userId, JSON.stringify(addressSnapshot),
        payment_type, payment_number,
-       coupon_code?.toUpperCase() ?? null, discountAmount,
+       coupon ? coupon.code : null, discountAmount,
        subtotal, DELIVERY_FEE, total, notes ?? null]
     )
     const order = orderRows[0]
@@ -142,7 +153,7 @@ async function placeOrder(userId, body) {
         coupon,
         orderId: order.id,
         userId,
-        customerPhone: payment_number,
+        customerPhone: couponPhone,
         discountAmount,
         orderTotal: total,
       })
@@ -267,24 +278,29 @@ async function cancelOrder(userId, orderId) {
       [order.id]
     )
 
-    // Restore stock
+    // Restore stock — variant items come from cart checkout, product-level
+    // items from quick orders (which decrement products.stock at placement)
     const { rows: items } = await client.query(
-      `SELECT variant_id, qty FROM order_items WHERE order_id = $1 AND variant_id IS NOT NULL`,
+      `SELECT variant_id, product_id, qty FROM order_items WHERE order_id = $1`,
       [order.id]
     )
     for (const item of items) {
-      await client.query(
-        `UPDATE product_variants SET stock = stock + $2 WHERE id = $1`,
-        [item.variant_id, item.qty]
-      )
+      if (item.variant_id) {
+        await client.query(
+          `UPDATE product_variants SET stock = stock + $2 WHERE id = $1`,
+          [item.variant_id, item.qty]
+        )
+      } else if (item.product_id) {
+        await client.query(
+          `UPDATE products SET stock = stock + $2 WHERE id = $1`,
+          [item.product_id, item.qty]
+        )
+      }
     }
 
-    // Restore coupon usage
+    // Free both the global cap (used_count) and the per-phone/per-user slot
     if (order.coupon_code) {
-      await client.query(
-        `UPDATE coupons SET used_count = GREATEST(0, used_count - 1) WHERE code = $1`,
-        [order.coupon_code]
-      )
+      await restoreCouponUsageForOrder(client, order.id, order.coupon_code)
       await reverseCommissionForOrder(client, order.id)
     }
 
@@ -330,7 +346,6 @@ async function trackOrder(orderRef) {
 
 const GUEST_PRODUCT_NAME = 'Midnight Blend — 95g Pouch'
 const GUEST_UNIT_PRICE   = 699
-const { normalizeBdMobile } = require('./phone')
 
 async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, otp, product_id }) {
   const normalizedPhone = normalizeBdMobile(phone)
@@ -348,25 +363,32 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
         `SELECT name, price FROM products WHERE id = $1 AND LOWER(status) = 'active'`,
         [product_id]
       )
-      if (pRows.length) {
-        productName = pRows[0].name
-        unitPrice   = parseInt(pRows[0].price, 10)
-        itemProductId = product_id
-      }
+      // No silent fallback: the customer must get the product they ordered,
+      // at its real price — not the hardcoded default.
+      if (!pRows.length) throw { code: 'INVALID_ITEM', message: 'This product is not available right now.' }
+      productName = pRows[0].name
+      unitPrice   = parseInt(pRows[0].price, 10)
+      itemProductId = product_id
+    }
+
+    if (itemProductId) {
+      const { rowCount } = await client.query(
+        `UPDATE products SET stock = stock - $2 WHERE id = $1 AND stock >= $2`,
+        [itemProductId, qty]
+      )
+      if (!rowCount) throw { code: 'INSUFFICIENT_STOCK', message: 'Not enough stock for this product.' }
     }
 
     const subtotal = unitPrice * qty
 
+    // Coupon rejections propagate — silently charging full price when the
+    // customer expected a discount is worse than asking them to retry.
     let discountAmount = 0
     let coupon         = null
     if (coupon_code) {
-      try {
-        const c = await validateCoupon(client, { code: coupon_code.toUpperCase(), subtotal, customerPhone: normalizedPhone, lock: true })
-        discountAmount = c.discount
-        coupon         = c.coupon
-      } catch {
-        // ignore invalid coupon for guest checkout
-      }
+      const c = await validateCoupon(client, { code: coupon_code, subtotal, customerPhone: normalizedPhone, lock: true })
+      discountAmount = c.discount
+      coupon         = c.coupon
     }
 
     const total     = subtotal - discountAmount + DELIVERY_FEE
@@ -382,7 +404,7 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
        RETURNING id, order_ref, status, created_at`,
       [orderRef, name.trim(), normalizedPhone,
        JSON.stringify(addrSnap),
-       coupon_code?.toUpperCase() ?? null,
+       coupon ? coupon.code : null,
        discountAmount, subtotal, DELIVERY_FEE, total,
        notes ?? null]
     )
@@ -475,11 +497,18 @@ async function placeQuickOrder(userId, { product_id, qty, address, coupon_code, 
         `SELECT name, price FROM products WHERE id = $1 AND LOWER(status) = 'active'`,
         [product_id]
       )
-      if (pRows.length) {
-        productName = pRows[0].name
-        unitPrice   = parseInt(pRows[0].price, 10)
-        itemProductId = product_id
-      }
+      if (!pRows.length) throw { code: 'INVALID_ITEM', message: 'This product is not available right now.' }
+      productName = pRows[0].name
+      unitPrice   = parseInt(pRows[0].price, 10)
+      itemProductId = product_id
+    }
+
+    if (itemProductId) {
+      const { rowCount } = await client.query(
+        `UPDATE products SET stock = stock - $2 WHERE id = $1 AND stock >= $2`,
+        [itemProductId, qty]
+      )
+      if (!rowCount) throw { code: 'INSUFFICIENT_STOCK', message: 'Not enough stock for this product.' }
     }
 
     const subtotal = unitPrice * qty
@@ -487,13 +516,9 @@ async function placeQuickOrder(userId, { product_id, qty, address, coupon_code, 
     let discountAmount = 0
     let coupon         = null
     if (coupon_code) {
-      try {
-        const c = await validateCoupon(client, { code: coupon_code.toUpperCase(), subtotal, customerPhone: phone, lock: true })
-        discountAmount = c.discount
-        coupon         = c.coupon
-      } catch {
-        // ignore invalid coupon silently
-      }
+      const c = await validateCoupon(client, { code: coupon_code, subtotal, customerPhone: phone, userId, lock: true })
+      discountAmount = c.discount
+      coupon         = c.coupon
     }
 
     const total    = subtotal - discountAmount + DELIVERY_FEE
@@ -509,7 +534,7 @@ async function placeQuickOrder(userId, { product_id, qty, address, coupon_code, 
        RETURNING id, order_ref, status, created_at`,
       [orderRef, userId, name, phone,
        JSON.stringify(addrSnap),
-       coupon_code?.toUpperCase() ?? null,
+       coupon ? coupon.code : null,
        discountAmount, subtotal, DELIVERY_FEE, total,
        notes ?? null]
     )
@@ -556,4 +581,4 @@ async function placeQuickOrder(userId, { product_id, qty, address, coupon_code, 
   })
 }
 
-module.exports = { placeOrder, placeQuickOrder, placeGuestOrder, listOrders, getOrder, cancelOrder, trackOrder }
+module.exports = { placeOrder, placeQuickOrder, placeGuestOrder, listOrders, getOrder, cancelOrder, trackOrder, generateOrderRef }

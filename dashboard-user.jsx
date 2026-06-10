@@ -88,7 +88,9 @@ function money(n) {
   return `৳${Number(n || 0).toLocaleString()}`;
 }
 function crewState(crew, user) {
-  if (crew?.profile && user?.role === "crew") return "approved";
+  if (crew?.profile && user?.role === "crew") {
+    return crew.profile.status === "active" ? "approved" : "paused";
+  }
   if (crew?.application?.status === "pending") return "pending";
   if (crew?.application?.status === "rejected") return "rejected";
   return "none";
@@ -259,6 +261,11 @@ function CrewHomeCard({ state, crew, setTab, compact = false }) {
       title: "Midnight Crew",
       body: "Create codes, track referrals, and view your earnings.",
       cta: "Open Crew Tools",
+    },
+    paused: {
+      title: "Crew Access Paused",
+      body: "Your crew access is currently paused and your codes are inactive. Contact support for details.",
+      cta: "View Details",
     },
   }[state] || {};
 
@@ -1062,7 +1069,11 @@ function CrewTab() {
       method: "PATCH",
       body: JSON.stringify({ is_active: !c.is_active }),
     }).catch(() => null);
-    if (res?.ok) setCoupons(prev => prev.map(x => x.id === c.id ? res.data : x));
+    if (res?.ok) {
+      setCoupons(prev => prev.map(x => x.id === c.id ? res.data : x));
+    } else {
+      Swal.fire({ title: "Could not update coupon", text: res?.error?.message || "Please try again.", icon: "error", confirmButtonColor: "#FF9100" });
+    }
   }
 
   function copyCode(code) {
@@ -1077,6 +1088,7 @@ function CrewTab() {
   if (state !== "approved") {
     const pending = state === "pending";
     const rejected = state === "rejected";
+    const paused = state === "paused";
     return (
       <div style={{ maxWidth: 720 }}>
         <div className="page-title">Crew</div>
@@ -1084,12 +1096,12 @@ function CrewTab() {
         <div className="crew-banner mb16">
           <div className="row mb8" style={{ gap: 10 }}>
             <i className="fa fa-fire text-orange" style={{ fontSize: 18 }} />
-            <span style={{ fontWeight: 700, fontSize: 16 }}>{pending ? "Application Pending" : rejected ? "Application Not Approved Yet" : "Join the Midnight Crew"}</span>
+            <span style={{ fontWeight: 700, fontSize: 16 }}>{paused ? "Crew Access Paused" : pending ? "Application Pending" : rejected ? "Application Not Approved Yet" : "Join the Midnight Crew"}</span>
           </div>
           <div className="text-sm text-muted mb14">
-            {pending ? "We're reviewing your request." : rejected ? "You can contact support or reapply if available." : "Earn rewards when friends order with your code."}
+            {paused ? "Your crew access is currently paused and your codes are inactive. Contact Midnight Pick support for details." : pending ? "We're reviewing your request." : rejected ? "You can contact support or reapply if available." : "Earn rewards when friends order with your code."}
           </div>
-          {pending ? (
+          {paused ? null : pending ? (
             <button className="btn btn-ghost btn-sm" onClick={() => setSheet("view")}>View Application</button>
           ) : (
             <button className="btn btn-primary btn-sm" onClick={() => setSheet("apply")}>{rejected ? "Apply Again" : "Apply to Join"}</button>
@@ -1163,6 +1175,7 @@ function CrewTab() {
         <div className="card">
           <div className="eyebrow mb10">Create Crew Coupon</div>
           <div className="input-note mb12">Your limits: up to {maxPct}% or ৳{maxFlat} discount, max {maxUses} orders, {maxPhone} use per phone.</div>
+          {settings.commission_mode === "discount_linked" && <div className="input-note mb12" style={{ color: "var(--orange)" }}>Earn more by discounting less: your per-order commission is highest with a small discount and drops as the discount grows — sell on your pitch, not the price cut.</div>}
           <div className="grid-2">
             <div className="input-group"><label className="input-label">Code</label><input className="input" value={couponForm.code} onChange={e => setCouponForm(f => ({ ...f, code: e.target.value.toUpperCase() }))} placeholder="MIDNIGHT10" /></div>
             <div className="input-group"><label className="input-label">Discount type</label><select className="select" value={couponForm.discount_type} onChange={e => setCouponForm(f => ({ ...f, discount_type: e.target.value }))}><option value="pct">Percentage</option><option value="flat">Flat amount</option></select></div>
@@ -1189,7 +1202,7 @@ function CrewTab() {
               <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
                 <button className="btn btn-ghost btn-sm" onClick={() => copyCode(c.code)}>Copy</button>
                 <button className="btn btn-ghost btn-sm" onClick={() => shareCode(c.code)}><i className="fab fa-whatsapp" /> Share</button>
-                {settings.allow_crew_deactivate_coupon !== false && <button className="btn btn-ghost btn-sm" onClick={() => toggleCoupon(c)}>{c.is_active ? "Deactivate" : "Activate"}</button>}
+                {settings.allow_crew_deactivate_coupon !== false && c.status !== "pending_approval" && <button className="btn btn-ghost btn-sm" onClick={() => toggleCoupon(c)}>{c.is_active ? "Deactivate" : "Activate"}</button>}
               </div>
             </div>
           ))}

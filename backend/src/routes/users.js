@@ -2,6 +2,7 @@
 
 const usersSvc = require('../services/users')
 const { query } = require('../config/db')
+const { toEndOfDayDhaka } = require('../services/dates')
 
 module.exports = async function userRoutes(app) {
 
@@ -205,18 +206,22 @@ module.exports = async function userRoutes(app) {
     ])
     const profile = profileRes.rows[0] || null
     const settings = settingsRes.rows[0] || null
+    // One aggregate pass per table — joining usages and commissions together
+    // multiplies the sums (cartesian fan-out) and inflates every number.
     const summaryRes = profile ? await query(
-      `SELECT COUNT(DISTINCT cu.order_id)::int AS referral_orders,
-              COALESCE(SUM(cu.order_total), 0)::int AS total_sales,
-              COALESCE(SUM(cc.commission_amount), 0)::numeric AS total_commission,
-              COALESCE(SUM(cc.commission_amount) FILTER (WHERE cc.status IN ('pending','approved')), 0)::numeric AS pending_payout,
-              COUNT(c.id) FILTER (WHERE c.is_active = true AND c.status = 'active')::int AS active_codes
-       FROM crew_profiles cp
-       LEFT JOIN coupons c ON c.crew_profile_id = cp.id
-       LEFT JOIN coupon_usages cu ON cu.coupon_id = c.id
-       LEFT JOIN crew_commissions cc ON cc.crew_profile_id = cp.id
-       WHERE cp.id = $1
-       GROUP BY cp.id`,
+      `SELECT u.referral_orders, u.total_sales, m.total_commission, m.pending_payout, k.active_codes
+       FROM (SELECT COUNT(*)::int AS referral_orders,
+                    COALESCE(SUM(cu.order_total), 0)::int AS total_sales
+             FROM coupon_usages cu
+             JOIN coupons c ON c.id = cu.coupon_id
+             WHERE c.crew_profile_id = $1) u
+       CROSS JOIN (SELECT COALESCE(SUM(commission_amount) FILTER (WHERE status != 'reversed'), 0)::numeric AS total_commission,
+                          COALESCE(SUM(commission_amount) FILTER (WHERE status IN ('pending','approved')), 0)::numeric AS pending_payout
+                   FROM crew_commissions
+                   WHERE crew_profile_id = $1) m
+       CROSS JOIN (SELECT COUNT(*)::int AS active_codes
+                   FROM coupons
+                   WHERE crew_profile_id = $1 AND is_active = true AND status = 'active') k`,
       [profile.id]
     ) : { rows: [] }
     return {
@@ -272,7 +277,8 @@ module.exports = async function userRoutes(app) {
               cs.max_active_coupons_per_crew, cs.require_coupon_approval,
               cs.allow_crew_edit_active_coupon, cs.allow_crew_deactivate_coupon,
               cs.allow_coupon_expiry, cs.commission_type, cs.commission_value,
-              cs.commission_base, cs.payout_threshold
+              cs.commission_base, cs.commission_mode, cs.commission_min_value,
+              cs.payout_threshold
        FROM crew_profiles cp
        JOIN users u ON u.id = cp.user_id
        CROSS JOIN crew_settings cs
@@ -333,26 +339,42 @@ module.exports = async function userRoutes(app) {
     if (req.body.expires_at && !profile.allow_coupon_expiry) throw { code: 'VALIDATION_ERROR', message: 'Expiry dates are not available for crew coupons right now.' }
 
     const code = req.body.code.trim().toUpperCase()
-    const exists = (await query(`SELECT 1 FROM coupons WHERE code = $1`, [code])).rows.length > 0
-    if (exists) throw { code: 'COUPON_TAKEN', message: 'This coupon code is already taken. Try another one.' }
-
     const initialStatus = profile.require_coupon_approval ? 'pending_approval' : 'active'
-    const { rows } = await query(
-      `INSERT INTO coupons
-         (code, type, source, created_by_user_id, crew_profile_id, discount_type,
-          discount_value, min_order, max_uses, max_usage_per_phone, expires_at,
-          status, is_active, internal_note)
-       VALUES ($1, 'crew', 'crew', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-       RETURNING *`,
-      [code, req.user.sub, profile.id, req.body.discount_type, Math.round(value),
-       Math.round(req.body.min_order ?? profile.min_order), req.body.max_uses,
-       maxPhone, req.body.expires_at || null, initialStatus, initialStatus === 'active',
-       req.body.internal_note || null]
-    )
+    let rows
+    try {
+      ({ rows } = await query(
+        `INSERT INTO coupons
+           (code, type, source, created_by_user_id, crew_profile_id, discount_type,
+            discount_value, min_order, max_uses, max_usage_per_phone, expires_at,
+            status, is_active, internal_note)
+         VALUES ($1, 'crew', 'crew', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         RETURNING *`,
+        [code, req.user.sub, profile.id, req.body.discount_type, Math.round(value),
+         Math.round(req.body.min_order ?? profile.min_order), req.body.max_uses,
+         maxPhone, toEndOfDayDhaka(req.body.expires_at), initialStatus, initialStatus === 'active',
+         req.body.internal_note || null]
+      ))
+    } catch (err) {
+      // Unique violation on coupons.code — race-safe replacement for a pre-check SELECT
+      if (err?.code === '23505') throw { code: 'COUPON_TAKEN', message: 'This coupon code is already taken. Try another one.' }
+      throw err
+    }
     return reply.code(201).send({ ok: true, data: rows[0] })
   })
 
-  app.patch('/crew/coupons/:id', async (req) => {
+  app.patch('/crew/coupons/:id', {
+    schema: {
+      body: {
+        type: 'object',
+        properties: {
+          is_active: { type: 'boolean' },
+          internal_note: { type: ['string', 'null'], maxLength: 500 },
+        },
+        additionalProperties: false,
+        minProperties: 1,
+      },
+    },
+  }, async (req) => {
     const profile = await getCrewProfile(req.user.sub)
     const id = req.params.id
     const { rows: existing } = await query(`SELECT * FROM coupons WHERE id = $1 AND crew_profile_id = $2`, [id, profile.id])
@@ -364,13 +386,28 @@ module.exports = async function userRoutes(app) {
     if ('is_active' in req.body && req.body.is_active === false && !profile.allow_crew_deactivate_coupon) {
       throw { code: 'NOT_ELIGIBLE', message: 'Deactivating coupons is not available.' }
     }
+    if (req.body.is_active === true && coupon.is_active === false) {
+      // Crew cannot self-activate a coupon that was never approved
+      if (coupon.status === 'pending_approval') throw { code: 'NOT_ELIGIBLE', message: 'This coupon is still awaiting admin approval.' }
+      // ...nor undo a disable that came from the admin side
+      if (coupon.disabled_by === 'admin') throw { code: 'NOT_ELIGIBLE', message: 'This coupon was disabled by admin and cannot be re-activated.' }
+      const activeCount = (await query(
+        `SELECT COUNT(*)::int AS count FROM coupons WHERE crew_profile_id = $1 AND is_active = true AND status = 'active'`,
+        [profile.id]
+      )).rows[0].count
+      if (activeCount >= profile.max_active_coupons_per_crew) throw { code: 'NOT_ELIGIBLE', message: 'You have reached your active coupon limit.' }
+    }
     const allowed = ['is_active', 'internal_note']
     const entries = Object.entries(req.body || {}).filter(([k]) => allowed.includes(k))
     if (!entries.length) throw { code: 'VALIDATION_ERROR', message: 'No fields to update.' }
     const sets = entries.map(([k], i) => `${k} = $${i + 3}`)
     const vals = entries.map(([, v]) => v)
-    if ('is_active' in req.body && req.body.is_active === false) {
-      sets.push(`status = 'disabled'`)
+    // status must follow is_active, otherwise a reactivated coupon stays
+    // status='disabled' and is silently rejected by coupon validation forever
+    if (req.body.is_active === false) {
+      sets.push(`status = 'disabled'`, `disabled_by = 'crew'`)
+    } else if (req.body.is_active === true) {
+      sets.push(`status = 'active'`, `disabled_by = NULL`)
     }
     const { rows } = await query(
       `UPDATE coupons SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $1 AND crew_profile_id = $2 RETURNING *`,

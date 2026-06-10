@@ -96,7 +96,13 @@ async function verifyOtp(phone, otp) {
     throw { code: 'OTP_MAX_ATTEMPTS', message: 'Too many failed attempts. Please request a new OTP.' }
   }
 
-  await query(`UPDATE otp_tokens SET used_at = NOW() WHERE id = $1`, [token.id])
+  // Atomic consume — two concurrent requests with the same OTP must not both
+  // succeed, so the used_at check happens inside the UPDATE itself.
+  const { rowCount } = await query(
+    `UPDATE otp_tokens SET used_at = NOW() WHERE id = $1 AND used_at IS NULL`,
+    [token.id]
+  )
+  if (!rowCount) throw { code: 'INVALID_OTP', message: 'Invalid or expired OTP.' }
   return true
 }
 

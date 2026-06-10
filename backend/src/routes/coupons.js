@@ -2,11 +2,16 @@
 
 const { query } = require('../config/db')
 const { validateCoupon } = require('../services/crew')
+const { normalizeBdMobile } = require('../services/phone')
+
+// Public endpoints — keep them slow enough that coupon codes can't be enumerated
+const COUPON_RATE_LIMIT = { rateLimit: { max: 30, timeWindow: '1 minute' } }
 
 module.exports = async function couponsRoutes(app) {
 
   // GET /coupons/verify?code=XXX&subtotal=YYY — public coupon validation
   app.get('/verify', {
+    config: COUPON_RATE_LIMIT,
     schema: {
       querystring: {
         type: 'object',
@@ -24,6 +29,7 @@ module.exports = async function couponsRoutes(app) {
   })
 
   app.post('/validate', {
+    config: COUPON_RATE_LIMIT,
     schema: {
       body: {
         type: 'object',
@@ -37,7 +43,10 @@ module.exports = async function couponsRoutes(app) {
     },
   }, async (req) => {
     const { code, subtotal, customer_phone } = req.body
-    const { coupon: c, discount } = await validateCoupon({ query }, { code, subtotal, customerPhone: customer_phone })
+    // Usage caps are tracked against normalized numbers — match that here
+    let customerPhone = customer_phone || null
+    if (customerPhone) { try { customerPhone = normalizeBdMobile(customerPhone) } catch { /* keep raw */ } }
+    const { coupon: c, discount } = await validateCoupon({ query }, { code, subtotal, customerPhone })
     return {
       ok: true,
       data: {

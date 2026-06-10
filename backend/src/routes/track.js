@@ -10,7 +10,8 @@ module.exports = async function trackRoutes(app) {
       params: {
         type: 'object', required: ['orderRef'],
         properties: {
-          orderRef: { type: 'string', pattern: '^[Mm][Pp]-\\d+$', maxLength: 20 },
+          // Old refs are MP-<seq>; new ones carry a random -XXXX suffix
+          orderRef: { type: 'string', pattern: '^[Mm][Pp]-\\d+(-[A-Za-z0-9]{4})?$', maxLength: 25 },
         },
       },
     },

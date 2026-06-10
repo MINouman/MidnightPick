@@ -177,8 +177,6 @@ function Orders() {
   const [orders, setOrders] = useState(ctxOrders || []);
   const [filter, setFilter] = useState({ status: "All", coupon: "All", search: "" });
   const [panel, setPanel] = useState(null);
-  const [editMode, setEditMode] = useState(false);
-  const [editFields, setEditFields] = useState({});
   const [cancelConfirm, setCancelConfirm] = useState(false);
   const [newOrderPanel, setNewOrderPanel] = useState(false);
   const [newOrder, setNewOrder] = useState({ customer: "", phone: "", address: "", orderItems: [], total: "", payment: "bKash", coupon: "", notes: "", status: "processing" });
@@ -187,22 +185,23 @@ function Orders() {
 
   async function updateStatus(newStatus) {
     if (!panel) return;
+    // Only reflect the change after the server confirms it — a failed PATCH
+    // must not show a status the database doesn't have.
     try {
-      await window.mpApi.fetch(`/admin/orders/${panel.id}/status`, {
+      const res = await window.mpApi.fetch(`/admin/orders/${panel.id}/status`, {
         method: 'PATCH',
         body: JSON.stringify({ status: newStatus }),
       });
-    } catch (_) {}
-    const updated = { ...panel, status: newStatus };
-    setOrders(prev => prev.map(o => o.id === panel.id ? updated : o));
-    setPanel(updated);
-  }
-
-  function saveEdit() {
-    const updated = { ...panel, total: parseFloat(editFields.total) || panel.total, customer_phone: editFields.phone };
-    setOrders(prev => prev.map(o => o.id === panel.id ? updated : o));
-    setPanel(updated);
-    setEditMode(false);
+      if (!res?.ok) {
+        alert(res?.error?.message || 'Could not update the order status.');
+        return;
+      }
+      const updated = { ...panel, status: newStatus, ...(res.data?.points_earned != null ? { points_earned: res.data.points_earned } : {}) };
+      setOrders(prev => prev.map(o => o.id === panel.id ? updated : o));
+      setPanel(updated);
+    } catch (e) {
+      alert(e?.message || 'Could not update the order status.');
+    }
   }
 
   function addOrderItem(productId) {
@@ -228,6 +227,8 @@ function Orders() {
     const subtotal = newOrder.orderItems.reduce((s, it) => s + it.unit_price * (parseInt(it.qty) || 1), 0);
     const total    = newOrder.total ? parseFloat(newOrder.total) : subtotal;
     const discount = Math.max(0, Math.round(subtotal - total));
+    // Close and reset only on success — a rejected order (invalid coupon,
+    // insufficient stock) must keep the form so nothing the admin typed is lost.
     try {
       const res = await window.mpApi.fetch('/admin/orders', {
         method: 'POST',
@@ -243,10 +244,16 @@ function Orders() {
           notes:           newOrder.notes || undefined,
         }),
       });
-      if (res?.ok && res.data) setOrders(prev => [res.data, ...prev]);
-    } catch (_) {}
-    setNewOrderPanel(false);
-    setNewOrder({ customer: "", phone: "", address: "", orderItems: [], total: "", payment: "bKash", coupon: "", notes: "", status: "processing" });
+      if (!res?.ok || !res.data) {
+        alert(res?.error?.message || 'Failed to create the order.');
+        return;
+      }
+      setOrders(prev => [res.data, ...prev]);
+      setNewOrderPanel(false);
+      setNewOrder({ customer: "", phone: "", address: "", orderItems: [], total: "", payment: "bKash", coupon: "", notes: "", status: "processing" });
+    } catch (e) {
+      alert(e?.message || 'Failed to create the order.');
+    }
   }
 
   const filtered = orders.filter(o => {
@@ -260,8 +267,6 @@ function Orders() {
 
   function openPanel(o) {
     setPanel(o);
-    setEditMode(false);
-    setEditFields({ total: o.total, phone: o.customer_phone || "" });
   }
 
   const statusOpts = [
@@ -329,18 +334,17 @@ function Orders() {
 
       {panel && (
         <>
-          <div className="panel-overlay" onClick={() => { setPanel(null); setEditMode(false); }} />
+          <div className="panel-overlay" onClick={() => setPanel(null)} />
           <div className="slide-panel">
             <div className="panel-hd">
               <div>
                 <div className="mono text-xs" style={{ color: "var(--blue)", marginBottom: 4 }}>{panel.order_ref}</div>
                 <div style={{ fontWeight: 700, fontSize: 16 }}>{panel.customer_name}</div>
               </div>
-              <button className="icon-btn" onClick={() => { setPanel(null); setEditMode(false); }}><i className="fa fa-times" /></button>
+              <button className="icon-btn" onClick={() => setPanel(null)}><i className="fa fa-times" /></button>
             </div>
 
-            {!editMode ? (
-              <>
+            <>
                 <div className="eyebrow mb10">Order Details</div>
                 <div className="row-between mb8 text-sm"><span className="text-muted">Items</span><span style={{ maxWidth: 200, textAlign: "right" }}>{orderSummary(panel.items)}</span></div>
                 <div className="row-between mb8 text-sm"><span className="text-muted">Total</span><span style={{ color: "var(--orange)", fontWeight: 700 }}>৳{panel.total}</span></div>
@@ -350,14 +354,6 @@ function Orders() {
                 <div className="row-between mb8 text-sm"><span className="text-muted">Date</span><span>{fmtDate(panel.created_at)}</span></div>
                 <div className="row-between mb16 text-sm"><span className="text-muted">Status</span><StatusBadge status={panel.status} /></div>
                 <div className="divider" />
-
-                <div className="col-gap mt16">
-                  {panel.status !== "cancelled" && panel.status !== "delivered" && (
-                    <button className="btn btn-ghost btn-full" onClick={() => setEditMode(true)}>
-                      <i className="fa fa-pencil" style={{ fontSize: 12 }} /> Edit Order
-                    </button>
-                  )}
-                </div>
 
                 {panel.status !== "cancelled" && panel.status !== "delivered" && (
                   <div style={{ marginTop: 12, marginBottom: 12 }}>
@@ -401,23 +397,6 @@ function Orders() {
                   <button className="btn btn-ghost btn-full"><i className="fa fa-flag" style={{ fontSize: 12 }} /> Flag for Review</button>
                 </div>
               </>
-            ) : (
-              <>
-                <div className="eyebrow mb12">Edit Order</div>
-                <div className="input-group">
-                  <label className="input-label">Total (৳)</label>
-                  <input className="input" type="number" value={editFields.total} onChange={e => setEditFields(f => ({ ...f, total: e.target.value }))} />
-                </div>
-                <div className="input-group">
-                  <label className="input-label">Customer Phone</label>
-                  <input className="input" value={editFields.phone} onChange={e => setEditFields(f => ({ ...f, phone: e.target.value }))} />
-                </div>
-                <div className="col-gap mt8">
-                  <button className="btn btn-primary btn-full" onClick={saveEdit}>Save Changes</button>
-                  <button className="btn btn-ghost btn-full" onClick={() => setEditMode(false)}>Cancel Edit</button>
-                </div>
-              </>
-            )}
           </div>
         </>
       )}
@@ -731,7 +710,6 @@ function Coupons() {
   const [coupTab, setCoupTab] = useState("Festival");
   const [showForm, setShowForm] = useState(false);
   const [festCoupons, setFestCoupons] = useState([]);
-  const [crewCoupons, setCrewCoupons] = useState([]);
   const [festLoading, setFestLoading] = useState(false);
   const [savingCoupon, setSavingCoupon] = useState(false);
   const emptyForm = { code: "", type: "Percentage", value: "", minOrder: "", cap: "", expiry: "" };
@@ -745,14 +723,6 @@ function Coupons() {
     setFestLoading(true);
     window.mpApi.fetch('/admin/coupons?type=festival').then(res => {
       setFestCoupons(res?.data?.coupons || []);
-    }).catch(() => {}).finally(() => setFestLoading(false));
-  }, [coupTab]);
-
-  useEffect(() => {
-    if (coupTab !== "Crew") return;
-    setFestLoading(true);
-    window.mpApi.fetch('/admin/crew/coupons').then(res => {
-      setCrewCoupons(res?.data?.coupons || []);
     }).catch(() => {}).finally(() => setFestLoading(false));
   }, [coupTab]);
 
@@ -903,7 +873,7 @@ function Coupons() {
     <div className="dash-inner-wide">
       <div className="page-title">Coupons</div>
       <div className="toggle-group">
-        {["Festival", "Crew", "Influencer"].map(t => (
+        {["Festival", "Influencer"].map(t => (
           <button key={t} className={`toggle-btn ${coupTab === t ? "active" : ""}`} onClick={() => setCoupTab(t)}>{t}</button>
         ))}
       </div>
@@ -1012,47 +982,6 @@ function Coupons() {
             </div>
           </SectionCard>
         </div>
-      )}
-
-      {coupTab === "Crew" && (
-        <SectionCard style={{ padding: 0, overflow: "hidden" }}>
-          <div className="table-wrap">
-            <table className="data-table">
-              <thead><tr><th>Coupon code</th><th>Crew member</th><th>Discount</th><th>Usage</th><th>Max phone</th><th>Total sales</th><th>Commission</th><th>Status</th><th>Actions</th></tr></thead>
-              <tbody>
-                {festLoading ? (
-                  <tr><td colSpan={9} style={{ textAlign: "center", padding: 24, color: "var(--text-65)" }}>Loading…</td></tr>
-                ) : crewCoupons.length === 0 ? (
-                  <tr><td colSpan={9} style={{ textAlign: "center", padding: 32, color: "var(--text-65)" }}>Crew-created coupons will appear here.</td></tr>
-                ) : crewCoupons.map(c => (
-                  <tr key={c.id}>
-                    <td className="mono fw700" style={{ color: "var(--blue)" }}>{c.code}</td>
-                    <td>{c.crew_member || "—"}</td>
-                    <td>{c.discount_type === "pct" ? `${c.discount_value}%` : `৳${c.discount_value}`}</td>
-                    <td>{c.used_count || 0} / {c.max_uses || "∞"}</td>
-                    <td>{c.max_usage_per_phone || "—"}</td>
-                    <td>৳{Number(c.total_sales || 0).toLocaleString()}</td>
-                    <td>৳{Number(c.commission_generated || 0).toLocaleString()}</td>
-                    <td><span className={`badge ${c.status === "active" ? "badge-green" : c.status === "pending_approval" ? "badge-orange" : "badge-gray"}`}>{c.status === "pending_approval" ? "Pending Approval" : fmtStatus(c.status)}</span></td>
-                    <td>
-                      <div className="cell-action">
-                        {c.status === "pending_approval" && <button className="btn btn-sm btn-ghost" style={{ padding: "5px 10px", fontSize: 11 }} onClick={async () => {
-                          const res = await window.mpApi.fetch(`/admin/coupons/${c.code}`, { method: "PATCH", body: JSON.stringify({ status: "active", is_active: true }) }).catch(() => null);
-                          if (res?.ok) setCrewCoupons(prev => prev.map(x => x.id === c.id ? { ...x, status: "active", is_active: true } : x));
-                        }}>Approve</button>}
-                        <button className="btn btn-sm btn-ghost" style={{ padding: "5px 10px", fontSize: 11 }} onClick={async () => {
-                          const res = await window.mpApi.fetch(`/admin/coupons/${c.code}`, { method: "PATCH", body: JSON.stringify({ status: "disabled", is_active: false }) }).catch(() => null);
-                          if (res?.ok) setCrewCoupons(prev => prev.map(x => x.id === c.id ? { ...x, status: "disabled", is_active: false } : x));
-                        }}>Disable</button>
-                        <button className="btn btn-sm btn-ghost" style={{ padding: "5px 10px", fontSize: 11 }} onClick={() => navigator.clipboard?.writeText(c.code)}>Copy</button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </SectionCard>
       )}
 
       {coupTab === "Influencer" && (
@@ -1252,12 +1181,14 @@ function CrewManagement() {
               ["Maximum orders per coupon", "max_uses_per_coupon"],
               ["Maximum usage per customer phone", "max_usage_per_phone"],
               ["Maximum active coupons per crew", "max_active_coupons_per_crew"],
-              ["Commission value", "commission_value"],
+              ["Commission value (max — earned at zero discount)", "commission_value"],
+              ["Minimum commission value (at full allowed discount)", "commission_min_value"],
               ["Payout threshold", "payout_threshold"],
             ].map(([label, key]) => (
               <div className="input-group" key={key}><label className="input-label">{label}</label><input className="input" type="number" value={settings[key] ?? ""} onChange={e => setSettings(s => ({ ...s, [key]: Number(e.target.value) }))} /></div>
             ))}
             <div className="input-group"><label className="input-label">Crew commission type</label><select className="select" value={settings.commission_type} onChange={e => setSettings(s => ({ ...s, commission_type: e.target.value }))}><option value="percentage">Percentage of net order value</option><option value="flat">Fixed amount per delivered order</option></select></div>
+            <div className="input-group"><label className="input-label">Commission model</label><select className="select" value={settings.commission_mode || "discount_linked"} onChange={e => setSettings(s => ({ ...s, commission_mode: e.target.value }))}><option value="discount_linked">Discount-linked — less discount given, more commission</option><option value="fixed">Fixed — same commission regardless of discount</option></select></div>
             <div className="input-group"><label className="input-label">Commission calculation basis</label><select className="select" value={settings.commission_base} onChange={e => setSettings(s => ({ ...s, commission_base: e.target.value }))}><option value="after_discount">After discount</option><option value="before_discount">Before discount</option></select></div>
           </div>
           <div className="grid-2">
@@ -1282,7 +1213,7 @@ function CrewManagement() {
               <tbody>{commissions.length === 0 ? (
                 <tr><td colSpan={8} style={{ textAlign: "center", padding: 28, color: "var(--text-65)" }}>No crew commissions yet.</td></tr>
               ) : commissions.map(c => (
-                <tr key={c.id}><td>{fmtDate(c.created_at)}</td><td>{c.crew_member}</td><td>{c.order_ref}</td><td>{c.coupon_code}</td><td>৳{Number(c.commission_base_amount || 0).toLocaleString()}</td><td style={{ fontWeight: 700, color: "var(--orange)" }}>৳{Number(c.commission_amount || 0).toLocaleString()}</td><td><StatusBadge status={c.status} /></td><td>{c.status !== "paid" && <button className="btn btn-sm btn-ghost" onClick={() => markPaid(c)}>Mark Paid</button>}</td></tr>
+                <tr key={c.id}><td>{fmtDate(c.created_at)}</td><td>{c.crew_member}</td><td>{c.order_ref}</td><td>{c.coupon_code}</td><td>৳{Number(c.commission_base_amount || 0).toLocaleString()}</td><td style={{ fontWeight: 700, color: "var(--orange)" }}>৳{Number(c.commission_amount || 0).toLocaleString()}</td><td><StatusBadge status={c.status} /></td><td>{(c.status === "pending" || c.status === "approved") && <button className="btn btn-sm btn-ghost" onClick={() => markPaid(c)}>Mark Paid</button>}</td></tr>
               ))}</tbody>
             </table>
           </div>
@@ -2229,6 +2160,86 @@ function Sidebar({ section, setSection, onLogout }) {
   );
 }
 
+// ── Mobile bottom nav (sidebar is hidden ≤768px) ───────
+function AdminTabbar({ section, setSection, onLogout }) {
+  const [moreOpen, setMoreOpen] = useState(false);
+  const { stats } = useContext(DashCtx);
+  const activeOrders = stats?.orders?.active || 0;
+
+  const main = [
+    { id: "overview", icon: "fa-chart-pie",  label: "Overview" },
+    { id: "orders",   icon: "fa-box",        label: "Orders" },
+    { id: "products", icon: "fa-box-open",   label: "Products" },
+    { id: "coupons",  icon: "fa-ticket-alt", label: "Coupons" },
+  ];
+  const more = [
+    { id: "customers",  icon: "fa-users",          label: "Customers" },
+    { id: "subs",       icon: "fa-calendar-check", label: "Subscriptions" },
+    { id: "crew",       icon: "fa-fire",           label: "Crew" },
+    { id: "feedback",   icon: "fa-comment-dots",   label: "Feedback" },
+    { id: "reviews",    icon: "fa-star-half-alt",  label: "Reviews" },
+    { id: "influencer", icon: "fa-bolt",           label: "Influencers" },
+    { id: "points",     icon: "fa-star",           label: "Points" },
+    { id: "financials", icon: "fa-chart-line",     label: "Financials" },
+    { id: "settings",   icon: "fa-cog",            label: "Settings" },
+  ];
+  const moreActive = more.some(l => l.id === section);
+
+  return (
+    <>
+      <div className="tabbar">
+        <div className="tabbar-inner">
+          {main.map(it => (
+            <button key={it.id} className={`tab-item ${section === it.id ? "active" : ""}`} onClick={() => setSection(it.id)}>
+              <div className="tab-icon" style={{ position: "relative" }}>
+                <i className={`fa ${it.icon}`} />
+                {it.id === "orders" && activeOrders > 0 && (
+                  <span style={{ position: "absolute", top: -2, right: 2, minWidth: 14, height: 14, padding: "0 3px", borderRadius: 7, background: "var(--red)", color: "#fff", fontSize: 8.5, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{activeOrders}</span>
+                )}
+              </div>
+              <span>{it.label}</span>
+            </button>
+          ))}
+          <button className={`tab-item ${moreActive ? "active" : ""}`} onClick={() => setMoreOpen(true)}>
+            <div className="tab-icon"><i className="fa fa-ellipsis-h" /></div>
+            <span>More</span>
+          </button>
+        </div>
+      </div>
+
+      {moreOpen && (
+        <div className="overlay" onClick={() => setMoreOpen(false)}>
+          <div className="sheet" onClick={e => e.stopPropagation()}>
+            <div className="sheet-handle" />
+            <div className="sheet-title">All Sections</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 16 }}>
+              {more.map(l => (
+                <button
+                  key={l.id}
+                  onClick={() => { setSection(l.id); setMoreOpen(false); }}
+                  style={{
+                    display: "flex", flexDirection: "column", alignItems: "center", gap: 7,
+                    padding: "14px 4px", borderRadius: 12, cursor: "pointer",
+                    border: `1px solid ${section === l.id ? "rgba(255,145,0,.45)" : "rgba(247,227,201,.14)"}`,
+                    background: section === l.id ? "rgba(255,145,0,.14)" : "rgba(247,227,201,.06)",
+                    color: section === l.id ? "var(--orange)" : "var(--cream)",
+                  }}
+                >
+                  <i className={`fa ${l.icon}`} style={{ fontSize: 16 }} />
+                  <span style={{ fontSize: 10.5, fontWeight: 600 }}>{l.label}</span>
+                </button>
+              ))}
+            </div>
+            <button className="btn btn-ghost btn-full" onClick={() => { setMoreOpen(false); onLogout(); }}>
+              <i className="fa fa-sign-out-alt" style={{ marginRight: 8 }} /> Log Out
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 // ── App ────────────────────────────────────────────────
 function AdminDashboard() {
   const [section, setSection] = useState("overview");
@@ -2310,6 +2321,7 @@ function AdminDashboard() {
             {render()}
           </main>
         </div>
+        <AdminTabbar section={section} setSection={setSection} onLogout={() => setLogoutOpen(true)} />
       </div>
       {logoutOpen && (
         <Sheet

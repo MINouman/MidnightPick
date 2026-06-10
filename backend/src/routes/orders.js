@@ -11,6 +11,7 @@ const addressSchema = {
     city:     { type: 'string', maxLength: 100 },
     district: { type: 'string', maxLength: 100 },
   },
+  additionalProperties: false,
 }
 
 module.exports = async function orderRoutes(app) {
