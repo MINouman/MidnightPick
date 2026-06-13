@@ -26,9 +26,16 @@ module.exports = async function policiesRoutes(app) {
     return { ok: true, data: { policy } }
   })
 
-  // Admin routes
+  // Admin routes (require authentication)
   app.addHook('onRequest', async (req, reply) => {
     if (req.url.startsWith('/admin/policies')) {
+      // Manually authenticate since policies routes are outside the protected scope
+      try {
+        await app.authenticate(req, reply)
+      } catch (err) {
+        return reply.code(401).send({ ok: false, error: { code: 'UNAUTHORIZED', message: 'Authentication required.' } })
+      }
+      // Check admin role
       if (req.user?.role !== 'admin') {
         return reply.code(403).send({ ok: false, error: { code: 'FORBIDDEN', message: 'Admin access required.' } })
       }
