@@ -948,8 +948,8 @@ function PolicyModal({ policyName, policy, onClose }) {
         <div className="sheet-handle" />
         <div className="sheet-title">{policy.title}</div>
         <div className="sheet-body">
-          <div style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--text)', whiteSpace: 'pre-wrap' }}>
-            {policy.content}
+          <div style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--text)' }}>
+            <MarkdownRenderer content={policy.content} />
           </div>
         </div>
         <div style={{ padding: '16px 24px' }}>

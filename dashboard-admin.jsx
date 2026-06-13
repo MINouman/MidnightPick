@@ -1172,8 +1172,8 @@ function Policies() {
                 <input className="input" value={panel.title} onChange={e => setPanel(f => ({ ...f, title: e.target.value }))} placeholder="Return Policy" />
               </div>
               <div className="input-group">
-                <label className="input-label">Content</label>
-                <textarea className="input" rows={10} value={panel.content} onChange={e => setPanel(f => ({ ...f, content: e.target.value }))} placeholder="Enter policy content..." style={{ resize: 'vertical' }} />
+                <label className="input-label">Content (Markdown Supported)</label>
+                <MarkdownEditor value={panel.content} onChange={e => setPanel(f => ({ ...f, content: e.target.value }))} />
               </div>
             </div>
             <div className="col-gap">
