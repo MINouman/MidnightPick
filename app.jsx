@@ -34,6 +34,22 @@ function getMidnightApiBase() {
   return base;
 }
 
+function MarkdownRenderer({ content }) {
+  if (!content) return null;
+  const renderedHtml = typeof marked !== 'undefined' ? (typeof marked.parse === 'function' ? marked.parse(content) : marked(content)) : content;
+  return (
+    <div
+      style={{
+        fontSize: 14,
+        lineHeight: 1.8,
+        color: 'var(--text)',
+        wordWrap: 'break-word',
+      }}
+      dangerouslySetInnerHTML={{ __html: renderedHtml }}
+    />
+  );
+}
+
 // ----------------- nav -----------------
 const ROLE_DASH = { user: "dashboard-user.html", crew: "dashboard-user.html", influencer: "dashboard-influencer.html", admin: "dashboard-admin.html" };
 
@@ -942,18 +958,35 @@ function FAQ({ onTrack }) {
 // ----------------- footer -----------------
 function PolicyModal({ policyName, policy, onClose }) {
   if (!policyName || !policy) return null;
+
+  useEffect(() => {
+    document.body.style.overflow = "hidden";
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = "";
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+
+  const handleOverlay = (e) => { if (e.target === e.currentTarget) onClose(); };
+
   return (
-    <div className="overlay" onClick={onClose} style={{ zIndex: 1000 }}>
-      <div className="sheet" onClick={e => e.stopPropagation()} style={{ maxHeight: '90vh', overflowY: 'auto' }}>
-        <div className="sheet-handle" />
-        <div className="sheet-title">{policy.title}</div>
-        <div className="sheet-body">
+    <div className="policy-overlay" onClick={handleOverlay} role="dialog" aria-modal="true" aria-label={policy.title}>
+      <div className="policy-modal" onClick={e => e.stopPropagation()}>
+        <button className="policy-modal-close" onClick={onClose} aria-label="Close">
+          <CloseIcon size={18} />
+        </button>
+        <div className="policy-modal-header">
+          <h2 className="policy-modal-title">{policy.title}</h2>
+        </div>
+        <div className="policy-modal-body">
           <div style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--text)' }}>
             <MarkdownRenderer content={policy.content} />
           </div>
         </div>
-        <div style={{ padding: '16px 24px' }}>
-          <button className="btn btn-ghost btn-full" onClick={onClose}>Close</button>
+        <div className="policy-modal-footer">
+          <button className="policy-modal-close-btn" onClick={onClose}>Close</button>
         </div>
       </div>
     </div>
