@@ -75,10 +75,20 @@ async function build() {
 
   app.decorate('authenticate', async (req, reply) => {
     try {
-      // Get token from Authorization header or cookie
+      // Get token from Authorization header or Cookie header
       let token = req.headers.authorization?.replace('Bearer ', '');
+
       if (!token) {
-        token = req.cookies?.mp_access_token;
+        // Parse the Cookie header manually
+        const cookieHeader = req.headers.cookie || '';
+        const cookies = cookieHeader.split(';').reduce((acc, cookie) => {
+          const [key, value] = cookie.trim().split('=');
+          if (key === 'mp_access_token') {
+            acc = value;
+          }
+          return acc;
+        }, '');
+        token = cookies || undefined;
       }
 
       if (!token) {
