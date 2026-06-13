@@ -46,7 +46,9 @@ module.exports = async function policiesRoutes(app) {
     }
 
     try {
-      req.user = app.jwt.verify(token);
+      const decoded = app.jwt.verify(token);
+      // Map JWT sub (subject) to id for consistency with the rest of the code
+      req.user = { id: decoded.sub, role: decoded.role, email: decoded.email, phone: decoded.phone };
     } catch {
       reply.code(401);
       throw { code: 'UNAUTHORIZED', message: 'Authentication required.' };
