@@ -1077,12 +1077,19 @@ function App() {
     if (!policyOpen) return;
     async function fetchPolicy() {
       try {
-        const res = await fetch(`${getMidnightApiBase()}/policies/${policyOpen}`);
+        const url = `${getMidnightApiBase()}/policies/${policyOpen}`;
+        console.log('Fetching policy from:', url);
+        const res = await fetch(url);
         const data = await res.json();
+        console.log('Policy response:', data);
         if (data.ok) {
           setPolicy(data.data.policy);
+        } else {
+          console.error('Policy fetch failed:', data.error);
         }
-      } catch (_) {}
+      } catch (err) {
+        console.error('Policy fetch error:', err);
+      }
     }
     fetchPolicy();
   }, [policyOpen]);
