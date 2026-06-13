@@ -133,6 +133,7 @@ async function build() {
     EMAIL_EXISTS:        409,
     SUBSCRIPTION_EXISTS: 409,
     ALREADY_REVIEWED:    409,
+    ADMIN_EXISTS:        409,
     NOT_ELIGIBLE:        403,
     VALIDATION_ERROR:    400,
     COUPON_TAKEN:        409,
