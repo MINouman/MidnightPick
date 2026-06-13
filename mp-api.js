@@ -2,7 +2,32 @@
 (function (window) {
   'use strict';
 
-  const BASE = 'http://localhost:3000/api/v1';
+  function resolveApiBase() {
+    if (window.MIDNIGHT_API_BASE) return window.MIDNIGHT_API_BASE.replace(/\/$/, '');
+
+    const hostname = window.location.hostname || 'localhost';
+    const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+    return `${protocol}//${hostname}:3000/api/v1`;
+  }
+
+  const BASE = resolveApiBase();
+  window.MIDNIGHT_API_BASE = BASE;
+  let refreshPromise = null;
+
+  async function refreshAuth() {
+    if (!refreshPromise) {
+      refreshPromise = fetch(BASE + '/auth/token/refresh', {
+        method: 'POST',
+        credentials: 'include',  // Send old refresh token cookie, get new tokens in new cookies
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      }).finally(() => {
+        refreshPromise = null;
+      });
+    }
+
+    return refreshPromise;
+  }
 
   async function mpFetch(path, options) {
     options = options || {};
@@ -19,12 +44,7 @@
 
     // Try token refresh once on 401
     if (res.status === 401) {
-      const rRes = await fetch(BASE + '/auth/token/refresh', {
-        method: 'POST',
-        credentials: 'include',  // Send old refresh token cookie, get new tokens in new cookies
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({})
-      });
+      const rRes = await refreshAuth();
 
       if (!rRes.ok) { _signOut(); return null; }
 

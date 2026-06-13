@@ -318,6 +318,29 @@ function Sidebar({ tab, setTab, onLogout }) {
   );
 }
 
+// ── BOTTOM NAV (mobile) ────────────────────────────────
+function BottomNav({ tab, setTab }) {
+  const items = [
+    { id: "home",         icon: "fa-home",          label: "Home" },
+    { id: "orders",       icon: "fa-box",            label: "Orders" },
+    { id: "subscription", icon: "fa-calendar-check", label: "Plan" },
+    { id: "performance",  icon: "fa-chart-bar",      label: "Perf" },
+    { id: "account",      icon: "fa-user",           label: "Account" },
+  ];
+  return (
+    <div className="tabbar">
+      <div className="tabbar-inner">
+        {items.map(it => (
+          <button key={it.id} className={`tab-item ${tab === it.id ? "active" : ""}`} onClick={() => setTab(it.id)}>
+            <div className="tab-icon"><i className={`fa ${it.icon}`} /></div>
+            <span>{it.label}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── App ────────────────────────────────────────────────
 function InfluencerDashboard() {
   const [tab, setTab]       = useState("performance");
@@ -377,6 +400,7 @@ function InfluencerDashboard() {
           <main className="dash-content"><div className="dash-inner">{render()}</div></main>
         </div>
       </div>
+      <BottomNav tab={tab} setTab={setTab} />
       {logoutOpen && (
         <Sheet
           title="Log out?"

@@ -2388,7 +2388,7 @@ function AdminDashboard() {
 
   useEffect(() => {
     // Verify auth via API call with credentials: include (httpOnly cookies sent automatically)
-    fetch(window.mpApi.base + '/users', {
+    fetch(window.mpApi.base + '/me', {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',  // Send httpOnly cookies automatically
@@ -2954,10 +2954,12 @@ function AdminLogin({ onSuccess }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
+        credentials: 'include',
       });
       const data = await res.json();
       if (!data.ok) { setError(data.error?.message || 'Login failed.'); return; }
-      // Backend sets httpOnly cookies, no need to store tokens in localStorage
+      // Store user info in localStorage for dashboard to use
+      localStorage.setItem('mp_user', JSON.stringify(data.data.user));
       onSuccess();
     } catch {
       setError('Could not connect to server. Is the backend running?');

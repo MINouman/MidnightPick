@@ -685,7 +685,7 @@ function formatTrackTs(iso) {
 }
 
 async function fetchOrderStatus(orderId) {
-  const res  = await fetch(`http://localhost:3000/api/v1/track/${encodeURIComponent(orderId.trim().toUpperCase())}`);
+  const res  = await fetch(`${getMidnightApiBase()}/track/${encodeURIComponent(orderId.trim().toUpperCase())}`);
   const json = await res.json();
   if (!json.ok) throw { code: 'not_found' };
 
@@ -922,7 +922,17 @@ const EyeIcon = ({ size = 16, open = true }) => (
   </svg>
 );
 
-const API_BASE = "http://localhost:3000/api/v1";
+function getMidnightApiBase() {
+  if (window.MIDNIGHT_API_BASE) return window.MIDNIGHT_API_BASE.replace(/\/$/, "");
+
+  const hostname = window.location.hostname || "localhost";
+  const protocol = window.location.protocol === "https:" ? "https:" : "http:";
+  const base = `${protocol}//${hostname}:3000/api/v1`;
+  window.MIDNIGHT_API_BASE = base;
+  return base;
+}
+
+const API_BASE = getMidnightApiBase();
 
 const ROLE_ROUTES = {
   user:       "dashboard-user.html",

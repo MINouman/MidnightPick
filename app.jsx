@@ -24,6 +24,16 @@ function applyPalette(name) {
   r.setProperty("--paper", p.paper);
 }
 
+function getMidnightApiBase() {
+  if (window.MIDNIGHT_API_BASE) return window.MIDNIGHT_API_BASE.replace(/\/$/, "");
+
+  const hostname = window.location.hostname || "localhost";
+  const protocol = window.location.protocol === "https:" ? "https:" : "http:";
+  const base = `${protocol}//${hostname}:3000/api/v1`;
+  window.MIDNIGHT_API_BASE = base;
+  return base;
+}
+
 // ----------------- nav -----------------
 const ROLE_DASH = { user: "dashboard-user.html", crew: "dashboard-user.html", influencer: "dashboard-influencer.html", admin: "dashboard-admin.html" };
 
@@ -251,7 +261,7 @@ function Story() {
 // ----------------- collection -----------------
 const PRODUCTS_STATIC = [];
 
-const COLLECTION_API = (window.MIDNIGHT_API_BASE || "http://localhost:3000/api/v1") + "/products";
+const COLLECTION_API = getMidnightApiBase() + "/products";
 
 function ProductRow({ p, onAdd }) {
   const [added, setAdded] = useState(false);
@@ -1032,7 +1042,7 @@ function App() {
     localStorage.removeItem("mp_user");
     setAuth({ loggedIn: false, dashUrl: "dashboard-user.html" });
     // Optionally call backend logout to clear cookies
-    fetch("http://localhost:3000/api/v1/auth/logout", {
+    fetch(getMidnightApiBase() + "/auth/logout", {
       method: "POST",
       credentials: "include",
     }).catch(() => {});

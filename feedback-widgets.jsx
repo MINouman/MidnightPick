@@ -5,7 +5,17 @@
 //   • MPReviewPrompt  — public verified-purchase review prompt after delivery
 
 (function () {
-  const MP_API = "http://localhost:3000/api/v1";
+  function getMidnightApiBase() {
+    if (window.MIDNIGHT_API_BASE) return window.MIDNIGHT_API_BASE.replace(/\/$/, "");
+
+    const hostname = window.location.hostname || "localhost";
+    const protocol = window.location.protocol === "https:" ? "https:" : "http:";
+    const base = `${protocol}//${hostname}:3000/api/v1`;
+    window.MIDNIGHT_API_BASE = base;
+    return base;
+  }
+
+  const MP_API = getMidnightApiBase();
 
   // ── Shared styles ──────────────────────────────────────────────────────────
   const css = `

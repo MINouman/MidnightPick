@@ -35,8 +35,17 @@ const PRODUCT_DEFAULT = {
   images: [],
 };
 
+function getMidnightApiBase() {
+  if (window.MIDNIGHT_API_BASE) return window.MIDNIGHT_API_BASE.replace(/\/$/, "");
 
-const API_BASE = "http://localhost:3000/api/v1";  // Do not allow override from window
+  const hostname = window.location.hostname || "localhost";
+  const protocol = window.location.protocol === "https:" ? "https:" : "http:";
+  const base = `${protocol}//${hostname}:3000/api/v1`;
+  window.MIDNIGHT_API_BASE = base;
+  return base;
+}
+
+const API_BASE = getMidnightApiBase();
 const THUMB_LABELS = ["Front", "Back"];
 const BD_MOBILE_PATTERN = /^01[3-9]\d{8}$/;
 

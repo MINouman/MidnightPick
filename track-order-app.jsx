@@ -1,7 +1,17 @@
 // midnight pick — track order page
 const { useState, useRef } = React;
 
-const API_BASE = 'http://localhost:3000/api/v1';
+function getMidnightApiBase() {
+  if (window.MIDNIGHT_API_BASE) return window.MIDNIGHT_API_BASE.replace(/\/$/, '');
+
+  const hostname = window.location.hostname || 'localhost';
+  const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+  const base = `${protocol}//${hostname}:3000/api/v1`;
+  window.MIDNIGHT_API_BASE = base;
+  return base;
+}
+
+const API_BASE = getMidnightApiBase();
 
 const STATUS_TO_STEP = {
   processing: 'confirmed',
