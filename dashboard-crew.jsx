@@ -574,14 +574,12 @@ function CrewDashboard() {
   }
 
   async function handleLogout() {
-    const token   = localStorage.getItem("mp_access_token");
-    const refresh = localStorage.getItem("mp_refresh_token");
-    await fetch("http://localhost:3000/api/v1/auth/logout", {
+    // Call logout with credentials: include (sends httpOnly cookies automatically)
+    await fetch(window.mpApi.base + "/auth/logout", {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ refresh_token: refresh }),
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
     }).catch(() => {});
-    localStorage.clear();
     window.location.href = "index.html";
   }
 

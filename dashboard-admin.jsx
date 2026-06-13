@@ -2387,15 +2387,26 @@ function AdminDashboard() {
   }
 
   useEffect(() => {
-    const token = localStorage.getItem('mp_access_token');
-    const raw   = localStorage.getItem('mp_user');
-    if (!token || !raw) { setAuthed(false); setLoading(false); return; }
-    try {
-      const user = JSON.parse(raw);
-      if (user.role !== 'admin') { setAuthed(false); setLoading(false); return; }
-    } catch { setAuthed(false); setLoading(false); return; }
-    setAuthed(true);
-    loadDashboard();
+    // Verify auth via API call with credentials: include (httpOnly cookies sent automatically)
+    fetch(window.mpApi.base + '/users', {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',  // Send httpOnly cookies automatically
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (!data.ok || data.data?.role !== 'admin') {
+          setAuthed(false);
+          setLoading(false);
+          return;
+        }
+        setAuthed(true);
+        loadDashboard();
+      })
+      .catch(() => {
+        setAuthed(false);
+        setLoading(false);
+      });
   }, []);
 
   function onLoginSuccess() {
@@ -2946,9 +2957,7 @@ function AdminLogin({ onSuccess }) {
       });
       const data = await res.json();
       if (!data.ok) { setError(data.error?.message || 'Login failed.'); return; }
-      localStorage.setItem('mp_access_token', data.data.access_token);
-      localStorage.setItem('mp_refresh_token', data.data.refresh_token);
-      localStorage.setItem('mp_user', JSON.stringify(data.data.user));
+      // Backend sets httpOnly cookies, no need to store tokens in localStorage
       onSuccess();
     } catch {
       setError('Could not connect to server. Is the backend running?');

@@ -29,8 +29,9 @@ const ROLE_DASH = { user: "dashboard-user.html", crew: "dashboard-user.html", in
 
 function getAuthState() {
   try {
-    if (!localStorage.getItem("mp_access_token")) return { loggedIn: false, dashUrl: "dashboard-user.html" };
     const u = JSON.parse(localStorage.getItem("mp_user") || "{}");
+    // Check if we have valid user data (role indicates successful auth)
+    if (!u.role) return { loggedIn: false, dashUrl: "dashboard-user.html" };
     return { loggedIn: true, dashUrl: ROLE_DASH[u.role] || "dashboard-user.html" };
   } catch { return { loggedIn: false, dashUrl: "dashboard-user.html" }; }
 }
@@ -1027,10 +1028,14 @@ function App() {
   const [auth, setAuth] = useState(getAuthState);
 
   const handleLogout = () => {
-    localStorage.removeItem("mp_access_token");
-    localStorage.removeItem("mp_refresh_token");
+    // Clear user data; tokens are in httpOnly cookies (cleared by backend on logout)
     localStorage.removeItem("mp_user");
     setAuth({ loggedIn: false, dashUrl: "dashboard-user.html" });
+    // Optionally call backend logout to clear cookies
+    fetch("http://localhost:3000/api/v1/auth/logout", {
+      method: "POST",
+      credentials: "include",
+    }).catch(() => {});
   };
 
   useEffect(() => {applyPalette(t.palette);}, [t.palette]);

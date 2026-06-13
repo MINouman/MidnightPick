@@ -289,15 +289,14 @@
 
     React.useEffect(() => {
       if (manual) return;
-      const token = localStorage.getItem("mp_access_token");
-      if (!token) return;
       if (localStorage.getItem(DONE_KEY)) return;
       const snooze = parseInt(localStorage.getItem(SNOOZE_KEY) || "0", 10);
       if (snooze > Date.now()) return;
 
       let cancelled = false;
       const q = new URLSearchParams({ product: productSlug });
-      fetch(`${MP_API}/reviews/eligibility?${q.toString()}`, { headers: { Authorization: `Bearer ${token}` } })
+      // Tokens in httpOnly cookies, sent automatically with credentials: include
+      fetch(`${MP_API}/reviews/eligibility?${q.toString()}`, { credentials: 'include' })
         .then(r => r.json())
         .then(json => {
           if (cancelled || !json?.ok) return;
@@ -315,12 +314,11 @@
 
     React.useEffect(() => {
       if (!manual || !triggerKey) return;
-      const token = localStorage.getItem("mp_access_token");
-      if (!token) return;
       setRating(0); setHover(0); setTags([]); setText(""); setThanks(false); setError("");
       const q = new URLSearchParams({ prompt: "false", product: productSlug });
       if (orderId) q.set("order_id", orderId);
-      fetch(`${MP_API}/reviews/eligibility?${q.toString()}`, { headers: { Authorization: `Bearer ${token}` } })
+      // Tokens in httpOnly cookies, sent automatically with credentials: include
+      fetch(`${MP_API}/reviews/eligibility?${q.toString()}`, { credentials: 'include' })
         .then(r => r.json())
         .then(json => {
           if (json?.data?.eligible) {
@@ -349,11 +347,12 @@
     const dismiss = async () => {
       setOpen(false);
       localStorage.setItem(SNOOZE_KEY, String(Date.now() + 7 * 86400000));
-      const token = localStorage.getItem("mp_access_token");
       try {
+        // Tokens in httpOnly cookies, sent automatically with credentials: include
         await fetch(`${MP_API}/reviews/dismiss`, {
           method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
           body: JSON.stringify({ source }),
         });
       } catch {}
@@ -365,11 +364,12 @@
     const submit = async () => {
       if (!rating || busy) return;
       setBusy(true); setError("");
-      const token = localStorage.getItem("mp_access_token");
       try {
+        // Tokens in httpOnly cookies, sent automatically with credentials: include
         const res = await fetch(`${MP_API}/reviews/submit`, {
           method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
           body: JSON.stringify({
             rating,
             product_slug: productSlug,
