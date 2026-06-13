@@ -69,25 +69,30 @@ async function build() {
   await app.register(require('@fastify/jwt'), {
     secret: env.JWT_SECRET,
     sign:   { expiresIn: '15m' },
-    extract: (req) => {
-      // Try Authorization header first, then fall back to httpOnly cookie
-      const auth = req.headers.authorization?.replace('Bearer ', '');
-      if (auth) return auth;
-      return req.cookies.mp_access_token || null;
-    },
   })
 
   // ── Auth decorator (used by all protected routes) ──────────────────────
 
   app.decorate('authenticate', async (req, reply) => {
     try {
-      await req.jwtVerify()
-      // Get the raw token the same way extract() does
-      const raw = req.headers.authorization?.replace('Bearer ', '') || req.cookies.mp_access_token || ''
-      if (await isBlacklisted(raw)) {
+      // Get token from Authorization header or cookie
+      let token = req.headers.authorization?.replace('Bearer ', '');
+      if (!token) {
+        token = req.cookies?.mp_access_token;
+      }
+
+      if (!token) {
+        return reply.code(401).send({ ok: false, error: { code: 'UNAUTHORIZED', message: 'Authentication required.' } })
+      }
+
+      // Verify the token
+      req.user = app.jwt.verify(token);
+
+      // Check if token is blacklisted
+      if (await isBlacklisted(token)) {
         return reply.code(401).send({ ok: false, error: { code: 'UNAUTHORIZED', message: 'Token has been revoked.' } })
       }
-    } catch {
+    } catch (err) {
       return reply.code(401).send({ ok: false, error: { code: 'UNAUTHORIZED', message: 'Authentication required.' } })
     }
   })
