@@ -1,6 +1,7 @@
 'use strict'
 
 const { query } = require('../config/db')
+const { calculateCommission } = require('./calculations')
 
 async function getCrewSettings(client = { query }) {
   const { rows } = await client.query(`SELECT * FROM crew_settings WHERE id = 1`)
@@ -9,7 +10,7 @@ async function getCrewSettings(client = { query }) {
 
 function discountAmount(coupon, subtotal) {
   const raw = coupon.discount_type === 'pct'
-    ? Math.floor(subtotal * Number(coupon.discount_value) / 100)
+    ? Math.round(subtotal * Number(coupon.discount_value) / 100)
     : Number(coupon.discount_value)
   // A pct value over 100 or an oversized flat value must never push the
   // order total below zero.
@@ -36,18 +37,19 @@ async function validateCoupon(client, { code, subtotal, customerPhone = null, us
   if (c.expires_at && new Date(c.expires_at) < new Date()) throw { code: 'INVALID_COUPON', message: 'Coupon has expired.' }
   if (c.max_uses !== null && Number(c.used_count) >= Number(c.max_uses)) throw { code: 'COUPON_EXHAUSTED', message: 'This code has reached its usage limit.' }
   if (subtotal < Number(c.min_order || 0)) throw { code: 'COUPON_MIN_ORDER', message: `Minimum order for this code is ৳${c.min_order}.` }
-  if ((c.source || c.type) === 'crew') {
+  const couponType = c.source || c.type || 'unknown'
+  if (couponType === 'crew') {
     if (c.crew_status !== 'active') throw { code: 'INVALID_COUPON', message: 'This code is no longer active.' }
   }
-  // Per-customer cap applies to every coupon type that sets it, and counts by
-  // user account as well as phone so switching payment numbers can't reset it.
   if (c.max_usage_per_phone && (customerPhone || userId)) {
     const params = [c.id]
     const conds  = []
     if (customerPhone) { params.push(customerPhone); conds.push(`customer_phone = $${params.length}`) }
     if (userId)        { params.push(userId);        conds.push(`user_id = $${params.length}`) }
     const usage = await client.query(
-      `SELECT COUNT(*)::int AS count FROM coupon_usages WHERE coupon_id = $1 AND (${conds.join(' OR ')})`,
+      `SELECT COUNT(*)::int AS count FROM coupon_usages
+       WHERE coupon_id = $1 AND (${conds.join(' OR ')})
+       FOR UPDATE`,
       params
     )
     if (usage.rows[0].count >= Number(c.max_usage_per_phone)) {
@@ -59,14 +61,24 @@ async function validateCoupon(client, { code, subtotal, customerPhone = null, us
 
 async function recordCouponUsage(client, { coupon, orderId, userId = null, customerPhone = null, discountAmount = 0, orderTotal = 0 }) {
   if (!coupon?.id) return
-  await client.query(`UPDATE coupons SET used_count = used_count + 1, updated_at = NOW() WHERE id = $1`, [coupon.id])
+  const { rows: updateRows } = await client.query(
+    `UPDATE coupons
+     SET used_count = used_count + 1, updated_at = NOW()
+     WHERE id = $1
+     RETURNING used_count, max_uses`,
+    [coupon.id]
+  )
+  if (updateRows[0].max_uses && updateRows[0].used_count > updateRows[0].max_uses) {
+    throw { code: 'COUPON_MAXED', message: 'Coupon usage limit exceeded.' }
+  }
   await client.query(
     `INSERT INTO coupon_usages (coupon_id, coupon_code, order_id, user_id, customer_phone, discount_amount, order_total)
      VALUES ($1, $2, $3, $4, $5, $6, $7)
      ON CONFLICT (coupon_id, order_id) DO NOTHING`,
     [coupon.id, coupon.code, orderId, userId, customerPhone, discountAmount, orderTotal]
   )
-  if ((coupon.source || coupon.type) === 'crew' && coupon.crew_profile_id) {
+  const couponType = coupon.source || coupon.type || 'unknown'
+  if (couponType === 'crew' && coupon.crew_profile_id) {
     await client.query(`UPDATE orders SET coupon_id = $1, crew_profile_id = $2 WHERE id = $3`, [coupon.id, coupon.crew_profile_id, orderId])
   } else {
     await client.query(`UPDATE orders SET coupon_id = $1 WHERE id = $2`, [coupon.id, orderId])
@@ -86,7 +98,7 @@ async function syncCommissionForDeliveredOrder(client, orderId) {
                     OR (o.coupon_id IS NULL AND c.code = o.coupon_code)
      JOIN crew_profiles cp ON cp.id = c.crew_profile_id
      CROSS JOIN crew_settings cs
-     WHERE o.id = $1 AND (c.source = 'crew' OR c.type = 'crew')`,
+     WHERE o.id = $1 AND (COALESCE(c.source, c.type) = 'crew')`,
     [orderId]
   )
   if (!rows.length) return null
@@ -96,23 +108,24 @@ async function syncCommissionForDeliveredOrder(client, orderId) {
   const maxValue = Number(o.default_commission_value || o.commission_value || 0)
   let value = maxValue
   if (o.commission_mode === 'discount_linked') {
-    // Commission slides from commission_value (no discount given) down to
-    // commission_min_value (full allowed discount used), so crew earn more by
-    // discounting less. Utilization is measured in taka against the pct cap so
-    // flat and pct coupons are judged on the same scale; a flat discount that
-    // exceeds the pct cap for a small order clamps to the minimum commission.
+    // DEPRECATED: discount_linked penalizes crew for giving discounts.
+    // Only apply if explicitly configured for backwards compatibility.
+    // New coupons should use 'fixed' mode instead.
     const subtotal = Number(o.subtotal || o.total || 0)
     const capPct = Number(o.custom_max_pct_discount ?? o.max_pct_discount ?? 0)
     const capAmount = Math.floor(subtotal * capPct / 100)
     const discount = Number(o.discount_amount || 0)
     const utilization = capAmount > 0 ? Math.min(1, discount / capAmount) : (discount > 0 ? 1 : 0)
     const minValue = Math.min(Number(o.commission_min_value || 0), maxValue)
-    value = Number((minValue + (maxValue - minValue) * (1 - utilization)).toFixed(2))
+    // Ensure minValue never exceeds maxValue
+    const safeMintValue = Math.min(minValue, maxValue)
+    value = Number((safeMintValue + (maxValue - safeMintValue) * (1 - utilization)).toFixed(2))
   }
+  // else: 'fixed' mode (default) — commission is independent of discount
   const base = o.commission_base === 'before_discount'
     ? Number(o.subtotal || o.total || 0)
     : Number(o.total || 0)
-  const amount = type === 'flat' ? value : Number((base * value / 100).toFixed(2))
+  const amount = type === 'flat' ? value : calculateCommission(base, value)
   const { rows: commRows } = await client.query(
     `INSERT INTO crew_commissions
        (crew_profile_id, user_id, coupon_id, order_id, order_total, discount_amount,

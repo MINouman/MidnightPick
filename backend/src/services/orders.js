@@ -15,9 +15,10 @@ async function validateAndLockCoupon(client, code, subtotal, customerPhone = nul
   return { couponId: res.coupon.id, coupon: res.coupon, discount: res.discount }
 }
 
-async function lookupVariants(client, items) {
+async function lookupVariants(client, items, lock = false) {
   const ids          = items.map(i => i.variant_id)
   const placeholders = ids.map((_, i) => `$${i + 1}`).join(', ')
+  const lockClause   = lock ? 'FOR UPDATE OF pv' : ''
 
   const { rows } = await client.query(
     `SELECT pv.id, pv.price, pv.stock, pv.label,
@@ -25,7 +26,8 @@ async function lookupVariants(client, items) {
      FROM   product_variants pv
      JOIN   products p ON p.id = pv.product_id
      WHERE  pv.id IN (${placeholders})
-       AND  p.status = 'active'`,
+       AND  p.status = 'active'
+     ${lockClause}`,
     ids
   )
 
@@ -89,8 +91,8 @@ async function placeOrder(userId, body) {
       throw { code: 'ADDRESS_REQUIRED', message: 'A delivery address is required.' }
     }
 
-    // 2. Lock variants and check stock
-    const variantMap = await lookupVariants(client, items)
+    // 2. Lock variants and check stock (FOR UPDATE prevents price changes during checkout)
+    const variantMap = await lookupVariants(client, items, true)
 
     // 3. Subtotal
     let subtotal = 0
@@ -98,11 +100,17 @@ async function placeOrder(userId, body) {
       subtotal += variantMap[item.variant_id].price * item.qty
     }
 
-    // 4. Coupon — per-customer caps key on normalized phone numbers, but
-    // payment_number may be a wallet/card number; normalize best-effort and
-    // let the user_id count catch what the phone can't.
-    let couponPhone = payment_number || null
-    if (couponPhone) { try { couponPhone = normalizeBdMobile(couponPhone) } catch { couponPhone = null } }
+    // 4. Coupon — per-customer caps key on normalized phone numbers only.
+    // Only extract phone for phone-based payment methods; for card/cod, skip per-phone limits.
+    const PHONE_PAYMENT_TYPES = ['bkash', 'nagad', 'rocket']
+    let couponPhone = null
+    if (PHONE_PAYMENT_TYPES.includes(payment_type) && payment_number) {
+      try {
+        couponPhone = normalizeBdMobile(payment_number)
+      } catch {
+        throw { code: 'INVALID_PHONE', message: 'Phone number must be a valid BD mobile number for this payment method.' }
+      }
+    }
 
     let discountAmount = 0
     let coupon         = null

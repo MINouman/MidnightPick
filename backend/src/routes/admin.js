@@ -2,6 +2,7 @@
 
 const { query, withTransaction } = require('../config/db')
 const { sendOrderConfirmation }  = require('../services/sms')
+const { getRateLimitConfig } = require('../config/rate-limits')
 const { calculatePointsForOrder, awardPoints, reversePoints } = require('../services/points')
 const { syncCommissionForDeliveredOrder, reverseCommissionForOrder, validateCoupon, recordCouponUsage, restoreCouponUsageForOrder } = require('../services/crew')
 const { toEndOfDayDhaka } = require('../services/dates')
@@ -203,23 +204,33 @@ module.exports = async function adminRoutes(app) {
     }
   })
 
-  // GET /admin/subscriptions?status=active|paused|cancelled
+  // GET /admin/subscriptions?status=active|paused|cancelled&page=1&limit=20
   app.get('/subscriptions', {
     schema: {
       querystring: {
         type: 'object',
         properties: {
           status: { type: 'string', enum: ['active', 'paused', 'cancelled'] },
+          page:   { type: 'integer', minimum: 1, default: 1 },
+          limit:  { type: 'integer', minimum: 1, maximum: 100, default: 20 },
         },
       },
     },
   }, async (req) => {
-    const { status } = req.query
+    const { status, page = 1, limit = 20 } = req.query
+    const offset = (page - 1) * limit
     const params = []
     const where  = status
       ? (params.push(status), `WHERE s.status = $1`)
       : `WHERE s.status != 'cancelled'`
 
+    const { rows: countRows } = await query(
+      `SELECT COUNT(*) FROM subscriptions s ${where}`,
+      params
+    )
+    const total = parseInt(countRows[0].count, 10)
+
+    const dataParams = [...params, limit, offset]
     const { rows } = await query(
       `SELECT s.id, s.product_name, s.qty, s.unit_price, s.address,
               s.billing_day, s.status, s.pause_until, s.next_delivery_date,
@@ -228,10 +239,11 @@ module.exports = async function adminRoutes(app) {
        FROM   subscriptions s
        JOIN   users u ON u.id = s.user_id
        ${where}
-       ORDER  BY s.next_delivery_date ASC`,
-      params
+       ORDER  BY s.next_delivery_date ASC
+       LIMIT  $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+      dataParams
     )
-    return { ok: true, data: { subscriptions: rows } }
+    return { ok: true, data: { subscriptions: rows, total, page, limit } }
   })
 
   // GET /admin/financials?month=YYYY-MM — monthly financial summary
@@ -259,19 +271,21 @@ module.exports = async function adminRoutes(app) {
         [monthStart]
       ),
       query(
-        `SELECT COALESCE(SUM(ROUND(o.total * i.comm_rate / 100)), 0) AS commission
-         FROM   orders      o
-         JOIN   coupons     c ON c.code = o.coupon_code AND c.type = 'influencer'
-         JOIN   influencers i ON i.code = c.code
+        `SELECT COALESCE(SUM(ROUND(o.total * i.comm_rate / 100)), 0) AS influencer_commission,
+                COALESCE(SUM(cc.commission_amount), 0) AS crew_commission
+         FROM   orders o
+         LEFT JOIN coupons ic ON ic.code = o.coupon_code AND ic.type = 'influencer'
+         LEFT JOIN influencers i ON i.code = ic.code
+         LEFT JOIN crew_commissions cc ON cc.order_id = o.id AND cc.status != 'reversed'
          WHERE  o.status = 'delivered'
            AND  o.created_at >= $1::date
            AND  o.created_at <  $1::date + INTERVAL '1 month'`,
         [monthStart]
       ),
       query(
-        `SELECT COALESCE(SUM(points), 0) AS points_spent
-         FROM   points_transactions
-         WHERE  type = 'spent'
+        `SELECT COALESCE(SUM(pts_cost), 0) AS points_spent
+         FROM   point_redemptions
+         WHERE  status != 'cancelled'
            AND  created_at >= $1::date
            AND  created_at <  $1::date + INTERVAL '1 month'`,
         [monthStart]
@@ -283,7 +297,8 @@ module.exports = async function adminRoutes(app) {
       data: {
         revenue:              parseInt(ordersRes.rows[0].revenue),
         discounts:            parseInt(ordersRes.rows[0].discounts),
-        commission:           parseInt(commRes.rows[0].commission),
+        commission:           parseInt(commRes.rows[0].influencer_commission),
+        crew_commission:      parseFloat(commRes.rows[0].crew_commission || 0),
         points_redeemed_taka: Math.round(parseInt(pointsRes.rows[0].points_spent) * 2),
       },
     }
@@ -291,6 +306,7 @@ module.exports = async function adminRoutes(app) {
 
   // GET /admin/coupons/validate?code=XXX&subtotal=YYY&phone=01XXXXXXXXX
   app.get('/coupons/validate', {
+    config: { rateLimit: getRateLimitConfig('couponValidation') },
     schema: {
       querystring: {
         type: 'object',
@@ -305,8 +321,13 @@ module.exports = async function adminRoutes(app) {
   }, async (req) => {
     const { code, subtotal, phone } = req.query
     let customerPhone = null
-    if (phone) { try { customerPhone = normalizeBdMobile(phone) } catch { customerPhone = phone } }
-    // Same validation path as customer checkout (crew status, expiry, per-phone cap)
+    if (phone) {
+      try {
+        customerPhone = normalizeBdMobile(phone)
+      } catch (e) {
+        throw { code: 'INVALID_PHONE', message: 'Phone number format is invalid.' }
+      }
+    }
     const { coupon: c, discount } = await validateCoupon({ query }, { code, subtotal, customerPhone })
     return { ok: true, data: { code: c.code, discount, discount_type: c.discount_type, discount_value: c.discount_value } }
   })
@@ -333,7 +354,7 @@ module.exports = async function adminRoutes(app) {
        SET is_active = NOT is_active,
            disabled_by = CASE WHEN is_active THEN 'admin' ELSE NULL END,
            updated_at = NOW()
-       WHERE code = $1 RETURNING code, type, is_active`,
+       WHERE code = $1 RETURNING code, type, is_active, disabled_by`,
       [code]
     )
     if (!rows.length) throw { code: 'NOT_FOUND', message: 'Coupon not found.' }
@@ -392,6 +413,7 @@ module.exports = async function adminRoutes(app) {
 
   // POST /admin/orders  — admin-created / walk-in order
   app.post('/orders', {
+    config: { rateLimit: getRateLimitConfig('adminOrderCreation') },
     schema: {
       body: {
         type: 'object',
@@ -432,10 +454,23 @@ module.exports = async function adminRoutes(app) {
     const addressSnapshot = JSON.stringify({ address: address || 'Walk-in / Manual Order' })
     const subtotal        = items.reduce((s, it) => s + Math.round(it.unit_price * it.qty), 0)
 
+    if (discount_amount > subtotal) {
+      throw { code: 'VALIDATION_ERROR', message: 'Discount cannot exceed subtotal.' }
+    }
+    if (discount_amount < 0) {
+      throw { code: 'VALIDATION_ERROR', message: 'Discount cannot be negative.' }
+    }
+
     // Per-phone coupon caps are tracked against normalized numbers (customer checkout
-    // does the same) — normalize best-effort, fall back to the raw value.
+    // does the same) — reject invalid formats to prevent bypassing per-phone limits.
     let couponPhone = customer_phone || null
-    if (couponPhone) { try { couponPhone = normalizeBdMobile(couponPhone) } catch { /* keep raw */ } }
+    if (couponPhone) {
+      try {
+        couponPhone = normalizeBdMobile(couponPhone)
+      } catch (e) {
+        throw { code: 'INVALID_PHONE', message: 'Phone number format is invalid.' }
+      }
+    }
 
     const order = await withTransaction(async (client) => {
       // Manual orders go through the same coupon machinery as customer orders:
@@ -675,7 +710,7 @@ module.exports = async function adminRoutes(app) {
       `SELECT c.id, c.code, c.type, COALESCE(c.source, c.type::text) AS source,
               c.discount_type, c.discount_value, c.min_order, c.max_uses,
               c.max_usage_per_phone, c.used_count, c.is_active, c.status,
-              c.expires_at, c.created_at,
+              c.disabled_by, c.expires_at, c.created_at,
               u.name AS crew_name,
               COALESCE(cu.total_sales, 0)::int AS total_sales,
               COALESCE(cc.commission_generated, 0)::numeric AS commission_generated
@@ -716,6 +751,9 @@ module.exports = async function adminRoutes(app) {
     if (discount_type === 'pct' && Number(discount_value) > 100) {
       throw { code: 'VALIDATION_ERROR', message: 'Percentage discounts cannot exceed 100%.' }
     }
+    if (discount_type === 'flat' && Number(discount_value) > 10000) {
+      throw { code: 'VALIDATION_ERROR', message: 'Flat discounts cannot exceed ৳10,000 to prevent giving away orders.' }
+    }
     const { rows } = await query(
       `INSERT INTO coupons (code, type, discount_type, discount_value, min_order, max_uses, expires_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -755,6 +793,9 @@ module.exports = async function adminRoutes(app) {
       if (effType === 'pct' && effValue > 100) {
         throw { code: 'VALIDATION_ERROR', message: 'Percentage discounts cannot exceed 100%.' }
       }
+      if (effType === 'flat' && effValue > 10000) {
+        throw { code: 'VALIDATION_ERROR', message: 'Flat discounts cannot exceed ৳10,000 to prevent giving away orders.' }
+      }
     }
     const allowed = ['discount_type', 'discount_value', 'min_order', 'max_uses', 'max_usage_per_phone', 'status', 'is_active', 'expires_at']
     const entries = Object.entries(req.body).filter(([k]) => allowed.includes(k))
@@ -769,7 +810,7 @@ module.exports = async function adminRoutes(app) {
     const { rows } = await query(
       `UPDATE coupons SET ${sets.join(', ')}, updated_at = NOW() WHERE code = $1
        RETURNING id, code, type, COALESCE(source, type::text) AS source, discount_type, discount_value,
-                 min_order, max_uses, max_usage_per_phone, used_count, is_active, status, expires_at, created_at`,
+                 min_order, max_uses, max_usage_per_phone, used_count, is_active, status, disabled_by, expires_at, created_at`,
       [code, ...vals]
     )
     if (!rows.length) throw { code: 'NOT_FOUND', message: 'Coupon not found.' }
@@ -952,6 +993,17 @@ module.exports = async function adminRoutes(app) {
     ]
     const entries = Object.entries(req.body || {}).filter(([k]) => allowed.includes(k))
     if (!entries.length) throw { code: 'VALIDATION_ERROR', message: 'No settings to update.' }
+
+    // Validate commission min ≤ max
+    if ('commission_value' in req.body || 'commission_min_value' in req.body) {
+      const current = (await query(`SELECT commission_value, commission_min_value FROM crew_settings WHERE id = 1`)).rows[0]
+      const maxVal = req.body.commission_value !== undefined ? req.body.commission_value : current.commission_value
+      const minVal = req.body.commission_min_value !== undefined ? req.body.commission_min_value : current.commission_min_value
+      if (minVal !== null && minVal !== undefined && maxVal !== null && minVal > maxVal) {
+        throw { code: 'VALIDATION_ERROR', message: 'Min commission cannot exceed max commission.' }
+      }
+    }
+
     const sets = entries.map(([k], i) => `${k} = $${i + 1}`)
     const vals = entries.map(([, v]) => v)
     const { rows } = await query(
@@ -1067,6 +1119,71 @@ module.exports = async function adminRoutes(app) {
     )
     if (!rows.length) throw { code: 'NOT_FOUND', message: 'Reward not found.' }
     return reply.code(200).send({ ok: true, data: { id: rows[0].id } })
+  })
+
+  // GET /admin/redemptions — reward claims, pending first
+  app.get('/redemptions', {
+    schema: {
+      querystring: {
+        type: 'object',
+        properties: { status: { type: 'string', enum: ['pending', 'fulfilled', 'cancelled'] } },
+      },
+    },
+  }, async (req) => {
+    const where  = req.query.status ? `WHERE r.status = $1` : ''
+    const params = req.query.status ? [req.query.status] : []
+    const { rows } = await query(
+      `SELECT r.id, r.reward_label, r.pts_cost, r.worth, r.status, r.created_at,
+              u.name AS user_name, u.phone AS user_phone
+       FROM point_redemptions r
+       JOIN users u ON u.id = r.user_id
+       ${where}
+       ORDER BY (r.status = 'pending') DESC, r.created_at DESC
+       LIMIT 200`,
+      params
+    )
+    return { ok: true, data: { redemptions: rows } }
+  })
+
+  // PATCH /admin/redemptions/:id — fulfil or cancel a pending claim
+  app.patch('/redemptions/:id', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+      body: {
+        type: 'object',
+        required: ['status'],
+        properties: { status: { type: 'string', enum: ['fulfilled', 'cancelled'] } },
+        additionalProperties: false,
+      },
+    },
+  }, async (req) => {
+    const data = await withTransaction(async (client) => {
+      const { rows } = await client.query(
+        `UPDATE point_redemptions SET status = $2, updated_at = NOW()
+         WHERE id = $1 AND status = 'pending'
+         RETURNING id, user_id, reward_label, pts_cost, status`,
+        [req.params.id, req.body.status]
+      )
+      if (!rows.length) throw { code: 'NOT_FOUND', message: 'Pending redemption not found — it may already be resolved.' }
+      const r = rows[0]
+
+      if (req.body.status === 'cancelled') {
+        // Refund as 'bonus' (the only credit-side tx type besides 'earned'),
+        // so the customer's history shows it as a plus
+        const { rows: balRows } = await client.query(
+          `UPDATE users SET points_balance = points_balance + $2 WHERE id = $1 RETURNING points_balance`,
+          [r.user_id, r.pts_cost]
+        )
+        await client.query(
+          `INSERT INTO points_transactions
+             (user_id, type, points, balance_after, description, reference_id, reference_type)
+           VALUES ($1, 'bonus', $2, $3, $4, $5, 'redemption')`,
+          [r.user_id, r.pts_cost, balRows[0].points_balance, `Refund: ${r.reward_label} (redemption cancelled)`, r.id]
+        )
+      }
+      return { id: r.id, status: r.status, reward_label: r.reward_label, pts_cost: r.pts_cost }
+    })
+    return { ok: true, data }
   })
 
   // ── Customer Feedback (private ordering-experience insights) ────────────
