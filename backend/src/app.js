@@ -173,6 +173,7 @@ async function build() {
   await app.register(require('./routes/orders-guest'), { prefix: '/api/v1/orders' })
   await app.register(require('./routes/reviews'),      { prefix: '/api/v1/reviews' })
   await app.register(require('./routes/feedback'),     { prefix: '/api/v1/feedback' })
+  await app.register(require('./routes/policies'),     { prefix: '/api/v1' })
 
   // Protected (JWT required on every request)
   await app.register(async (api) => {

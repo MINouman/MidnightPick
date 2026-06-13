@@ -940,7 +940,27 @@ function FAQ({ onTrack }) {
 }
 
 // ----------------- footer -----------------
-function Footer({ onTrack }) {
+function PolicyModal({ policyName, policy, onClose }) {
+  if (!policyName || !policy) return null;
+  return (
+    <div className="overlay" onClick={onClose} style={{ zIndex: 1000 }}>
+      <div className="sheet" onClick={e => e.stopPropagation()} style={{ maxHeight: '90vh', overflowY: 'auto' }}>
+        <div className="sheet-handle" />
+        <div className="sheet-title">{policy.title}</div>
+        <div className="sheet-body">
+          <div style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--text)', whiteSpace: 'pre-wrap' }}>
+            {policy.content}
+          </div>
+        </div>
+        <div style={{ padding: '16px 24px' }}>
+          <button className="btn btn-ghost btn-full" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Footer({ onTrack, onShowPolicy }) {
   return (
     <footer className="footer" data-screen-label="09 Footer">
       <div className="footer-inner">
@@ -973,7 +993,7 @@ function Footer({ onTrack }) {
           <h5>Support</h5>
           <ul>
             <li><button className="footer-text-btn" onClick={onTrack}>Track your order</button></li>
-            <li><a href="#">Return policy</a></li>
+            <li><button className="footer-text-btn" onClick={() => { onShowPolicy?.('return-policy'); }}>Return policy</button></li>
             <li><a href="https://wa.me/8801829531588">WhatsApp support</a></li>
             <li><a href="#faq">FAQ</a></li>
           </ul>
@@ -1035,6 +1055,8 @@ function App() {
   const [modalOpen, setModalOpen] = useState(false);
   const [trackOpen, setTrackOpen] = useState(false);
   const [authOpen,  setAuthOpen]  = useState(false);
+  const [policyOpen, setPolicyOpen] = useState(null);
+  const [policy, setPolicy] = useState(null);
   const [auth, setAuth] = useState(getAuthState);
 
   const handleLogout = () => {
@@ -1050,6 +1072,20 @@ function App() {
 
   useEffect(() => {applyPalette(t.palette);}, [t.palette]);
   useEffect(() => { sessionStorage.setItem("mp_cart", JSON.stringify(cart)); }, [cart]);
+
+  useEffect(() => {
+    if (!policyOpen) return;
+    async function fetchPolicy() {
+      try {
+        const res = await fetch(`${getMidnightApiBase()}/policies/${policyOpen}`);
+        const data = await res.json();
+        if (data.ok) {
+          setPolicy(data.data.policy);
+        }
+      } catch (_) {}
+    }
+    fetchPolicy();
+  }, [policyOpen]);
 
   const addToCart = (p) => {
     setCart((c) => [...c, p]);
@@ -1082,11 +1118,12 @@ function App() {
       <Howto />
       {/* <Pricing onSubscribe={() => setModalOpen(true)} /> */}
       <FAQ onTrack={() => setTrackOpen(true)} />
-      <Footer onTrack={() => setTrackOpen(true)} />
+      <Footer onTrack={() => setTrackOpen(true)} onShowPolicy={(name) => setPolicyOpen(name)} />
       <ToastStack toasts={toasts} />
       <SubscribeModal open={modalOpen} onClose={() => setModalOpen(false)} />
       <TrackOrderModal open={trackOpen} onClose={() => setTrackOpen(false)} />
       <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} />
+      <PolicyModal policyName={policyOpen} policy={policy} onClose={() => { setPolicyOpen(null); setPolicy(null); }} />
       <MPReviewPrompt source="site_revisit" suppress={modalOpen || trackOpen || authOpen} />
 
       <TweaksPanel title="Tweaks">

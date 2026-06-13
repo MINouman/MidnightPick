@@ -1052,6 +1052,141 @@ function Coupons() {
   );
 }
 
+// ── Section: Policies ──────────────────────────────
+function Policies() {
+  const [policies, setPolicies] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [panel, setPanel] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [newPolicy, setNewPolicy] = useState({ name: '', title: '', content: '' });
+
+  useEffect(() => {
+    fetchPolicies();
+  }, []);
+
+  async function fetchPolicies() {
+    try {
+      const res = await window.mpApi.fetch('/admin/policies');
+      setPolicies(res?.data?.policies || []);
+    } catch (_) {}
+    setLoading(false);
+  }
+
+  async function createPolicy() {
+    if (!newPolicy.name || !newPolicy.title || !newPolicy.content) return;
+    try {
+      const res = await window.mpApi.fetch('/admin/policies', {
+        method: 'POST',
+        body: JSON.stringify(newPolicy),
+      });
+      if (res?.ok) {
+        setPolicies(prev => [res.data.policy, ...prev]);
+        setNewPolicy({ name: '', title: '', content: '' });
+        setPanel(null);
+      } else {
+        alert(res?.error?.message || 'Failed to create policy');
+      }
+    } catch (_) {
+      alert('Could not connect to server');
+    }
+  }
+
+  async function updatePolicy() {
+    if (!editing || !panel) return;
+    try {
+      const res = await window.mpApi.fetch(`/admin/policies/${editing.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ title: panel.title, content: panel.content }),
+      });
+      if (res?.ok) {
+        setPolicies(prev => prev.map(p => p.id === editing.id ? res.data.policy : p));
+        setEditing(null);
+        setPanel(null);
+      } else {
+        alert(res?.error?.message || 'Failed to update policy');
+      }
+    } catch (_) {
+      alert('Could not connect to server');
+    }
+  }
+
+  async function deletePolicy(id) {
+    if (!confirm('Delete this policy?')) return;
+    try {
+      const res = await window.mpApi.fetch(`/admin/policies/${id}`, { method: 'DELETE' });
+      if (res?.ok) {
+        setPolicies(prev => prev.filter(p => p.id !== id));
+      } else {
+        alert(res?.error?.message || 'Failed to delete policy');
+      }
+    } catch (_) {
+      alert('Could not connect to server');
+    }
+  }
+
+  return (
+    <div>
+      <div className="page-title">Policies</div>
+      <button className="btn btn-primary" onClick={() => { setEditing(null); setNewPolicy({ name: '', title: '', content: '' }); setPanel({ name: '', title: '', content: '' }); }} style={{ marginBottom: 16 }}>
+        <i className="fa fa-plus" /> New Policy
+      </button>
+
+      {loading ? (
+        <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-65)' }}>Loading policies…</div>
+      ) : policies.length === 0 ? (
+        <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-65)' }}>No policies yet. Create one to get started.</div>
+      ) : (
+        <div style={{ display: 'grid', gap: 12 }}>
+          {policies.map(policy => (
+            <div key={policy.id} className="card" style={{ padding: 16, border: '1px solid var(--text-08)' }}>
+              <div className="row-between" style={{ marginBottom: 12 }}>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>{policy.title}</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-65)' }}>Name: <span className="mono">{policy.name}</span></div>
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="btn btn-sm btn-primary" onClick={() => { setEditing(policy); setPanel(policy); }}>Edit</button>
+                  <button className="btn btn-sm btn-ghost" style={{ color: 'var(--red)', borderColor: 'rgba(229,92,92,.4)' }} onClick={() => deletePolicy(policy.id)}>Delete</button>
+                </div>
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text-65)', lineHeight: 1.5, maxHeight: 80, overflow: 'hidden' }}>{policy.content.substring(0, 200)}…</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {panel && (
+        <div className="overlay" onClick={() => { setPanel(null); setEditing(null); }}>
+          <div className="sheet" onClick={e => e.stopPropagation()}>
+            <div className="sheet-handle" />
+            <div className="sheet-title">{editing ? 'Edit Policy' : 'New Policy'}</div>
+            <div className="sheet-body">
+              {!editing && (
+                <div className="input-group">
+                  <label className="input-label">Name (e.g., return-policy)</label>
+                  <input className="input" value={newPolicy.name} onChange={e => setNewPolicy(f => ({ ...f, name: e.target.value }))} placeholder="return-policy" />
+                </div>
+              )}
+              <div className="input-group">
+                <label className="input-label">Title</label>
+                <input className="input" value={panel.title} onChange={e => setPanel(f => ({ ...f, title: e.target.value }))} placeholder="Return Policy" />
+              </div>
+              <div className="input-group">
+                <label className="input-label">Content</label>
+                <textarea className="input" rows={10} value={panel.content} onChange={e => setPanel(f => ({ ...f, content: e.target.value }))} placeholder="Enter policy content..." style={{ resize: 'vertical' }} />
+              </div>
+            </div>
+            <div className="col-gap">
+              <button className="btn btn-primary btn-full" onClick={editing ? updatePolicy : createPolicy}>{editing ? 'Save Changes' : 'Create Policy'}</button>
+              <button className="btn btn-ghost btn-full" onClick={() => { setPanel(null); setEditing(null); }}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Section: Crew Management ───────────────────────────
 function CrewManagement() {
   const [crewTab, setCrewTab] = useState("Applications");
@@ -2229,6 +2364,7 @@ function Sidebar({ section, setSection, onLogout }) {
     { id: "customers",  icon: "fa-users",           label: "Customers" },
     { id: "subs",       icon: "fa-calendar-check",  label: "Subscriptions" },
     { id: "coupons",    icon: "fa-ticket-alt",      label: "Coupons" },
+    { id: "policies",   icon: "fa-file-alt",        label: "Policies" },
     { id: "crew",       icon: "fa-fire",            label: "Crew" },
     { id: "feedback",   icon: "fa-comment-dots",    label: "Feedback" },
     { id: "reviews",    icon: "fa-star-half-alt",   label: "Reviews" },
@@ -2414,6 +2550,7 @@ function AdminDashboard() {
       case "customers":  return <Customers />;
       case "subs":       return <Subscriptions />;
       case "coupons":    return <Coupons />;
+      case "policies":   return <Policies />;
       case "feedback":   return <CustomerFeedback />;
       case "reviews":    return <ReviewsAdmin />;
       case "crew":       return <CrewManagement />;
