@@ -31,13 +31,15 @@ module.exports = async function authRoutes(app) {
     reply.setCookie('mp_access_token', tokens.access_token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'Strict',
+      sameSite: 'Lax',
+      path: '/',
       maxAge: 15 * 60 * 1000  // 15 minutes
     })
     reply.setCookie('mp_refresh_token', tokens.refresh_token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'Strict',
+      sameSite: 'Lax',
+      path: '/',
       maxAge: 30 * 24 * 60 * 60 * 1000  // 30 days
     })
     return reply.code(201).send({
@@ -69,13 +71,15 @@ module.exports = async function authRoutes(app) {
     reply.setCookie('mp_access_token', tokens.access_token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'Strict',
+      sameSite: 'Lax',
+      path: '/',
       maxAge: 15 * 60 * 1000
     })
     reply.setCookie('mp_refresh_token', tokens.refresh_token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'Strict',
+      sameSite: 'Lax',
+      path: '/',
       maxAge: 30 * 24 * 60 * 60 * 1000
     })
     return reply.send({
@@ -110,13 +114,15 @@ module.exports = async function authRoutes(app) {
     reply.setCookie('mp_access_token', tokens.access_token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'Strict',
+      sameSite: 'Lax',
+      path: '/',
       maxAge: 15 * 60 * 1000
     })
     reply.setCookie('mp_refresh_token', tokens.refresh_token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'Strict',
+      sameSite: 'Lax',
+      path: '/',
       maxAge: 30 * 24 * 60 * 60 * 1000
     })
     return reply.send({
@@ -167,13 +173,15 @@ module.exports = async function authRoutes(app) {
     reply.setCookie('mp_access_token', tokens.access_token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'Strict',
+      sameSite: 'Lax',
+      path: '/',
       maxAge: 15 * 60 * 1000
     })
     reply.setCookie('mp_refresh_token', tokens.refresh_token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'Strict',
+      sameSite: 'Lax',
+      path: '/',
       maxAge: 30 * 24 * 60 * 60 * 1000
     })
     return reply.send({
@@ -185,27 +193,24 @@ module.exports = async function authRoutes(app) {
   })
 
   // POST /auth/token/refresh
-  app.post('/token/refresh', {
-    schema: {
-      body: {
-        type: 'object', required: ['refresh_token'],
-        properties: { refresh_token: { type: 'string', minLength: 1 } },
-        additionalProperties: false,
-      },
-    },
-  }, async (req, reply) => {
-    const tokens = await rotateRefreshToken(app, req.body.refresh_token)
+  app.post('/token/refresh', {}, async (req, reply) => {
+    const refreshToken = req.cookies.mp_refresh_token
+    if (!refreshToken) throw { code: 'UNAUTHORIZED', message: 'No refresh token found.' }
+
+    const tokens = await rotateRefreshToken(app, refreshToken)
     // Set httpOnly cookies for new tokens
     reply.setCookie('mp_access_token', tokens.access_token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'Strict',
+      sameSite: 'Lax',
+      path: '/',
       maxAge: 15 * 60 * 1000
     })
     reply.setCookie('mp_refresh_token', tokens.refresh_token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'Strict',
+      sameSite: 'Lax',
+      path: '/',
       maxAge: 30 * 24 * 60 * 60 * 1000
     })
     return reply.send({ ok: true })
@@ -231,13 +236,15 @@ module.exports = async function authRoutes(app) {
     reply.setCookie('mp_access_token', tokens.access_token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'Strict',
+      sameSite: 'Lax',
+      path: '/',
       maxAge: 15 * 60 * 1000
     })
     reply.setCookie('mp_refresh_token', tokens.refresh_token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'Strict',
+      sameSite: 'Lax',
+      path: '/',
       maxAge: 30 * 24 * 60 * 60 * 1000
     })
     return reply.send({
@@ -263,11 +270,13 @@ module.exports = async function authRoutes(app) {
     // Clear httpOnly cookies
     reply.clearCookie('mp_access_token', {
       httpOnly: true,
-      sameSite: 'Strict'
+      sameSite: 'Strict',
+      path: '/'
     })
     reply.clearCookie('mp_refresh_token', {
       httpOnly: true,
-      sameSite: 'Strict'
+      sameSite: 'Strict',
+      path: '/'
     })
     return reply.send({ ok: true })
   })
