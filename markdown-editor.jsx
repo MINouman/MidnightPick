@@ -1,21 +1,27 @@
 // ── Markdown Editor with Preview ────────────────────────────
 function MarkdownEditor({ value, onChange, placeholder = "Enter markdown content..." }) {
   const [preview, setPreview] = useState(false);
+  const [error, setError] = useState(null);
 
   const insertMarkdown = (before, after = '') => {
-    const textarea = document.querySelector('[data-markdown-input]');
-    if (!textarea) return;
+    try {
+      const textarea = document.querySelector('[data-markdown-input]');
+      if (!textarea) return;
 
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const selected = value.substring(start, end) || 'text';
-    const newValue = value.substring(0, start) + before + selected + after + value.substring(end);
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const selected = value.substring(start, end) || 'text';
+      const newValue = value.substring(0, start) + before + selected + after + value.substring(end);
 
-    onChange({ target: { value: newValue } });
-    setTimeout(() => {
-      textarea.focus();
-      textarea.setSelectionRange(start + before.length, start + before.length + selected.length);
-    }, 0);
+      onChange({ target: { value: newValue } });
+      setTimeout(() => {
+        textarea.focus();
+        textarea.setSelectionRange(start + before.length, start + before.length + selected.length);
+      }, 0);
+    } catch (err) {
+      console.error('Error inserting markdown:', err);
+      setError('Failed to insert formatting');
+    }
   };
 
   const formatTools = [
@@ -28,10 +34,26 @@ function MarkdownEditor({ value, onChange, placeholder = "Enter markdown content
     { icon: 'fa-code', title: 'Code', action: () => insertMarkdown('`', '`') },
   ];
 
-  const renderedHtml = typeof marked !== 'undefined' ? marked(value) : value;
+  const renderedHtml = (() => {
+    try {
+      if (typeof marked === 'undefined') return value;
+      if (typeof marked.parse === 'function') return marked.parse(value);
+      if (typeof marked === 'function') return marked(value);
+      return value;
+    } catch (err) {
+      console.error('Markdown rendering error:', err);
+      setError('Error rendering preview');
+      return value;
+    }
+  })();
 
   return (
     <div>
+      {error && (
+        <div style={{ padding: '8px 12px', background: 'rgba(229,115,115,0.1)', border: '1px solid #e57373', borderRadius: 6, marginBottom: 12, fontSize: 12, color: '#e57373' }}>
+          {error}
+        </div>
+      )}
       <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
           {formatTools.map((tool, i) => (
@@ -123,7 +145,7 @@ function MarkdownEditor({ value, onChange, placeholder = "Enter markdown content
 // ── Markdown Renderer ───────────────────────────────────────
 function MarkdownRenderer({ content }) {
   if (!content) return null;
-  const renderedHtml = typeof marked !== 'undefined' ? marked(content) : content;
+  const renderedHtml = typeof marked !== 'undefined' ? (typeof marked.parse === 'function' ? marked.parse(content) : marked(content)) : content;
   return (
     <div
       style={{
