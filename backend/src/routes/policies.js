@@ -26,24 +26,41 @@ module.exports = async function policiesRoutes(app) {
     return { ok: true, data: { policy } }
   })
 
-  // Admin routes (require authentication)
-  app.addHook('onRequest', async (req, reply) => {
-    if (req.url.startsWith('/admin/policies')) {
-      // Manually authenticate since policies routes are outside the protected scope
-      try {
-        await app.authenticate(req, reply)
-      } catch (err) {
-        return reply.code(401).send({ ok: false, error: { code: 'UNAUTHORIZED', message: 'Authentication required.' } })
-      }
-      // Check admin role
-      if (req.user?.role !== 'admin') {
-        return reply.code(403).send({ ok: false, error: { code: 'FORBIDDEN', message: 'Admin access required.' } })
-      }
+  // Helper to check admin access
+  async function requireAdmin(req, reply) {
+    // Extract and verify token
+    let token = req.headers.authorization?.replace('Bearer ', '');
+    if (!token) {
+      const cookieHeader = req.headers.cookie || '';
+      const cookies = cookieHeader.split(';').reduce((acc, cookie) => {
+        const [key, value] = cookie.trim().split('=');
+        if (key === 'mp_access_token') acc = value;
+        return acc;
+      }, '');
+      token = cookies;
     }
-  })
+
+    if (!token) {
+      reply.code(401);
+      throw { code: 'UNAUTHORIZED', message: 'Authentication required.' };
+    }
+
+    try {
+      req.user = app.jwt.verify(token);
+    } catch {
+      reply.code(401);
+      throw { code: 'UNAUTHORIZED', message: 'Authentication required.' };
+    }
+
+    if (req.user?.role !== 'admin') {
+      reply.code(403);
+      throw { code: 'FORBIDDEN', message: 'Admin access required.' };
+    }
+  }
 
   // GET /admin/policies
-  app.get('/admin/policies', async (req) => {
+  app.get('/admin/policies', async (req, reply) => {
+    await requireAdmin(req, reply)
     const policies = await getAllPolicies()
     return { ok: true, data: { policies } }
   })
@@ -63,6 +80,7 @@ module.exports = async function policiesRoutes(app) {
       },
     },
   }, async (req, reply) => {
+    await requireAdmin(req, reply)
     try {
       const policy = await createPolicy(
         req.body.name,
@@ -92,7 +110,8 @@ module.exports = async function policiesRoutes(app) {
         additionalProperties: false,
       },
     },
-  }, async (req) => {
+  }, async (req, reply) => {
+    await requireAdmin(req, reply)
     const policy = await updatePolicy(
       req.params.id,
       req.body.title,
@@ -106,7 +125,8 @@ module.exports = async function policiesRoutes(app) {
   })
 
   // DELETE /admin/policies/:id
-  app.delete('/admin/policies/:id', async (req) => {
+  app.delete('/admin/policies/:id', async (req, reply) => {
+    await requireAdmin(req, reply)
     const policy = await deletePolicy(req.params.id)
     if (!policy) {
       return { ok: false, error: { code: 'NOT_FOUND', message: 'Policy not found.' } }
@@ -115,7 +135,8 @@ module.exports = async function policiesRoutes(app) {
   })
 
   // PATCH /admin/policies/:id/publish
-  app.patch('/admin/policies/:id/publish', async (req) => {
+  app.patch('/admin/policies/:id/publish', async (req, reply) => {
+    await requireAdmin(req, reply)
     const policy = await publishPolicy(req.params.id)
     if (!policy) {
       return { ok: false, error: { code: 'NOT_FOUND', message: 'Policy not found.' } }
@@ -124,7 +145,8 @@ module.exports = async function policiesRoutes(app) {
   })
 
   // PATCH /admin/policies/:id/unpublish
-  app.patch('/admin/policies/:id/unpublish', async (req) => {
+  app.patch('/admin/policies/:id/unpublish', async (req, reply) => {
+    await requireAdmin(req, reply)
     const policy = await unpublishPolicy(req.params.id)
     if (!policy) {
       return { ok: false, error: { code: 'NOT_FOUND', message: 'Policy not found.' } }
