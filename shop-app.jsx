@@ -1213,7 +1213,7 @@ function ShopPage() {
                     onClick={() => switchImage(i)}
                     aria-label={`View ${THUMB_LABELS[i] ?? `image ${i + 1}`}`}
                   >
-                    <img src={src} alt={THUMB_LABELS[i] ?? `Image ${i + 1}`} loading="lazy" decoding="async" />
+                    <LazyImage src={src} alt={THUMB_LABELS[i] ?? `Image ${i + 1}`} style={{ width: '100%', height: '100%' }} />
                     <span className="shop-thumb-label">{THUMB_LABELS[i] ?? String(i + 1)}</span>
                   </button>
                 ))}

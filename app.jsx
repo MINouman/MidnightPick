@@ -250,7 +250,7 @@ function Story() {
           </div>
         </div>
         <div className="story-img">
-          <img src="assets/serene-morning-coffee-plantation.jpg" alt="Serene morning at a coffee plantation" />
+          <LazyImage src="assets/serene-morning-coffee-plantation.jpg" alt="Serene morning at a coffee plantation" style={{ width: '100%', height: '100%' }} />
           <div className="story-tag"><span className="pulse" /> Now shipping nationwide</div>
         </div>
       </div>
@@ -331,7 +331,7 @@ function Collection({ onAdd }) {
         </div>
         {products.length > 0 && products[0].images && products[0].images[0] && (
           <div className="coll-imgs">
-            <div className="coll-img ci-0"><img src={products[0].images[0]} alt={products[0].name} loading="lazy" decoding="async" /></div>
+            <div className="coll-img ci-0"><LazyImage src={products[0].images[0]} alt={products[0].name} style={{ width: '100%', height: '100%' }} /></div>
           </div>
         )}
         <div className="coll-cta-row">
