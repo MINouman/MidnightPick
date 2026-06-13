@@ -156,7 +156,7 @@ function Nav({ onSignIn, loggedIn, dashUrl, onLogout }) {
               <a href={dashUrl} className="mob-menu-account-btn" aria-label="Dashboard">
                 <UserIcon size={18} /> Dashboard
               </a>
-              <button className="mob-menu-account-btn" onClick={onLogout} aria-label="Log out">
+              <button className="mob-menu-account-btn" onClick={() => { setMenuOpen(false); onLogout(); }} aria-label="Log out">
                 <i className="fa-solid fa-right-from-bracket" style={{ width: 18 }} aria-hidden="true" /> Log Out
               </button>
             </>
