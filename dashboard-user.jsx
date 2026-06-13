@@ -829,10 +829,45 @@ function SubscriptionTab() {
 
 // ── POINTS TAB ────────────────────────────────────────────────
 function PointsTab() {
-  const { user, pointsHistory } = useContext(DashCtx);
-  const [sheet, setSheet]     = useState(null);
-  const [rewards, setRewards] = useState(null);
+  const { user, pointsHistory, reload } = useContext(DashCtx);
+  const [sheet, setSheet]         = useState(null);
+  const [rewards, setRewards]     = useState(null);
+  const [redeeming, setRedeeming] = useState(false);
   const pts = user?.points_balance || 0;
+
+  async function handleRedeem() {
+    if (!sheet || redeeming) return;
+    setRedeeming(true);
+    try {
+      const res = await mpApi.fetch("/me/points/redeem", {
+        method: "POST",
+        body: JSON.stringify({ reward_id: sheet.id }),
+      });
+      if (res?.ok) {
+        setSheet(null);
+        await Swal.fire({
+          title: "Reward redeemed!",
+          text: `"${res.data.redemption.reward_label}" is on its way — our team will contact you to deliver it.`,
+          icon: "success",
+          confirmButtonColor: "#FF9100",
+          background: "#fff",
+        });
+        reload();
+      } else {
+        Swal.fire({
+          title: "Could not redeem",
+          text: res?.error?.message || "Something went wrong. Please try again.",
+          icon: "error",
+          confirmButtonColor: "#FF9100",
+          background: "#fff",
+        });
+      }
+    } catch (e) {
+      Swal.fire({ title: "Could not redeem", text: e?.message || "Network error.", icon: "error", confirmButtonColor: "#FF9100", background: "#fff" });
+    } finally {
+      setRedeeming(false);
+    }
+  }
 
   useEffect(() => {
     mpApi.fetch("/me/point-rewards")
@@ -942,9 +977,9 @@ function PointsTab() {
         <Sheet
           title={`Redeem ${sheet.pts_cost.toLocaleString()} pts?`}
           body={`Redeem your points for "${sheet.label}"? This cannot be undone.`}
-          confirmLabel="Yes, Redeem"
-          onConfirm={() => setSheet(null)}
-          onClose={() => setSheet(null)}
+          confirmLabel={redeeming ? "Redeeming…" : "Yes, Redeem"}
+          onConfirm={handleRedeem}
+          onClose={() => !redeeming && setSheet(null)}
         />
       )}
     </div>
@@ -1750,12 +1785,13 @@ function Sidebar({ tab, setTab }) {
 }
 
 // ── BOTTOM NAV (mobile) ───────────────────────────────────────
-function BottomNav({ tab, setTab }) {
+function BottomNav({ tab, setTab, isCrew }) {
   const items = [
     { id: "home",         icon: "fa-home",          label: "Home" },
     { id: "orders",       icon: "fa-box",            label: "Orders" },
     { id: "subscription", icon: "fa-calendar-check", label: "Plan" },
     { id: "points",       icon: "fa-star",           label: "Points" },
+    ...(isCrew ? [{ id: "crew", icon: "fa-mug-hot", label: "Crew" }] : []),
     { id: "account",      icon: "fa-user",           label: "Account" },
   ];
   return (
@@ -1846,7 +1882,7 @@ function UserDashboard() {
           </div>
         </div>
       </div>
-      <BottomNav tab={tab} setTab={setTab} />
+      <BottomNav tab={tab} setTab={setTab} isCrew={data.user?.role === "crew"} />
       <MPReviewPrompt source="dashboard" delay={1100} suppress={tab === "orders"} />
     </DashCtx.Provider>
   );

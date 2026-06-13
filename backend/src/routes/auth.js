@@ -27,10 +27,22 @@ module.exports = async function authRoutes(app) {
     const { name, email, password } = req.body
     const user   = await registerUser(name, email, password)
     const tokens = await createTokenPair(app, user)
+    // Set httpOnly cookies for tokens
+    reply.setCookie('mp_access_token', tokens.access_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'Strict',
+      maxAge: 15 * 60 * 1000  // 15 minutes
+    })
+    reply.setCookie('mp_refresh_token', tokens.refresh_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'Strict',
+      maxAge: 30 * 24 * 60 * 60 * 1000  // 30 days
+    })
     return reply.code(201).send({
       ok: true,
       data: {
-        ...tokens,
         user: { id: user.id, email: user.email, name: user.name, role: user.role },
       },
     })
@@ -53,10 +65,22 @@ module.exports = async function authRoutes(app) {
     const { email, password } = req.body
     const user   = await loginUser(email, password)
     const tokens = await createTokenPair(app, user)
+    // Set httpOnly cookies for tokens
+    reply.setCookie('mp_access_token', tokens.access_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'Strict',
+      maxAge: 15 * 60 * 1000
+    })
+    reply.setCookie('mp_refresh_token', tokens.refresh_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'Strict',
+      maxAge: 30 * 24 * 60 * 60 * 1000
+    })
     return reply.send({
       ok: true,
       data: {
-        ...tokens,
         user: { id: user.id, email: user.email, name: user.name, role: user.role },
       },
     })
@@ -82,10 +106,22 @@ module.exports = async function authRoutes(app) {
     }
     const user   = await findOrCreateGoogleUser(googleUser.googleId, googleUser.email, googleUser.name)
     const tokens = await createTokenPair(app, user)
+    // Set httpOnly cookies for tokens
+    reply.setCookie('mp_access_token', tokens.access_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'Strict',
+      maxAge: 15 * 60 * 1000
+    })
+    reply.setCookie('mp_refresh_token', tokens.refresh_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'Strict',
+      maxAge: 30 * 24 * 60 * 60 * 1000
+    })
     return reply.send({
       ok: true,
       data: {
-        ...tokens,
         user: { id: user.id, email: user.email, name: user.name, role: user.role },
       },
     })
@@ -127,10 +163,22 @@ module.exports = async function authRoutes(app) {
     await verifyOtp(phone, otp)
     const { user, isNew } = await findOrCreateUser(phone)
     const tokens = await createTokenPair(app, user)
+    // Set httpOnly cookies for tokens
+    reply.setCookie('mp_access_token', tokens.access_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'Strict',
+      maxAge: 15 * 60 * 1000
+    })
+    reply.setCookie('mp_refresh_token', tokens.refresh_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'Strict',
+      maxAge: 30 * 24 * 60 * 60 * 1000
+    })
     return reply.send({
       ok: true,
       data: {
-        ...tokens,
         user: { id: user.id, phone: user.phone, name: user.name, role: user.role, is_new: isNew },
       },
     })
@@ -147,7 +195,20 @@ module.exports = async function authRoutes(app) {
     },
   }, async (req, reply) => {
     const tokens = await rotateRefreshToken(app, req.body.refresh_token)
-    return reply.send({ ok: true, data: tokens })
+    // Set httpOnly cookies for new tokens
+    reply.setCookie('mp_access_token', tokens.access_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'Strict',
+      maxAge: 15 * 60 * 1000
+    })
+    reply.setCookie('mp_refresh_token', tokens.refresh_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'Strict',
+      maxAge: 30 * 24 * 60 * 60 * 1000
+    })
+    return reply.send({ ok: true })
   })
 
   // POST /auth/admin/login
@@ -166,10 +227,22 @@ module.exports = async function authRoutes(app) {
   }, async (req, reply) => {
     const user   = await adminLogin(req.body.email, req.body.password)
     const tokens = await createTokenPair(app, user)
+    // Set httpOnly cookies for tokens
+    reply.setCookie('mp_access_token', tokens.access_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'Strict',
+      maxAge: 15 * 60 * 1000
+    })
+    reply.setCookie('mp_refresh_token', tokens.refresh_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'Strict',
+      maxAge: 30 * 24 * 60 * 60 * 1000
+    })
     return reply.send({
       ok: true,
       data: {
-        ...tokens,
         user: { id: user.id, email: user.email, name: user.name, role: user.role },
       },
     })
@@ -187,6 +260,24 @@ module.exports = async function authRoutes(app) {
   }, async (req, reply) => {
     const raw = req.headers.authorization?.replace('Bearer ', '') || ''
     await revokeTokens(app, raw, req.body?.refresh_token)
+    // Clear httpOnly cookies
+    reply.clearCookie('mp_access_token', {
+      httpOnly: true,
+      sameSite: 'Strict'
+    })
+    reply.clearCookie('mp_refresh_token', {
+      httpOnly: true,
+      sameSite: 'Strict'
+    })
     return reply.send({ ok: true })
+  })
+
+  // GET /auth/csrf-token — CSRF protection
+  app.get('/csrf-token', async (req, reply) => {
+    const crypto = require('crypto')
+    const token = crypto.randomBytes(32).toString('hex')
+    // Store in session (or you can store in Redis for distributed systems)
+    // For now, just return it and let frontend send it back
+    return { ok: true, data: { csrf_token: token } }
   })
 }

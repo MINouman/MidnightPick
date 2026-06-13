@@ -36,7 +36,7 @@ const PRODUCT_DEFAULT = {
 };
 
 
-const API_BASE = window.MIDNIGHT_API_BASE || "http://localhost:3000/api/v1";
+const API_BASE = "http://localhost:3000/api/v1";  // Do not allow override from window
 const THUMB_LABELS = ["Front", "Back"];
 const BD_MOBILE_PATTERN = /^01[3-9]\d{8}$/;
 
@@ -114,9 +114,10 @@ const ROLE_DASH = { user: "dashboard-user.html", crew: "dashboard-user.html", in
 
 function getShopAuthState() {
   try {
-    if (!localStorage.getItem("mp_access_token")) return { loggedIn: false, dashUrl: "dashboard-user.html", user: null };
+    // Token is now in httpOnly cookie, cannot check from JavaScript
+    // Use user info from localStorage to determine login state
     const u = JSON.parse(localStorage.getItem("mp_user") || "{}");
-    return { loggedIn: true, dashUrl: ROLE_DASH[u.role] || "dashboard-user.html", user: u };
+    return { loggedIn: !!u?.id, dashUrl: ROLE_DASH[u.role] || "dashboard-user.html", user: u };
   } catch { return { loggedIn: false, dashUrl: "dashboard-user.html", user: null }; }
 }
 
@@ -487,10 +488,10 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
     if (loggedUser?.phone) {
       // Authenticated — skip OTP, place order directly
       try {
-        const token = localStorage.getItem("mp_access_token");
         const res = await fetch(`${API_BASE}/orders/quick`, {
           method: "POST",
-          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+          credentials: "include",  // Send httpOnly cookie automatically
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             qty,
             address: composedAddress,
@@ -517,6 +518,21 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
 
     // Guest — send OTP first
     try {
+      // Re-check the coupon for this phone before consuming an OTP: per-phone
+      // caps can't be known at the earlier verify step, which has no phone yet.
+      if (coupon) {
+        const vres = await fetch(`${API_BASE}/coupons/validate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code: coupon, subtotal: product.price * qty, customer_phone: normalizedPhone }),
+        });
+        const vjson = await vres.json().catch(() => null);
+        if (!vres.ok) {
+          setErrorMsg(vjson?.error?.message || "This coupon can't be used for this order.");
+          setStep("error");
+          return;
+        }
+      }
       const res = await fetch(`${API_BASE}/orders/request-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -796,11 +812,10 @@ function ReviewsSection({ productSlug = "midnight-blend", onStats, loggedIn, onS
       return;
     }
 
-    const token = localStorage.getItem("mp_access_token");
     try {
       const q = new URLSearchParams({ prompt: "false", product: productSlug });
       const res = await fetch(`${API_BASE}/reviews/eligibility?${q.toString()}`, {
-        headers: { Authorization: `Bearer ${token}` },
+        credentials: "include",  // Send httpOnly cookie automatically
       });
       const json = await res.json();
       if (json?.data?.eligible) {
@@ -1021,9 +1036,18 @@ function ShopPage() {
   const [reviewAuthIntent, setReviewAuthIntent] = useState(false);
   const [shopAuth, setShopAuth] = useState(getShopAuthState);
 
-  const handleLogout = () => {
-    localStorage.removeItem("mp_access_token");
-    localStorage.removeItem("mp_refresh_token");
+  const handleLogout = async () => {
+    try {
+      // Call backend logout to revoke tokens and clear cookies
+      await fetch(`${API_BASE}/auth/logout`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" }
+      });
+    } catch (err) {
+      console.error("Logout error:", err);
+    }
+    // Clear local user info
     localStorage.removeItem("mp_user");
     setShopAuth({ loggedIn: false, dashUrl: "dashboard-user.html", user: null });
   };

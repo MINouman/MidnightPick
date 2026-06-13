@@ -180,8 +180,24 @@ function Orders() {
   const [cancelConfirm, setCancelConfirm] = useState(false);
   const [newOrderPanel, setNewOrderPanel] = useState(false);
   const [newOrder, setNewOrder] = useState({ customer: "", phone: "", address: "", orderItems: [], total: "", payment: "bKash", coupon: "", notes: "", status: "processing" });
+  const [couponPreview, setCouponPreview] = useState(null); // { ok, message }
 
   useEffect(() => { setOrders(ctxOrders || []); }, [ctxOrders]);
+
+  async function previewCoupon() {
+    const code = newOrder.coupon.trim();
+    if (!code) { setCouponPreview(null); return; }
+    const subtotal = newOrder.orderItems.reduce((s, it) => s + it.unit_price * (parseInt(it.qty) || 1), 0);
+    setCouponPreview({ ok: null, message: "Checking…" });
+    const params = new URLSearchParams({ code, subtotal: String(subtotal) });
+    if (newOrder.phone) params.set('phone', newOrder.phone);
+    const res = await window.mpApi.fetch(`/admin/coupons/validate?${params}`).catch(() => null);
+    if (res?.ok) {
+      setCouponPreview({ ok: true, message: `Valid — saves ৳${res.data.discount} on a ৳${subtotal.toFixed(0)} subtotal.` });
+    } else {
+      setCouponPreview({ ok: false, message: res?.error?.message || 'Could not check this coupon.' });
+    }
+  }
 
   async function updateStatus(newStatus) {
     if (!panel) return;
@@ -251,6 +267,7 @@ function Orders() {
       setOrders(prev => [res.data, ...prev]);
       setNewOrderPanel(false);
       setNewOrder({ customer: "", phone: "", address: "", orderItems: [], total: "", payment: "bKash", coupon: "", notes: "", status: "processing" });
+      setCouponPreview(null);
     } catch (e) {
       alert(e?.message || 'Failed to create the order.');
     }
@@ -475,7 +492,14 @@ function Orders() {
                 </div>
                 <div className="input-group">
                   <label className="input-label">Coupon Code</label>
-                  <input className="input" placeholder="Optional" value={newOrder.coupon} onChange={e => setNewOrder(f => ({ ...f, coupon: e.target.value.toUpperCase() }))} />
+                  <input className="input" placeholder="Optional" value={newOrder.coupon}
+                    onChange={e => { setNewOrder(f => ({ ...f, coupon: e.target.value.toUpperCase() })); setCouponPreview(null); }}
+                    onBlur={previewCoupon} />
+                  {couponPreview && (
+                    <div style={{ fontSize: 11, marginTop: 4, color: couponPreview.ok === false ? "var(--red)" : couponPreview.ok ? "var(--green, #2e9e5b)" : "var(--text-65)" }}>
+                      {couponPreview.message}
+                    </div>
+                  )}
                 </div>
                 <div className="input-group">
                   <label className="input-label">Initial Status</label>
@@ -728,6 +752,10 @@ function Coupons() {
 
   async function createCoupon() {
     if (!form.code || !form.value) return;
+    if (form.type === 'Percentage' && parseFloat(form.value) > 100) {
+      alert('Percentage discounts cannot exceed 100%.');
+      return;
+    }
     setSavingCoupon(true);
     try {
       const res = await window.mpApi.fetch('/admin/coupons', {
@@ -769,6 +797,10 @@ function Coupons() {
 
   async function saveEdit(code) {
     if (!editForm.value) return;
+    if (editForm.type === 'Percentage' && parseFloat(editForm.value) > 100) {
+      alert('Percentage discounts cannot exceed 100%.');
+      return;
+    }
     setSavingEdit(true);
     try {
       const body = {
@@ -815,7 +847,7 @@ function Coupons() {
     if (!result.isConfirmed) return;
     const res = await window.mpApi.fetch(`/admin/coupons/${code}/toggle`, { method: 'PATCH' }).catch(() => null);
     if (res?.ok) {
-      setFestCoupons(prev => prev.map(c => c.code === code ? { ...c, is_active: res.data.is_active } : c));
+      setFestCoupons(prev => prev.map(c => c.code === code ? { ...c, is_active: res.data.is_active, disabled_by: res.data.disabled_by } : c));
     } else {
       Swal.fire({ title: 'Failed', text: res?.error?.message || 'Could not update coupon.', icon: 'error', confirmButtonColor: '#FF9100', background: '#fff' });
     }
@@ -932,7 +964,12 @@ function Coupons() {
                         <td className="muted">৳{c.min_order || 0}</td>
                         <td>{c.used_count} / {c.max_uses ?? '∞'}</td>
                         <td className="muted">{c.expires_at ? new Date(c.expires_at).toLocaleDateString() : '—'}</td>
-                        <td><span className={`badge ${c.is_active ? "badge-green" : "badge-gray"}`}>{c.is_active ? "Active" : "Inactive"}</span></td>
+                        <td>
+                          <span className={`badge ${c.is_active ? "badge-green" : "badge-gray"}`}>{c.is_active ? "Active" : "Inactive"}</span>
+                          {!c.is_active && c.disabled_by && (
+                            <div style={{ fontSize: 10, color: "var(--text-65)", marginTop: 3 }}>by {c.disabled_by}</div>
+                          )}
+                        </td>
                         <td>
                           <div className="cell-action">
                             <button className="btn btn-sm btn-ghost" style={{ padding: "5px 10px", fontSize: 11 }} onClick={() => editingCode === c.code ? setEditingCode(null) : startEdit(c)}>
@@ -948,7 +985,7 @@ function Coupons() {
                       {editingCode === c.code && (
                         <tr style={{ background: "rgba(255,145,0,.04)" }}>
                           <td colSpan={7} style={{ padding: "16px 20px" }}>
-                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr auto", gap: 10, alignItems: "flex-end" }}>
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, alignItems: "flex-end" }}>
                               <div className="input-group" style={{ marginBottom: 0 }}>
                                 <label className="input-label">Type</label>
                                 <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: "1.5px solid var(--border)" }}>
@@ -1262,13 +1299,39 @@ function PointsAdmin() {
   const [panel, setPanel]       = useState(null); // null | { mode: 'add' | 'edit', data }
   const [busy, setBusy]         = useState(false);
   const [form, setForm]         = useState({ label: "", pts_cost: "", worth: "", is_active: true, sort_order: 0 });
+  const [redemptions, setRedemptions] = useState([]);
+  const [redLoading, setRedLoading]   = useState(true);
 
   useEffect(() => {
     window.mpApi.fetch('/admin/point-rewards')
       .then(res => setRewards(res?.data?.rewards || []))
       .catch(() => {})
       .finally(() => setLoading(false));
+    window.mpApi.fetch('/admin/redemptions')
+      .then(res => setRedemptions(res?.data?.redemptions || []))
+      .catch(() => {})
+      .finally(() => setRedLoading(false));
   }, []);
+
+  async function resolveRedemption(r, status) {
+    if (status === 'cancelled') {
+      const c = await Swal.fire({
+        title: 'Cancel redemption?',
+        text: `${Number(r.pts_cost).toLocaleString()} pts will be refunded to ${r.user_name || 'the customer'}.`,
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonText: 'Cancel & Refund',
+        confirmButtonColor: '#d33',
+        background: '#fff',
+      });
+      if (!c.isConfirmed) return;
+    }
+    const res = await window.mpApi.fetch(`/admin/redemptions/${r.id}`, {
+      method: 'PATCH', body: JSON.stringify({ status }),
+    }).catch(() => null);
+    if (res?.ok) setRedemptions(prev => prev.map(x => x.id === r.id ? { ...x, status } : x));
+    else alert(res?.error?.message || 'Failed to update redemption.');
+  }
 
   function openAdd() {
     setForm({ label: "", pts_cost: "", worth: "", is_active: true, sort_order: 0 });
@@ -1380,6 +1443,57 @@ function PointsAdmin() {
                           Delete
                         </button>
                       </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Redemption requests */}
+      <div className="eyebrow mb10">Redemption Requests</div>
+      <div className="card mb20">
+        {redLoading ? (
+          <div style={{ textAlign: "center", padding: 24 }}><i className="fa fa-spinner fa-spin" style={{ color: "var(--orange)" }} /></div>
+        ) : redemptions.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "24px 0", color: "var(--text-65)", fontSize: 13 }}>No redemptions yet.</div>
+        ) : (
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Customer</th>
+                  <th>Reward</th>
+                  <th>Points</th>
+                  <th>Requested</th>
+                  <th>Status</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {redemptions.map(r => (
+                  <tr key={r.id}>
+                    <td>
+                      <div style={{ fontWeight: 600 }}>{r.user_name || "—"}</div>
+                      <div className="text-muted" style={{ fontSize: 12 }}>{r.user_phone || ""}</div>
+                    </td>
+                    <td>{r.reward_label}{r.worth ? <span className="text-muted"> ({r.worth})</span> : null}</td>
+                    <td style={{ color: "var(--orange)", fontWeight: 700 }}>{Number(r.pts_cost).toLocaleString()} pts</td>
+                    <td className="text-muted">{new Date(r.created_at).toLocaleDateString()}</td>
+                    <td>
+                      <span className={`badge ${r.status === 'fulfilled' ? "badge-green" : r.status === 'cancelled' ? "badge-gray" : "badge-orange"}`}>
+                        {r.status === 'fulfilled' ? "Fulfilled" : r.status === 'cancelled' ? "Cancelled" : "Pending"}
+                      </span>
+                    </td>
+                    <td>
+                      {r.status === 'pending' && (
+                        <div className="row" style={{ gap: 6, justifyContent: "flex-end" }}>
+                          <button className="btn btn-ghost btn-sm" onClick={() => resolveRedemption(r, 'fulfilled')}>Fulfil</button>
+                          <button className="btn btn-ghost btn-sm" style={{ color: "var(--red)" }} onClick={() => resolveRedemption(r, 'cancelled')}>Cancel</button>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}

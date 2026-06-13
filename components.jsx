@@ -861,9 +861,8 @@ async function _handleGoogleCredential(response) {
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error?.message || "Google sign-in failed.");
-    localStorage.setItem("mp_access_token",  data.data.access_token);
-    localStorage.setItem("mp_refresh_token", data.data.refresh_token);
-    localStorage.setItem("mp_user",          JSON.stringify(data.data.user));
+    // Tokens are now in httpOnly cookies (set by backend), do not store in localStorage
+    localStorage.setItem("mp_user", JSON.stringify(data.data.user));
     const redirect = localStorage.getItem(AUTH_REDIRECT_KEY);
     if (redirect) {
       localStorage.removeItem(AUTH_REDIRECT_KEY);
@@ -994,9 +993,8 @@ function AuthModal({ open, onClose, title = "Join the Midnight Circle", subtitle
   const clearFeedback = () => { setErrors({}); setServerError(""); };
 
   const persistAndGo = (payload) => {
-    localStorage.setItem("mp_access_token",  payload.access_token);
-    localStorage.setItem("mp_refresh_token", payload.refresh_token);
-    localStorage.setItem("mp_user",          JSON.stringify(payload.user));
+    // Tokens are now in httpOnly cookies (set by backend), do not store in localStorage
+    localStorage.setItem("mp_user", JSON.stringify(payload.user));
     if (postAuthRedirect) {
       localStorage.removeItem(AUTH_REDIRECT_KEY);
       window.location.href = postAuthRedirect;

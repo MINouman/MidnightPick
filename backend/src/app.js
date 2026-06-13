@@ -26,6 +26,30 @@ async function build() {
     methods:     ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
   })
 
+  // Security headers
+  await app.register(require('@fastify/helmet'), {
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", "data:", "https:"],
+        fontSrc: ["'self'", "data:"],
+        connectSrc: ["'self'"],
+        frameSrc: ["'none'"],
+        formAction: ["'self'"],
+      },
+    },
+    hsts: {
+      maxAge: 31536000,  // 1 year
+      includeSubDomains: true,
+      preload: true,
+    },
+    referrerPolicy: { policy: 'no-referrer' },
+    xssFilter: true,
+    noSniff: true,
+  })
+
   await app.register(require('@fastify/rate-limit'), {
     global:       true,
     max:          200,
@@ -81,6 +105,7 @@ async function build() {
     ADDRESS_REQUIRED:    400,
     CANNOT_CANCEL:       409,
     INSUFFICIENT_STOCK:  409,
+    INSUFFICIENT_POINTS: 409,
     EMAIL_EXISTS:        409,
     SUBSCRIPTION_EXISTS: 409,
     ALREADY_REVIEWED:    409,

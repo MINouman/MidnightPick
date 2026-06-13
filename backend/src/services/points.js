@@ -49,4 +49,27 @@ async function reversePoints(client, userId, points, description, referenceId) {
   )
 }
 
-module.exports = { calculatePointsForOrder, awardPoints, reversePoints }
+// Must be called inside an open DB transaction (pass the `client`).
+// The guarded UPDATE makes the balance check atomic — concurrent redemptions
+// cannot both succeed on the same points.
+async function spendPoints(client, userId, points, description, referenceId, referenceType = 'redemption') {
+  const { rows } = await client.query(
+    `UPDATE users
+     SET    points_balance = points_balance - $2
+     WHERE  id = $1 AND points_balance >= $2
+     RETURNING points_balance`,
+    [userId, points]
+  )
+  if (!rows.length) throw { code: 'INSUFFICIENT_POINTS', message: 'Not enough points for this reward.' }
+
+  const balanceAfter = rows[0].points_balance
+  await client.query(
+    `INSERT INTO points_transactions
+       (user_id, type, points, balance_after, description, reference_id, reference_type)
+     VALUES ($1, 'spent', $2, $3, $4, $5, $6)`,
+    [userId, points, balanceAfter, description, referenceId, referenceType]
+  )
+  return balanceAfter
+}
+
+module.exports = { calculatePointsForOrder, awardPoints, reversePoints, spendPoints }

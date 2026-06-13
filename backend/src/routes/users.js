@@ -1,8 +1,10 @@
 'use strict'
 
 const usersSvc = require('../services/users')
-const { query } = require('../config/db')
+const { query, withTransaction } = require('../config/db')
+const { spendPoints } = require('../services/points')
 const { toEndOfDayDhaka } = require('../services/dates')
+const { getRateLimitConfig } = require('../config/rate-limits')
 
 module.exports = async function userRoutes(app) {
 
@@ -188,6 +190,43 @@ module.exports = async function userRoutes(app) {
       [req.user.sub, limit, offset]
     )
     return { ok: true, data: { transactions: rows, total, page, limit } }
+  })
+
+  // POST /me/points/redeem — claim a reward from the catalogue
+  app.post('/points/redeem', {
+    config: { rateLimit: getRateLimitConfig('pointRedemption') },
+    schema: {
+      body: {
+        type: 'object',
+        required: ['reward_id'],
+        properties: { reward_id: { type: 'string', format: 'uuid' } },
+        additionalProperties: false,
+      },
+    },
+  }, async (req, reply) => {
+    const result = await withTransaction(async (client) => {
+      const { rows: rewardRows } = await client.query(
+        `SELECT id, label, pts_cost, worth FROM point_rewards
+         WHERE id = $1 AND is_active = true
+         FOR UPDATE`,
+        [req.body.reward_id]
+      )
+      if (!rewardRows.length) throw { code: 'NOT_FOUND', message: 'Reward not found.' }
+      const reward = rewardRows[0]
+
+      const { rows: redRows } = await client.query(
+        `INSERT INTO point_redemptions (user_id, reward_id, reward_label, pts_cost, worth)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING id, reward_label, pts_cost, worth, status, created_at`,
+        [req.user.sub, reward.id, reward.label, reward.pts_cost, reward.worth]
+      )
+      const redemption = redRows[0]
+      const balance = await spendPoints(
+        client, req.user.sub, reward.pts_cost, `Redeemed: ${reward.label}`, redemption.id
+      )
+      return { balance, redemption }
+    })
+    return reply.code(201).send({ ok: true, data: result })
   })
 
   // ── Midnight Crew ───────────────────────────────────────────────────────
