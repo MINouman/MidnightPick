@@ -3,7 +3,7 @@
 const { sendOtp, verifyOtp }              = require('../services/otp')
 const { registerUser, loginUser, findOrCreateGoogleUser, findOrCreateUser } = require('../services/users')
 const { createTokenPair, rotateRefreshToken, revokeTokens } = require('../services/tokens')
-const { adminLogin }                      = require('../services/admin')
+const { adminLogin, bootstrapAdmin }      = require('../services/admin')
 const { verifyGoogleCredential }          = require('../services/google')
 const { normalizeBdMobile }               = require('../services/phone')
 
@@ -248,6 +248,45 @@ module.exports = async function authRoutes(app) {
       maxAge: 30 * 24 * 60 * 60 * 1000
     })
     return reply.send({
+      ok: true,
+      data: {
+        user: { id: user.id, email: user.email, name: user.name, role: user.role },
+      },
+    })
+  })
+
+  // POST /auth/admin/bootstrap - Create first admin account (only works if no admin exists)
+  app.post('/admin/bootstrap', {
+    schema: {
+      body: {
+        type: 'object', required: ['email', 'password'],
+        properties: {
+          email:    { type: 'string', format: 'email', maxLength: 255 },
+          password: { type: 'string', minLength: 6, maxLength: 100 },
+        },
+        additionalProperties: false,
+      },
+    },
+    config: { rateLimit: { max: 5, timeWindow: '1 hour' } },
+  }, async (req, reply) => {
+    const user   = await bootstrapAdmin(req.body.email, req.body.password)
+    const tokens = await createTokenPair(app, user)
+    // Set httpOnly cookies for tokens
+    reply.setCookie('mp_access_token', tokens.access_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'Lax',
+      path: '/',
+      maxAge: 15 * 60 * 1000
+    })
+    reply.setCookie('mp_refresh_token', tokens.refresh_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'Lax',
+      path: '/',
+      maxAge: 30 * 24 * 60 * 60 * 1000
+    })
+    return reply.code(201).send({
       ok: true,
       data: {
         user: { id: user.id, email: user.email, name: user.name, role: user.role },

@@ -2935,20 +2935,42 @@ function AdminLogin({ onSuccess }) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [isBootstrap, setIsBootstrap] = useState(null);
 
-  async function handleLogin(e) {
+  useEffect(() => {
+    // Check if any admin exists
+    async function checkAdminExists() {
+      try {
+        const res = await fetch(window.mpApi.base + '/auth/admin/bootstrap', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: 'test@test.com', password: 'test' }),
+          credentials: 'include',
+        });
+        const data = await res.json();
+        // If bootstrap fails with ADMIN_EXISTS, then admin already exists
+        setIsBootstrap(data.error?.code !== 'ADMIN_EXISTS');
+      } catch {
+        setIsBootstrap(false); // Assume admin exists if we can't reach the server
+      }
+    }
+    checkAdminExists();
+  }, []);
+
+  async function handleSubmit(e) {
     e.preventDefault();
     setError('');
     setBusy(true);
     try {
-      const res = await fetch(window.mpApi.base + '/auth/admin/login', {
+      const endpoint = isBootstrap ? '/auth/admin/bootstrap' : '/auth/admin/login';
+      const res = await fetch(window.mpApi.base + endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
         credentials: 'include',
       });
       const data = await res.json();
-      if (!data.ok) { setError(data.error?.message || 'Login failed.'); return; }
+      if (!data.ok) { setError(data.error?.message || (isBootstrap ? 'Setup failed.' : 'Login failed.')); return; }
       // Store user info in localStorage for dashboard to use
       localStorage.setItem('mp_user', JSON.stringify(data.data.user));
       onSuccess();
@@ -2959,26 +2981,37 @@ function AdminLogin({ onSuccess }) {
     }
   }
 
+  if (isBootstrap === null) return <LoadingScreen message="Checking admin status…" />;
+
   return (
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)' }}>
       <div style={{ width: 360, padding: 32, background: 'var(--card)', borderRadius: 16, border: '1px solid var(--text-08)', boxShadow: 'var(--shadow-md)' }}>
         <div style={{ textAlign: 'center', marginBottom: 28 }}>
           <img src="assets/logo.png" alt="Midnight Pick" style={{ height: 40, marginBottom: 12 }} />
-          <div style={{ fontFamily: 'var(--font)', fontWeight: 800, fontSize: 20, color: 'var(--text)' }}>Admin Login</div>
-          <div style={{ fontSize: 13, color: 'var(--text-65)', marginTop: 4 }}>Midnight Pick Dashboard</div>
+          <div style={{ fontFamily: 'var(--font)', fontWeight: 800, fontSize: 20, color: 'var(--text)' }}>
+            {isBootstrap ? 'Create First Admin' : 'Admin Login'}
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--text-65)', marginTop: 4 }}>
+            {isBootstrap ? 'Set up your admin account' : 'Midnight Pick Dashboard'}
+          </div>
         </div>
-        <form onSubmit={handleLogin}>
+        {isBootstrap && (
+          <div style={{ background: 'rgba(255,145,0,.1)', border: '1px solid rgba(255,145,0,.2)', borderRadius: 8, padding: 12, marginBottom: 20, fontSize: 12, color: 'var(--text-65)', lineHeight: 1.5 }}>
+            ℹ️ No admin account found. Create the first admin account to access the dashboard.
+          </div>
+        )}
+        <form onSubmit={handleSubmit}>
           <div className="input-group">
             <label className="input-label">Email</label>
             <input className="input" type="email" required autoFocus value={email} onChange={e => setEmail(e.target.value)} placeholder="admin@midnightpick.com" />
           </div>
           <div className="input-group" style={{ marginBottom: error ? 8 : 20 }}>
             <label className="input-label">Password</label>
-            <input className="input" type="password" required value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" />
+            <input className="input" type="password" required minLength={6} value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" />
           </div>
           {error && <div style={{ color: 'var(--red)', fontSize: 13, marginBottom: 16, padding: '8px 12px', background: 'rgba(229,92,92,.1)', borderRadius: 8 }}>{error}</div>}
           <button className="btn btn-primary btn-full" type="submit" disabled={busy}>
-            {busy ? 'Signing in…' : 'Sign In'}
+            {busy ? (isBootstrap ? 'Setting up…' : 'Signing in…') : (isBootstrap ? 'Create Account' : 'Sign In')}
           </button>
         </form>
       </div>
