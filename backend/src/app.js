@@ -19,6 +19,8 @@ async function build() {
 
   // ── Plugins ──────────────────────────────────────────────────────────────
 
+  await app.register(require('@fastify/cookie'))
+
   await app.register(require('@fastify/cors'), {
     // In dev reflect any origin (file://, Live Server, etc.); lock down in production
     origin:      env.NODE_ENV === 'production' ? env.CORS_ORIGIN : true,
@@ -67,6 +69,12 @@ async function build() {
   await app.register(require('@fastify/jwt'), {
     secret: env.JWT_SECRET,
     sign:   { expiresIn: '15m' },
+    extract: (req) => {
+      // Try Authorization header first, then fall back to httpOnly cookie
+      const auth = req.headers.authorization?.replace('Bearer ', '');
+      if (auth) return auth;
+      return req.cookies.mp_access_token || null;
+    },
   })
 
   // ── Auth decorator (used by all protected routes) ──────────────────────
@@ -74,7 +82,8 @@ async function build() {
   app.decorate('authenticate', async (req, reply) => {
     try {
       await req.jwtVerify()
-      const raw = req.headers.authorization?.replace('Bearer ', '') || ''
+      // Get the raw token the same way extract() does
+      const raw = req.headers.authorization?.replace('Bearer ', '') || req.cookies.mp_access_token || ''
       if (await isBlacklisted(raw)) {
         return reply.code(401).send({ ok: false, error: { code: 'UNAUTHORIZED', message: 'Token has been revoked.' } })
       }
