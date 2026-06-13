@@ -1058,7 +1058,6 @@ function Policies() {
   const [loading, setLoading] = useState(true);
   const [panel, setPanel] = useState(null);
   const [editing, setEditing] = useState(null);
-  const [newPolicy, setNewPolicy] = useState({ name: '', title: '', content: '' });
 
   useEffect(() => {
     fetchPolicies();
@@ -1073,15 +1072,14 @@ function Policies() {
   }
 
   async function createPolicy() {
-    if (!newPolicy.name || !newPolicy.title || !newPolicy.content) return;
+    if (!panel || !panel.name || !panel.title || !panel.content) return;
     try {
       const res = await window.mpApi.fetch('/admin/policies', {
         method: 'POST',
-        body: JSON.stringify(newPolicy),
+        body: JSON.stringify(panel),
       });
       if (res?.ok) {
         setPolicies(prev => [res.data.policy, ...prev]);
-        setNewPolicy({ name: '', title: '', content: '' });
         setPanel(null);
       } else {
         alert(res?.error?.message || 'Failed to create policy');
@@ -1127,7 +1125,7 @@ function Policies() {
   return (
     <div>
       <div className="page-title">Policies</div>
-      <button className="btn btn-primary" onClick={() => { setEditing(null); setNewPolicy({ name: '', title: '', content: '' }); setPanel({ name: '', title: '', content: '' }); }} style={{ marginBottom: 16 }}>
+      <button className="btn btn-primary" onClick={() => { setEditing(null); setPanel({ name: '', title: '', content: '' }); }} style={{ marginBottom: 16 }}>
         <i className="fa fa-plus" /> New Policy
       </button>
 
@@ -1164,7 +1162,7 @@ function Policies() {
               {!editing && (
                 <div className="input-group">
                   <label className="input-label">Name (e.g., return-policy)</label>
-                  <input className="input" value={newPolicy.name} onChange={e => setNewPolicy(f => ({ ...f, name: e.target.value }))} placeholder="return-policy" />
+                  <input className="input" value={panel.name} onChange={e => setPanel(f => ({ ...f, name: e.target.value }))} placeholder="return-policy" />
                 </div>
               )}
               <div className="input-group">
