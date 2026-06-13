@@ -22,7 +22,7 @@ CREATE INDEX IF NOT EXISTS idx_crew_commissions_order_id
 
 -- Orders: Composite for user filtering + status + ordering
 CREATE INDEX IF NOT EXISTS idx_orders_user_status_created
-  ON orders(user_id, status, created_at DESC);
+  ON orders(user_id, status, created_at);
 
 -- Coupons: Type + status for active coupon queries
 CREATE INDEX IF NOT EXISTS idx_coupons_type_status
@@ -30,12 +30,12 @@ CREATE INDEX IF NOT EXISTS idx_coupons_type_status
 
 -- Products: Status + date ordering for listing
 CREATE INDEX IF NOT EXISTS idx_products_status_created
-  ON products(status, created_at DESC);
+  ON products(status, created_at);
 
 -- Subscriptions: Pause expiry tracking
 CREATE INDEX IF NOT EXISTS idx_sub_pause_until
   ON subscriptions(pause_until) WHERE status = 'paused';
 
--- Order items: Order + date ordering for item queries
-CREATE INDEX IF NOT EXISTS idx_order_items_order_created
-  ON order_items(order_id, created_at);
+-- Order items: Order for item queries
+CREATE INDEX IF NOT EXISTS idx_order_items_order_id
+  ON order_items(order_id);
