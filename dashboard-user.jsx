@@ -1804,15 +1804,6 @@ function BottomNav({ tab, setTab, isCrew }) {
   );
 }
 
-// ── LOADING ───────────────────────────────────────────────────
-function LoadingScreen() {
-  return (
-    <div className="loading-screen">
-      <img src="assets/logo.png" alt="Midnight Pick" style={{ width: 56, opacity: .7 }} />
-      <div className="text-muted text-sm">Loading your account…</div>
-    </div>
-  );
-}
 
 // ── APP ───────────────────────────────────────────────────────
 function UserDashboard() {
@@ -1850,7 +1841,7 @@ function UserDashboard() {
     loadData();
   }, []);
 
-  if (data.loading) return <LoadingScreen />;
+  if (data.loading) return <LoadingScreen message="Loading your account…" />;
 
   const ctxValue = { ...data, reload: loadData };
 

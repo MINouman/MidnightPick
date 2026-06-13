@@ -365,11 +365,7 @@ function InfluencerDashboard() {
     }).catch(() => setData(d => ({ ...d, loading: false })));
   }, []);
 
-  if (data.loading) return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh" }}>
-      <i className="fa fa-circle-notch fa-spin" style={{ fontSize: 28, color: "var(--orange)" }} />
-    </div>
-  );
+  if (data.loading) return <LoadingScreen message="Loading your account…" />;
 
   async function handleLogout() {
     // Call logout with credentials: include (sends httpOnly cookies automatically)

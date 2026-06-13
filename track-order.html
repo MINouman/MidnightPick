@@ -24,7 +24,20 @@
   <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
 </head>
 <body>
-  <div id="root"></div>
+  <div id="root">
+    <!-- static placeholder shown until React mounts -->
+    <div style="min-height:100dvh;display:flex;align-items:center;justify-content:center;">
+      <div class="loader" aria-label="Loading" role="status">
+        <div class="cup">
+          <div class="cup-handle"></div>
+          <div class="smoke one"></div>
+          <div class="smoke two"></div>
+          <div class="smoke three"></div>
+        </div>
+        <div class="load">Loading...</div>
+      </div>
+    </div>
+  </div>
 
   <script type="text/babel" src="components.jsx"></script>
   <script type="text/babel" src="track-order-app.jsx"></script>

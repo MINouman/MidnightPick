@@ -39,15 +39,6 @@ const PRODUCT_STATUS_BADGE = {
   "Stock Out": "badge-red", "Featured": "badge-orange", "Discontinued": "badge-gray",
 };
 
-// ── Loading Screen ─────────────────────────────────────
-function LoadingScreen() {
-  return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", flexDirection: "column", gap: 16 }}>
-      <img src="assets/logo.png" alt="Midnight Pick" style={{ width: 48, opacity: .6 }} />
-      <div className="text-muted text-sm">Loading…</div>
-    </div>
-  );
-}
 
 // ── Helpers ────────────────────────────────────────────
 function StatusBadge({ status }) {
@@ -2434,7 +2425,7 @@ function AdminDashboard() {
     }
   }
 
-  if (loading) return <LoadingScreen />;
+  if (loading) return <LoadingScreen message="Loading…" />;
   if (!authed)  return <AdminLogin onSuccess={onLoginSuccess} />;
 
   return (
