@@ -858,6 +858,7 @@ async function _handleGoogleCredential(response) {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
       body:    JSON.stringify({ credential: response.credential }),
+      credentials: 'include',
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error?.message || "Google sign-in failed.");
@@ -1020,6 +1021,7 @@ function AuthModal({ open, onClose, title = "Join the Midnight Circle", subtitle
       const res  = await fetch(`${API_BASE}/auth/otp/send`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone: p }),
+        credentials: 'include',
       });
       const data = await res.json();
       if (!data.ok) throw new Error(data.error?.message || "Failed to send OTP.");
@@ -1040,6 +1042,7 @@ function AuthModal({ open, onClose, title = "Join the Midnight Circle", subtitle
       const res  = await fetch(`${API_BASE}/auth/otp/verify`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone: normalizeBdMobile(phone), otp: code }),
+        credentials: 'include',
       });
       const data = await res.json();
       if (!data.ok) throw new Error(data.error?.message || "Invalid OTP.");
@@ -1063,6 +1066,7 @@ function AuthModal({ open, onClose, title = "Join the Midnight Circle", subtitle
       const res  = await fetch(`${API_BASE}/auth/otp/send`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone: normalizeBdMobile(phone) }),
+        credentials: 'include',
       });
       const data = await res.json();
       if (!data.ok) throw new Error(data.error?.message || "Failed to send OTP.");
@@ -1083,6 +1087,7 @@ function AuthModal({ open, onClose, title = "Join the Midnight Circle", subtitle
       const res  = await fetch(`${API_BASE}/auth/login`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: email.trim(), password }),
+        credentials: 'include',
       });
       const data = await res.json();
       if (!data.ok) {
@@ -1116,8 +1121,9 @@ function AuthModal({ open, onClose, title = "Join the Midnight Circle", subtitle
         if (optEmail.trim()) body.email = optEmail.trim();
         const res  = await fetch(`${API_BASE}/me`, {
           method:  "PATCH",
-          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${pending.access_token}` },
+          headers: { "Content-Type": "application/json" },
           body:    JSON.stringify(body),
+          credentials: 'include',
         });
         const data = await res.json();
         if (!data.ok) throw new Error(data.error?.message || "Couldn't save your details.");
@@ -1126,6 +1132,7 @@ function AuthModal({ open, onClose, title = "Join the Midnight Circle", subtitle
         const res  = await fetch(`${API_BASE}/auth/register`, {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name: fullName.trim(), email: email.trim(), password }),
+          credentials: 'include',
         });
         const data = await res.json();
         if (!data.ok) throw new Error(data.error?.message || "Couldn't create your account.");
