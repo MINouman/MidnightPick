@@ -10,6 +10,9 @@ const LIMITS = {
     global: { max: 3, window: 600 }, // 3 per 10 minutes (per phone)
     device: { max: 5, window: 3600 }, // 5 per hour (per device fingerprint)
   },
+  order_otp: {
+    global: { max: 3, window: 600 }, // 3 per 10 minutes (per phone)
+  },
   general: {
     global: { max: 10, window: 3600 }, // 10 per hour (per phone)
   },
