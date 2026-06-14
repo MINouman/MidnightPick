@@ -281,7 +281,13 @@ function Orders() {
   async function submitManualOrder() {
     if (!newOrder.customer || !newOrder.orderItems.length) return;
     if (!newOrder.phone) {
-      alert('Phone number is required for OTP verification.');
+      Swal.fire({
+        title: 'Phone Required',
+        text: 'Phone number is required for OTP verification.',
+        icon: 'warning',
+        confirmButtonColor: '#FF9100',
+        background: '#fff',
+      });
       return;
     }
 
@@ -303,7 +309,13 @@ function Orders() {
 
       if (!otpRes?.ok) {
         const errorMsg = otpRes?.error?.message || 'Failed to send OTP.';
-        alert(`Could not send OTP: ${errorMsg}`);
+        Swal.fire({
+          title: 'OTP Send Failed',
+          text: `Could not send OTP: ${errorMsg}`,
+          icon: 'error',
+          confirmButtonColor: '#FF9100',
+          background: '#fff',
+        });
         return;
       }
 
@@ -324,7 +336,13 @@ function Orders() {
       setOtpModal({ phone: newOrder.phone });
       setOtpModalInput("");
     } catch (e) {
-      alert(e?.message || 'Failed to send OTP.');
+      Swal.fire({
+        title: 'Error',
+        text: e?.message || 'Failed to send OTP.',
+        icon: 'error',
+        confirmButtonColor: '#FF9100',
+        background: '#fff',
+      });
     } finally {
       setOtpModalVerifying(false);
     }
@@ -332,11 +350,23 @@ function Orders() {
 
   async function verifyOtpModal() {
     if (!otpModal || !otpModalInput.trim()) {
-      alert("Please enter the OTP code.");
+      Swal.fire({
+        title: 'OTP Required',
+        text: 'Please enter the OTP code.',
+        icon: 'warning',
+        confirmButtonColor: '#FF9100',
+        background: '#fff',
+      });
       return;
     }
     if (!pendingOrder) {
-      alert("Order data lost. Please try again.");
+      Swal.fire({
+        title: 'Error',
+        text: 'Order data lost. Please try again.',
+        icon: 'error',
+        confirmButtonColor: '#FF9100',
+        background: '#fff',
+      });
       return;
     }
 
@@ -351,7 +381,13 @@ function Orders() {
         }),
       });
       if (!verifyRes?.ok) {
-        alert(verifyRes?.error?.message || 'Invalid OTP.');
+        Swal.fire({
+          title: 'Invalid OTP',
+          text: verifyRes?.error?.message || 'The OTP code is invalid.',
+          icon: 'error',
+          confirmButtonColor: '#FF9100',
+          background: '#fff',
+        });
         return;
       }
 
@@ -362,7 +398,13 @@ function Orders() {
       });
 
       if (!createRes?.ok) {
-        alert(createRes?.error?.message || 'Failed to create order after verification.');
+        Swal.fire({
+          title: 'Order Creation Failed',
+          text: createRes?.error?.message || 'Failed to create order after verification.',
+          icon: 'error',
+          confirmButtonColor: '#FF9100',
+          background: '#fff',
+        });
         return;
       }
 
@@ -376,7 +418,14 @@ function Orders() {
         console.log('Confirmation SMS may have failed');
       });
 
-      alert('✓ Order confirmed and created successfully!');
+      Swal.fire({
+        title: 'Success!',
+        text: '✓ Order confirmed and created successfully!',
+        icon: 'success',
+        confirmButtonColor: '#FF9100',
+        background: '#fff',
+        timer: 2000,
+      });
 
       // Close modal and form
       setOtpModal(null);
@@ -392,7 +441,13 @@ function Orders() {
         setOrders(ordersRes.data.orders || []);
       }
     } catch (e) {
-      alert(e?.message || 'Failed to verify OTP.');
+      Swal.fire({
+        title: 'Error',
+        text: e?.message || 'Failed to verify OTP.',
+        icon: 'error',
+        confirmButtonColor: '#FF9100',
+        background: '#fff',
+      });
     } finally {
       setOtpModalVerifying(false);
     }
