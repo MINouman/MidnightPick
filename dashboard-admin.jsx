@@ -285,7 +285,7 @@ function Orders() {
 
     try {
       // Step 1: Create the order
-      const res = await window.mpApi.fetch('/api/v1/admin/orders', {
+      const res = await window.mpApi.fetch('/admin/orders', {
         method: 'POST',
         body: JSON.stringify({
           customer_name:   newOrder.customer,
@@ -308,7 +308,7 @@ function Orders() {
 
       // Step 2: If phone exists, send OTP and show verification modal
       if (newOrder.phone) {
-        const otpRes = await window.mpApi.fetch(`/api/v1/admin/orders/${createdOrder.id}/send-otp`, {
+        const otpRes = await window.mpApi.fetch(`/admin/orders/${createdOrder.id}/send-otp`, {
           method: 'POST',
         });
         if (otpRes?.ok) {
@@ -340,7 +340,7 @@ function Orders() {
     }
     setOtpModalVerifying(true);
     try {
-      const res = await window.mpApi.fetch(`/api/v1/admin/orders/${otpModal.orderId}/verify-otp`, {
+      const res = await window.mpApi.fetch(`/admin/orders/${otpModal.orderId}/verify-otp`, {
         method: 'POST',
         body: JSON.stringify({ otp: otpModalInput }),
       });
@@ -357,7 +357,7 @@ function Orders() {
       setNewOrder({ customer: "", phone: "", address: "", orderItems: [], total: "", payment: "bKash", coupon: "", notes: "", status: "processing" });
       setCouponPreview(null);
       // Refresh orders list
-      const ordersRes = await window.mpApi.fetch('/api/v1/admin/orders?limit=20');
+      const ordersRes = await window.mpApi.fetch('/admin/orders?limit=20');
       if (ordersRes?.ok) {
         setOrders(ordersRes.data.orders || []);
       }
@@ -388,7 +388,7 @@ function Orders() {
     setOtpStatus(null);
     // Load OTP status if order exists
     if (o.id) {
-      const res = await window.mpApi.fetch(`/api/v1/admin/orders/${o.id}/otp-status`).catch(() => null);
+      const res = await window.mpApi.fetch(`/admin/orders/${o.id}/otp-status`).catch(() => null);
       if (res?.ok && res.data) {
         setOtpStatus(res.data);
       }
@@ -402,7 +402,7 @@ function Orders() {
     }
     setOtpSending(true);
     try {
-      const res = await window.mpApi.fetch(`/api/v1/admin/orders/${panel.id}/send-otp`, {
+      const res = await window.mpApi.fetch(`/admin/orders/${panel.id}/send-otp`, {
         method: 'POST',
       });
       if (!res?.ok) {
@@ -427,7 +427,7 @@ function Orders() {
     }
     setOtpVerifying(true);
     try {
-      const res = await window.mpApi.fetch(`/api/v1/admin/orders/${panel.id}/verify-otp`, {
+      const res = await window.mpApi.fetch(`/admin/orders/${panel.id}/verify-otp`, {
         method: 'POST',
         body: JSON.stringify({ otp: otpInput }),
       });
