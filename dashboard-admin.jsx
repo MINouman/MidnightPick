@@ -391,7 +391,7 @@ function Orders() {
         return;
       }
 
-      // Step 2: OTP verified - NOW create the actual order
+      // Step 2: OTP verified - create order
       const createRes = await window.mpApi.fetch('/admin/orders', {
         method: 'POST',
         body: JSON.stringify(pendingOrder),
@@ -408,15 +408,16 @@ function Orders() {
         return;
       }
 
-      // Step 3: Order created successfully
+      // Step 3: Order created - send confirmation SMS
       const createdOrder = createRes.data;
 
-      // Send confirmation SMS
-      await window.mpApi.fetch(`/admin/orders/${createdOrder.id}/send-confirmation-sms`, {
-        method: 'POST',
-      }).catch(() => {
-        console.log('Confirmation SMS may have failed');
-      });
+      if (createdOrder.customer_phone) {
+        await window.mpApi.fetch(`/admin/orders/${createdOrder.id}/send-confirmation-sms`, {
+          method: 'POST',
+        }).catch(() => {
+          console.log('Confirmation SMS may have failed');
+        });
+      }
 
       Swal.fire({
         title: 'Success!',
@@ -724,7 +725,14 @@ function Orders() {
                 value={otpModalInput}
                 onChange={e => setOtpModalInput(e.target.value.replace(/\D/g, '').slice(0, 4))}
                 maxLength="4"
-                style={{ fontSize: 18, letterSpacing: 8, textAlign: "center", fontWeight: 700 }}
+                style={{
+                  fontSize: 20,
+                  letterSpacing: 8,
+                  textAlign: "center",
+                  fontWeight: 700,
+                  color: "var(--text)",
+                  backgroundColor: "rgba(255,255,255,.95)",
+                }}
                 disabled={otpModalVerifying}
                 autoFocus
               />
