@@ -1732,6 +1732,330 @@ function Financials() {
   );
 }
 
+// ── Section: SMS Management ─────────────────────────────
+function SmsManagement() {
+  const [settings, setSettings] = useState(null);
+  const [balance, setBalance] = useState(null);
+  const [usage, setUsage] = useState(null);
+  const [logs, setLogs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [editMode, setEditMode] = useState(false);
+  const [form, setForm] = useState({ apiUrl: '', apiKey: '', senderId: '', balanceApiUrl: '' });
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  async function loadData() {
+    setLoading(true);
+    try {
+      const [settingsRes, balanceRes, usageRes, logsRes] = await Promise.all([
+        window.mpApi.fetch('/admin/sms/settings'),
+        window.mpApi.fetch('/admin/sms/balance'),
+        window.mpApi.fetch('/admin/sms/usage?days=7'),
+        window.mpApi.fetch('/admin/sms/logs?limit=20'),
+      ]);
+
+      if (settingsRes?.ok) setSettings(settingsRes.data);
+      if (balanceRes?.ok) setBalance(balanceRes.data);
+      if (usageRes?.ok) setUsage(usageRes.data);
+      if (logsRes?.ok) setLogs(logsRes.data?.logs || []);
+
+      if (settingsRes?.data) {
+        setForm({
+          apiUrl: settingsRes.data.apiUrl || '',
+          apiKey: settingsRes.data.apiKey || '',
+          senderId: settingsRes.data.senderId || '',
+          balanceApiUrl: settingsRes.data.balanceApiUrl || '',
+        });
+      }
+    } catch (err) {
+      setError('Failed to load SMS data');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleSaveSettings() {
+    setError('');
+    setSuccess('');
+    try {
+      const res = await window.mpApi.fetch('/admin/sms/settings', {
+        method: 'PATCH',
+        body: JSON.stringify(form),
+      });
+      if (res?.ok) {
+        setSuccess('SMS settings saved successfully');
+        setEditMode(false);
+        await loadData();
+      } else {
+        setError(res?.error?.message || 'Failed to save settings');
+      }
+    } catch (err) {
+      setError('Error saving settings');
+    }
+  }
+
+  async function handleRefreshBalance() {
+    setError('');
+    try {
+      const res = await window.mpApi.fetch('/admin/sms/balance?refresh=true');
+      if (res?.ok) {
+        setBalance(res.data);
+        setSuccess('Balance refreshed');
+      } else {
+        setError('Failed to refresh balance');
+      }
+    } catch (err) {
+      setError('Error refreshing balance');
+    }
+  }
+
+  if (loading) {
+    return <div className="dash-inner" style={{ textAlign: 'center', padding: 40 }}><i className="fa fa-spinner fa-spin" style={{ fontSize: 24, color: 'var(--orange)' }} /></div>;
+  }
+
+  return (
+    <div className="dash-inner">
+      <div className="page-title">SMS & Balance Management</div>
+
+      {error && <div style={{ padding: 12, marginBottom: 16, background: 'rgba(220,53,69,.1)', border: '1px solid rgba(220,53,69,.3)', borderRadius: 6, color: 'var(--red)', fontSize: 13 }}>{error}</div>}
+      {success && <div style={{ padding: 12, marginBottom: 16, background: 'rgba(40,167,69,.1)', border: '1px solid rgba(40,167,69,.3)', borderRadius: 6, color: 'var(--green)', fontSize: 13 }}>{success}</div>}
+
+      {/* Balance Card */}
+      {balance && (
+        <div className="card mb20">
+          <div className="row-between mb12">
+            <div className="eyebrow">Current Balance</div>
+            <button className="btn btn-sm btn-ghost" onClick={handleRefreshBalance}>
+              <i className="fa fa-sync-alt" style={{ fontSize: 11, marginRight: 4 }} /> Refresh
+            </button>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 8 }}>
+            <div style={{ fontSize: 32, fontWeight: 700, color: 'var(--orange)' }}>
+              ৳ {Number(balance.balance || 0).toFixed(2)}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-65)' }}>
+              {balance.cached && `Last updated: ${new Date(balance.cachedAt).toLocaleTimeString()}`}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Usage Stats */}
+      {usage && (
+        <div className="card mb20">
+          <div className="eyebrow mb12">SMS Usage (Last 7 Days)</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+            <div style={{ padding: 12, background: 'var(--bg-soft)', borderRadius: 6 }}>
+              <div style={{ fontSize: 12, color: 'var(--text-65)', marginBottom: 4 }}>Total SMS Sent</div>
+              <div style={{ fontSize: 24, fontWeight: 700 }}>{usage.totalSms}</div>
+            </div>
+            {usage.byDate && usage.byDate.length > 0 && (
+              <div style={{ padding: 12, background: 'var(--bg-soft)', borderRadius: 6 }}>
+                <div style={{ fontSize: 12, color: 'var(--text-65)', marginBottom: 4 }}>Daily Average</div>
+                <div style={{ fontSize: 24, fontWeight: 700 }}>{Math.round(usage.totalSms / (usage.byDate?.length || 1))}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Configuration */}
+      <div className="card mb20">
+        <div className="row-between mb12">
+          <div className="eyebrow">SMS Gateway Configuration</div>
+          {!editMode && <button className="btn btn-sm btn-primary" onClick={() => setEditMode(true)}>Edit</button>}
+        </div>
+
+        {editMode ? (
+          <>
+            <div className="input-group">
+              <label className="input-label">API URL</label>
+              <input className="input" value={form.apiUrl} onChange={e => setForm(f => ({ ...f, apiUrl: e.target.value }))} placeholder="https://api.gateway.com/send" />
+            </div>
+            <div className="input-group">
+              <label className="input-label">API Key</label>
+              <input className="input" type="password" value={form.apiKey} onChange={e => setForm(f => ({ ...f, apiKey: e.target.value }))} placeholder="Your API key" />
+            </div>
+            <div className="input-group">
+              <label className="input-label">Sender ID</label>
+              <input className="input" value={form.senderId} onChange={e => setForm(f => ({ ...f, senderId: e.target.value }))} maxLength="11" placeholder="MidnightPick" />
+            </div>
+            <div className="input-group" style={{ marginBottom: 0 }}>
+              <label className="input-label">Balance Check API URL</label>
+              <input className="input" value={form.balanceApiUrl} onChange={e => setForm(f => ({ ...f, balanceApiUrl: e.target.value }))} placeholder="https://api.gateway.com/balance" />
+            </div>
+            <div className="col-gap mt12" style={{ marginBottom: 0 }}>
+              <button className="btn btn-primary btn-full" onClick={handleSaveSettings}>Save</button>
+              <button className="btn btn-ghost btn-full" onClick={() => setEditMode(false)}>Cancel</button>
+            </div>
+          </>
+        ) : (
+          <div style={{ display: 'grid', gap: 12 }}>
+            {settings ? (
+              <>
+                <div><span style={{ fontSize: 12, color: 'var(--text-65)' }}>API URL:</span> <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{settings.apiUrl || '—'}</span></div>
+                <div><span style={{ fontSize: 12, color: 'var(--text-65)' }}>Sender ID:</span> <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{settings.senderId || '—'}</span></div>
+                <div><span style={{ fontSize: 12, color: 'var(--text-65)' }}>Balance API:</span> <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{settings.balanceApiUrl || '—'}</span></div>
+              </>
+            ) : (
+              <div style={{ color: 'var(--text-65)', fontSize: 13 }}>No SMS configuration yet. Click Edit to configure.</div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Recent Logs */}
+      <div className="card">
+        <div className="eyebrow mb12">Recent SMS Logs</div>
+        {logs.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: 20, color: 'var(--text-65)', fontSize: 13 }}>No SMS logs yet</div>
+        ) : (
+          <div className="table-wrap">
+            <table className="data-table" style={{ fontSize: 12 }}>
+              <thead>
+                <tr><th>Phone</th><th>Type</th><th>Status</th><th>Sent</th></tr>
+              </thead>
+              <tbody>
+                {logs.map(log => (
+                  <tr key={log.id}>
+                    <td style={{ fontFamily: 'monospace', fontSize: 11 }}>{log.phone}</td>
+                    <td><span style={{ fontSize: 11, padding: '2px 6px', background: 'var(--bg-soft)', borderRadius: 3 }}>{log.sms_type}</span></td>
+                    <td><StatusBadge status={log.status} /></td>
+                    <td className="text-muted">{fmtDate(log.sent_at || log.created_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* SMS Templates */}
+      <SmsTemplatesEditor />
+    </div>
+  );
+}
+
+// SMS Templates Editor Component
+function SmsTemplatesEditor() {
+  const [templates, setTemplates] = useState([]);
+  const [editingType, setEditingType] = useState(null);
+  const [editingText, setEditingText] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
+  useEffect(() => {
+    loadTemplates();
+  }, []);
+
+  async function loadTemplates() {
+    setLoading(true);
+    try {
+      const res = await window.mpApi.fetch('/admin/sms/templates');
+      if (res?.ok) {
+        setTemplates(res.data);
+      } else {
+        setError('Failed to load templates');
+      }
+    } catch (err) {
+      setError('Error loading templates');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleSave(templateType) {
+    setError('');
+    setSuccess('');
+    try {
+      const res = await window.mpApi.fetch(`/admin/sms/templates/${templateType}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ messageTemplate: editingText }),
+      });
+      if (res?.ok) {
+        setSuccess('Template saved successfully');
+        setEditingType(null);
+        await loadTemplates();
+      } else {
+        setError(res?.error?.message || 'Failed to save template');
+      }
+    } catch (err) {
+      setError('Error saving template');
+    }
+  }
+
+  const templateDescriptions = {
+    'otp': 'OTP code sent during login',
+    'order_confirmation': 'Confirmation message after order placement',
+  };
+
+  const templateVariables = {
+    'otp': ['OTP_CODE'],
+    'order_confirmation': ['ORDER_REF', 'TOTAL'],
+  };
+
+  return (
+    <div className="card">
+      <div className="eyebrow mb16">SMS Message Templates</div>
+      {error && <div style={{ padding: 12, marginBottom: 12, background: 'rgba(220,53,69,.1)', border: '1px solid rgba(220,53,69,.3)', borderRadius: 6, color: 'var(--red)', fontSize: 12 }}>{error}</div>}
+      {success && <div style={{ padding: 12, marginBottom: 12, background: 'rgba(40,167,69,.1)', border: '1px solid rgba(40,167,69,.3)', borderRadius: 6, color: 'var(--green)', fontSize: 12 }}>{success}</div>}
+
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: 24 }}><i className="fa fa-spinner fa-spin" style={{ color: 'var(--orange)' }} /></div>
+      ) : (
+        <div style={{ display: 'grid', gap: 16 }}>
+          {templates.map(template => (
+            <div key={template.template_type} style={{ padding: 12, background: 'var(--bg-soft)', borderRadius: 6 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 13 }}>{template.subject}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-65)', marginTop: 2 }}>
+                    Available: {templateVariables[template.template_type]?.join(', ') || 'No variables'}
+                  </div>
+                </div>
+                {editingType !== template.template_type && (
+                  <button className="btn btn-sm btn-ghost" onClick={() => { setEditingType(template.template_type); setEditingText(template.message_template); }}>
+                    Edit
+                  </button>
+                )}
+              </div>
+
+              {editingType === template.template_type ? (
+                <>
+                  <textarea
+                    className="input"
+                    value={editingText}
+                    onChange={e => setEditingText(e.target.value)}
+                    rows={3}
+                    style={{ resize: 'vertical', marginBottom: 8 }}
+                    placeholder="Enter message template..."
+                  />
+                  <div style={{ fontSize: 11, color: 'var(--text-65)', marginBottom: 8 }}>
+                    Use {'{'}VARIABLE{'}'} for placeholders: {templateVariables[template.template_type]?.join(', ')}
+                  </div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button className="btn btn-sm btn-primary" onClick={() => handleSave(template.template_type)}>Save</button>
+                    <button className="btn btn-sm btn-ghost" onClick={() => setEditingType(null)}>Cancel</button>
+                  </div>
+                </>
+              ) : (
+                <div style={{ fontSize: 12, fontFamily: 'monospace', color: 'var(--text-75)', lineHeight: 1.5 }}>
+                  {template.message_template}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Section: Settings ──────────────────────────────────
 function Settings() {
   const { user } = useContext(DashCtx);
@@ -2368,6 +2692,7 @@ function Sidebar({ section, setSection, onLogout }) {
     { id: "reviews",    icon: "fa-star-half-alt",   label: "Reviews" },
     { id: "influencer", icon: "fa-bolt",            label: "Influencers" },
     { id: "points",     icon: "fa-star",            label: "Points" },
+    { id: "sms",        icon: "fa-envelope",        label: "SMS" },
     { id: "financials", icon: "fa-chart-line",      label: "Financials" },
     { id: "settings",   icon: "fa-cog",             label: "Settings" },
   ];
@@ -2419,6 +2744,7 @@ function AdminTabbar({ section, setSection, onLogout }) {
     { id: "reviews",    icon: "fa-star-half-alt",  label: "Reviews" },
     { id: "influencer", icon: "fa-bolt",           label: "Influencers" },
     { id: "points",     icon: "fa-star",           label: "Points" },
+    { id: "sms",        icon: "fa-envelope",       label: "SMS" },
     { id: "financials", icon: "fa-chart-line",     label: "Financials" },
     { id: "settings",   icon: "fa-cog",            label: "Settings" },
   ];
@@ -2554,6 +2880,7 @@ function AdminDashboard() {
       case "crew":       return <CrewManagement />;
       case "influencer": return <InfluencersSection />;
       case "points":     return <PointsAdmin />;
+      case "sms":        return <SmsManagement />;
       case "financials": return <Financials />;
       case "settings":   return <Settings />;
       default:           return null;

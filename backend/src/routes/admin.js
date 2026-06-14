@@ -1265,4 +1265,182 @@ module.exports = async function adminRoutes(app) {
     const result = await reviewsSvc.deleteReview(req.params.id)
     return { ok: true, data: result }
   })
+
+  // ── SMS Templates ──────────────────────────────────────────────
+
+  // GET /admin/sms/templates
+  app.get('/sms/templates', async (req) => {
+    const templatesSvc = require('../services/sms-templates')
+    const templates = await templatesSvc.getAllTemplates()
+    return { ok: true, data: templates }
+  })
+
+  // PATCH /admin/sms/templates/:type
+  app.patch('/sms/templates/:type', {
+    schema: {
+      params: { type: 'object', required: ['type'], properties: { type: { type: 'string' } } },
+      body: {
+        type: 'object',
+        required: ['messageTemplate'],
+        properties: {
+          messageTemplate: { type: 'string', minLength: 1, maxLength: 500 },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req) => {
+    const templatesSvc = require('../services/sms-templates')
+    const { type } = req.params
+    const { messageTemplate } = req.body
+    const updated = await templatesSvc.updateTemplate(type, messageTemplate)
+    if (!updated) {
+      throw { code: 'NOT_FOUND', message: `SMS template "${type}" not found.` }
+    }
+    return { ok: true, data: updated }
+  })
+
+  // ── SMS Configuration & Balance ────────────────────────────────────
+
+  // GET /admin/sms/balance?refresh=true
+  app.get('/sms/balance', {
+    schema: {
+      querystring: {
+        type: 'object',
+        properties: {
+          refresh: { type: 'boolean', default: false },
+        },
+      },
+    },
+  }, async (req) => {
+    const smsSvc = require('../services/sms-config')
+    const { refresh } = req.query
+    const balanceData = await smsSvc.getBalance(refresh)
+    return { ok: true, data: balanceData }
+  })
+
+  // GET /admin/sms/settings
+  app.get('/sms/settings', async (req) => {
+    const smsSvc = require('../services/sms-config')
+    const config = await smsSvc.getConfig()
+    if (!config) {
+      return { ok: true, data: null }
+    }
+    // Don't expose API key to frontend
+    return {
+      ok: true,
+      data: {
+        apiUrl: config.api_url,
+        senderId: config.sender_id,
+        balanceApiUrl: config.balance_api_url,
+        currentBalance: config.current_balance,
+        lastBalanceCheck: config.last_balance_check,
+        updatedAt: config.updated_at,
+      },
+    }
+  })
+
+  // PATCH /admin/sms/settings
+  app.patch('/sms/settings', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['apiUrl', 'apiKey', 'senderId', 'balanceApiUrl'],
+        properties: {
+          apiUrl: { type: 'string', format: 'uri' },
+          apiKey: { type: 'string', minLength: 1 },
+          senderId: { type: 'string', minLength: 1, maxLength: 11 },
+          balanceApiUrl: { type: 'string', format: 'uri' },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req) => {
+    const smsSvc = require('../services/sms-config')
+    const { apiUrl, apiKey, senderId, balanceApiUrl } = req.body
+    await smsSvc.saveConfig(apiUrl, apiKey, senderId, balanceApiUrl)
+    return { ok: true, message: 'SMS configuration updated successfully.' }
+  })
+
+  // GET /admin/sms/usage?days=7
+  app.get('/sms/usage', {
+    schema: {
+      querystring: {
+        type: 'object',
+        properties: {
+          days: { type: 'integer', minimum: 1, maximum: 90, default: 7 },
+        },
+      },
+    },
+  }, async (req) => {
+    const smsSvc = require('../services/sms-config')
+    const { days } = req.query
+    const stats = await smsSvc.getUsageStats(days)
+
+    // Aggregate by date and type
+    const summary = stats.reduce((acc, row) => {
+      const dateKey = row.date.toISOString().split('T')[0]
+      if (!acc[dateKey]) acc[dateKey] = { date: dateKey, total: 0, byType: {}, byStatus: {} }
+      acc[dateKey].total += parseInt(row.count, 10)
+      if (!acc[dateKey].byType[row.sms_type]) acc[dateKey].byType[row.sms_type] = 0
+      acc[dateKey].byType[row.sms_type] += parseInt(row.count, 10)
+      if (!acc[dateKey].byStatus[row.status]) acc[dateKey].byStatus[row.status] = 0
+      acc[dateKey].byStatus[row.status] += parseInt(row.count, 10)
+      return acc
+    }, {})
+
+    const usage = Object.values(summary).reverse()
+    const totalSms = usage.reduce((sum, d) => sum + d.total, 0)
+
+    return {
+      ok: true,
+      data: {
+        period: `${days} days`,
+        totalSms,
+        byDate: usage,
+      },
+    }
+  })
+
+  // GET /admin/sms/logs?type=otp|order_confirmation|general&status=sent|failed&page=1&limit=50
+  app.get('/sms/logs', {
+    schema: {
+      querystring: {
+        type: 'object',
+        properties: {
+          type: { type: 'string', enum: ['otp', 'order_confirmation', 'general'] },
+          status: { type: 'string', enum: ['sent', 'failed', 'pending'] },
+          page: { type: 'integer', minimum: 1, default: 1 },
+          limit: { type: 'integer', minimum: 1, maximum: 100, default: 50 },
+        },
+      },
+    },
+  }, async (req) => {
+    const { type, status, page = 1, limit = 50 } = req.query
+    const offset = (page - 1) * limit
+    const params = []
+    const conditions = []
+
+    if (type) { params.push(type); conditions.push(`sms_type = $${params.length}`) }
+    if (status) { params.push(status); conditions.push(`status = $${params.length}`) }
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+
+    const { rows: countRows } = await query(
+      `SELECT COUNT(*) FROM sms_log ${where}`,
+      params
+    )
+    const total = parseInt(countRows[0].count, 10)
+
+    const dataParams = [...params, limit, offset]
+    const { rows } = await query(
+      `SELECT id, phone, sms_type, status, message, created_at, sent_at
+       FROM sms_log
+       ${where}
+       ORDER BY created_at DESC
+       LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+      dataParams
+    )
+
+    return { ok: true, data: { logs: rows, total, page, limit } }
+  })
 }

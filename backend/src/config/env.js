@@ -25,6 +25,10 @@ const env = {
   SMS_API_URL:            process.env.SMS_API_URL    || '',
   SMS_API_KEY:            process.env.SMS_API_KEY    || '',
   SMS_SENDER_ID:          process.env.SMS_SENDER_ID  || 'MidnightPick',
+  SMS_BALANCE_API_URL:    process.env.SMS_BALANCE_API_URL || '',
+  SMS_RATE_LIMIT_OTP_GLOBAL:    parseInt(process.env.SMS_RATE_LIMIT_OTP_GLOBAL || '3', 10),
+  SMS_RATE_LIMIT_OTP_DEVICE:    parseInt(process.env.SMS_RATE_LIMIT_OTP_DEVICE || '5', 10),
+  SMS_RATE_LIMIT_GENERAL:       parseInt(process.env.SMS_RATE_LIMIT_GENERAL || '10', 10),
 }
 
 module.exports = { env }

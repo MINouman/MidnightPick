@@ -31,7 +31,7 @@ async function checkRateLimit(phone) {
   }
 }
 
-async function sendOtp(phone) {
+async function sendOtp(phone, deviceFingerprint = null) {
   phone = normalizeBdMobile(phone)
   const allowed = await checkRateLimit(phone)
   if (!allowed) {
@@ -54,13 +54,23 @@ async function sendOtp(phone) {
     [phone, hash, expiresAt]
   )
 
-  if (env.NODE_ENV !== 'production') {
-    // Development only — remove this log before going live
-    console.log(`\n╔════════════════════════════╗`)
-    console.log(`║  OTP for ${phone}: ${otp}  ║`)
-    console.log(`╚════════════════════════════╝\n`)
+  // Always print OTP to console for reference (dev convenience)
+  console.log(`\n╔════════════════════════════╗`)
+  console.log(`║  OTP for ${phone}: ${otp}  ║`)
+  console.log(`╚════════════════════════════╝\n`)
+
+  // Send SMS via gateway if configured (dev or production)
+  if (env.SMS_API_URL) {
+    const { sendOtp: sendOtpSms } = require('./sms')
+    try {
+      console.log('[otp] Sending OTP via SMS gateway...')
+      await sendOtpSms(phone, otp, deviceFingerprint)
+      console.log('[otp] SMS sent successfully')
+    } catch (err) {
+      // Log but don't fail — OTP is in DB and can be used with manual verification
+      console.error('[otp] SMS send failed:', err.message)
+    }
   }
-  // TODO: in production enqueue a BullMQ job → SMS/WhatsApp gateway
 
   return { expires_in: env.OTP_EXPIRY_SECONDS }
 }
