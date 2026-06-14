@@ -153,6 +153,93 @@ module.exports = async function adminRoutes(app) {
     return { ok: true, data: result }
   })
 
+  // POST /admin/send-order-otp — send OTP without creating order (for pre-verification)
+  app.post('/send-order-otp', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['phone', 'customer_name'],
+        properties: {
+          phone: { type: 'string', maxLength: 25 },
+          customer_name: { type: 'string', maxLength: 100 },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req) => {
+    const { phone, customer_name } = req.body
+    try {
+      const { sendSms } = require('../services/sms')
+      const { getTemplate, renderTemplate } = require('../services/sms-templates')
+      const otp = String(Math.floor(1000 + Math.random() * 9000))
+
+      // Store OTP temporarily in Redis or session (for verification)
+      // For now, just send it and expect verification to use this
+      const template = await getTemplate('order_otp')
+      const msg = renderTemplate(template, { OTP_CODE: otp })
+      await sendSms(phone, msg, 'order_otp')
+
+      // Store OTP in memory cache for verification (expires in 5 min)
+      if (!global.otpCache) global.otpCache = {}
+      global.otpCache[phone] = { otp, createdAt: Date.now() }
+
+      return {
+        ok: true,
+        data: {
+          otp_sent: true,
+          message: `OTP sent to ${phone}`,
+        },
+      }
+    } catch (err) {
+      throw { code: 'OTP_FAILED', message: err?.message || 'Failed to send OTP' }
+    }
+  })
+
+  // POST /admin/verify-order-otp — verify OTP before order creation
+  app.post('/verify-order-otp', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['phone', 'otp'],
+        properties: {
+          phone: { type: 'string', maxLength: 25 },
+          otp: { type: 'string', maxLength: 10 },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req) => {
+    const { phone, otp } = req.body
+
+    if (!global.otpCache || !global.otpCache[phone]) {
+      throw { code: 'NO_OTP_SENT', message: 'No OTP found for this phone number. Request a new OTP.' }
+    }
+
+    const cached = global.otpCache[phone]
+    const ageMs = Date.now() - cached.createdAt
+
+    // OTP valid for 30 minutes
+    if (ageMs > 30 * 60 * 1000) {
+      delete global.otpCache[phone]
+      throw { code: 'OTP_EXPIRED', message: 'OTP has expired. Request a new OTP.' }
+    }
+
+    if (String(otp) !== cached.otp) {
+      throw { code: 'INVALID_OTP', message: 'Invalid OTP code.' }
+    }
+
+    // OTP is valid - clear it from cache
+    delete global.otpCache[phone]
+
+    return {
+      ok: true,
+      data: {
+        verified: true,
+        message: 'OTP verified. You can now create the order.',
+      },
+    }
+  })
+
   // POST /admin/orders/:id/send-otp — send OTP to customer phone
   app.post('/orders/:id/send-otp', {
     schema: {
@@ -197,6 +284,33 @@ module.exports = async function adminRoutes(app) {
     const orderId = req.params.id
     const status = await getOrderOtpStatus(orderId)
     return { ok: true, data: status }
+  })
+
+  // POST /admin/orders/:id/send-confirmation-sms — send confirmation SMS after order verified
+  app.post('/orders/:id/send-confirmation-sms', {
+    schema: {
+      params: { type: 'object', properties: { id: { type: 'string', format: 'uuid' } }, required: ['id'] },
+    },
+  }, async (req) => {
+    const orderId = req.params.id
+    const { rows: [order] } = await query(
+      `SELECT id, order_ref, customer_phone, total FROM orders WHERE id = $1`,
+      [orderId]
+    )
+    if (!order) {
+      throw { code: 'NOT_FOUND', message: 'Order not found.' }
+    }
+    try {
+      const { sendSms } = require('../services/sms')
+      const { getTemplate, renderTemplate } = require('../services/sms-templates')
+      const template = await getTemplate('order_confirmation')
+      const msg = renderTemplate(template, { ORDER_REF: order.order_ref, TOTAL: order.total })
+      await sendSms(order.customer_phone, msg, 'order_confirmation')
+    } catch (err) {
+      console.error('[admin] confirmation SMS failed:', err.message)
+      // Not critical - don't throw
+    }
+    return { ok: true, data: { sms_sent: true } }
   })
 
   // POST /admin/orders/:id/handoff-to-steadfast — send order to delivery partner

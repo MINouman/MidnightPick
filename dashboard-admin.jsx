@@ -176,9 +176,10 @@ function Orders() {
   const [otpSending, setOtpSending] = useState(false);
   const [otpVerifying, setOtpVerifying] = useState(false);
   const [otpStatus, setOtpStatus] = useState(null);
-  const [otpModal, setOtpModal] = useState(null); // { orderId, orderRef } for OTP verification during creation
+  const [otpModal, setOtpModal] = useState(null); // { phone, otp } for OTP verification during creation
   const [otpModalInput, setOtpModalInput] = useState("");
   const [otpModalVerifying, setOtpModalVerifying] = useState(false);
+  const [pendingOrder, setPendingOrder] = useState(null); // Store form data until OTP verified
 
   useEffect(() => { setOrders(ctxOrders || []); }, [ctxOrders]);
 
@@ -279,58 +280,53 @@ function Orders() {
 
   async function submitManualOrder() {
     if (!newOrder.customer || !newOrder.orderItems.length) return;
+    if (!newOrder.phone) {
+      alert('Phone number is required for OTP verification.');
+      return;
+    }
+
     const subtotal = newOrder.orderItems.reduce((s, it) => s + it.unit_price * (parseInt(it.qty) || 1), 0);
     const total    = newOrder.total ? parseFloat(newOrder.total) : subtotal;
     const discount = Math.max(0, Math.round(subtotal - total));
 
     try {
-      // Step 1: Create the order
-      const res = await window.mpApi.fetch('/admin/orders', {
+      setOtpModalVerifying(true);
+
+      // Step 1: Send OTP to customer phone (order not created yet)
+      const otpRes = await window.mpApi.fetch('/admin/send-order-otp', {
         method: 'POST',
         body: JSON.stringify({
-          customer_name:   newOrder.customer,
-          customer_phone:  newOrder.phone || undefined,
-          address:         newOrder.address || undefined,
-          items:           newOrder.orderItems.map(it => ({ id: it.id, name: it.name, qty: parseInt(it.qty) || 1, unit_price: it.unit_price })),
-          payment_type:    newOrder.payment,
-          coupon_code:     newOrder.coupon || undefined,
-          discount_amount: discount,
-          status:          newOrder.status,
-          notes:           newOrder.notes || undefined,
+          phone: newOrder.phone,
+          customer_name: newOrder.customer,
         }),
       });
-      if (!res?.ok || !res.data) {
-        alert(res?.error?.message || 'Failed to create the order.');
+
+      if (!otpRes?.ok) {
+        const errorMsg = otpRes?.error?.message || 'Failed to send OTP.';
+        alert(`Could not send OTP: ${errorMsg}`);
         return;
       }
 
-      const createdOrder = res.data;
+      // Step 2: Store order data and show OTP modal
+      const orderData = {
+        customer_name:   newOrder.customer,
+        customer_phone:  newOrder.phone,
+        address:         newOrder.address || undefined,
+        items:           newOrder.orderItems.map(it => ({ id: it.id, name: it.name, qty: parseInt(it.qty) || 1, unit_price: it.unit_price })),
+        payment_type:    newOrder.payment,
+        coupon_code:     newOrder.coupon || undefined,
+        discount_amount: discount,
+        status:          newOrder.status,
+        notes:           newOrder.notes || undefined,
+      };
 
-      // Step 2: If phone exists, send OTP and show verification modal
-      if (newOrder.phone) {
-        const otpRes = await window.mpApi.fetch(`/admin/orders/${createdOrder.id}/send-otp`, {
-          method: 'POST',
-        });
-        if (otpRes?.ok) {
-          // Show OTP modal for verification
-          setOtpModal({ orderId: createdOrder.id, orderRef: createdOrder.order_ref, phone: newOrder.phone });
-          setOtpModalInput("");
-          // Keep form open until verification completes
-          return;
-        } else {
-          const errorMsg = otpRes?.error?.message || 'Failed to send OTP. Please try manually clicking "Send OTP" from the order panel.';
-          alert(`Order created but ${errorMsg}`);
-          // Continue and close form anyway
-        }
-      }
-
-      // Step 3: If no phone or OTP send failed, just close the form
-      setOrders(prev => [createdOrder, ...prev]);
-      setNewOrderPanel(false);
-      setNewOrder({ customer: "", phone: "", address: "", orderItems: [], total: "", payment: "bKash", coupon: "", notes: "", status: "processing" });
-      setCouponPreview(null);
+      setPendingOrder(orderData);
+      setOtpModal({ phone: newOrder.phone });
+      setOtpModalInput("");
     } catch (e) {
-      alert(e?.message || 'Failed to create the order.');
+      alert(e?.message || 'Failed to send OTP.');
+    } finally {
+      setOtpModalVerifying(false);
     }
   }
 
@@ -339,24 +335,57 @@ function Orders() {
       alert("Please enter the OTP code.");
       return;
     }
+    if (!pendingOrder) {
+      alert("Order data lost. Please try again.");
+      return;
+    }
+
     setOtpModalVerifying(true);
     try {
-      const res = await window.mpApi.fetch(`/admin/orders/${otpModal.orderId}/verify-otp`, {
+      // Step 1: Verify OTP
+      const verifyRes = await window.mpApi.fetch('/admin/verify-order-otp', {
         method: 'POST',
-        body: JSON.stringify({ otp: otpModalInput }),
+        body: JSON.stringify({
+          phone: otpModal.phone,
+          otp: otpModalInput
+        }),
       });
-      if (!res?.ok) {
-        alert(res?.error?.message || 'Failed to verify OTP.');
+      if (!verifyRes?.ok) {
+        alert(verifyRes?.error?.message || 'Invalid OTP.');
         return;
       }
-      // OTP verified successfully
-      alert('Order confirmed!');
-      // Close the modal and form
+
+      // Step 2: OTP verified - NOW create the actual order
+      const createRes = await window.mpApi.fetch('/admin/orders', {
+        method: 'POST',
+        body: JSON.stringify(pendingOrder),
+      });
+
+      if (!createRes?.ok) {
+        alert(createRes?.error?.message || 'Failed to create order after verification.');
+        return;
+      }
+
+      // Step 3: Order created successfully
+      const createdOrder = createRes.data;
+
+      // Send confirmation SMS
+      await window.mpApi.fetch(`/admin/orders/${createdOrder.id}/send-confirmation-sms`, {
+        method: 'POST',
+      }).catch(() => {
+        console.log('Confirmation SMS may have failed');
+      });
+
+      alert('✓ Order confirmed and created successfully!');
+
+      // Close modal and form
       setOtpModal(null);
       setOtpModalInput("");
+      setPendingOrder(null);
       setNewOrderPanel(false);
       setNewOrder({ customer: "", phone: "", address: "", orderItems: [], total: "", payment: "bKash", coupon: "", notes: "", status: "processing" });
       setCouponPreview(null);
+
       // Refresh orders list
       const ordersRes = await window.mpApi.fetch('/admin/orders?limit=20');
       if (ordersRes?.ok) {
@@ -372,6 +401,7 @@ function Orders() {
   async function cancelOtpModal() {
     setOtpModal(null);
     setOtpModalInput("");
+    setPendingOrder(null);
   }
 
   const filtered = orders.filter(o => {
@@ -630,8 +660,6 @@ function Orders() {
           body={
             <div>
               <div style={{ fontSize: 14, marginBottom: 16, color: "var(--text-65)" }}>
-                Order <strong style={{ color: "var(--text)" }}>{otpModal.orderRef}</strong> created.
-                <br />
                 Enter the 4-digit code sent to <strong style={{ color: "var(--text)" }}>{otpModal.phone}</strong>
               </div>
               <input
@@ -639,10 +667,11 @@ function Orders() {
                 className="input"
                 placeholder="0000"
                 value={otpModalInput}
-                onChange={e => setOtpModalInput(e.target.value.slice(0, 4))}
+                onChange={e => setOtpModalInput(e.target.value.replace(/\D/g, '').slice(0, 4))}
                 maxLength="4"
                 style={{ fontSize: 18, letterSpacing: 8, textAlign: "center", fontWeight: 700 }}
                 disabled={otpModalVerifying}
+                autoFocus
               />
             </div>
           }
