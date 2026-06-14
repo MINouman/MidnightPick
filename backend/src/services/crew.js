@@ -98,7 +98,7 @@ async function syncCommissionForDeliveredOrder(client, orderId) {
                     OR (o.coupon_id IS NULL AND c.code = o.coupon_code)
      JOIN crew_profiles cp ON cp.id = c.crew_profile_id
      CROSS JOIN crew_settings cs
-     WHERE o.id = $1 AND (COALESCE(c.source, c.type) = 'crew')`,
+     WHERE o.id = $1 AND (c.type = 'crew'::coupon_type OR c.source = 'crew')`,
     [orderId]
   )
   if (!rows.length) return null

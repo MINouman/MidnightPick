@@ -13,6 +13,18 @@ const LIMITS = {
   general: {
     global: { max: 10, window: 3600 }, // 10 per hour (per phone)
   },
+  order_confirmation: {
+    global: { max: 20, window: 3600 }, // 20 per hour (per phone)
+  },
+  order_shipped: {
+    global: { max: 20, window: 3600 }, // 20 per hour (per phone)
+  },
+  order_delivered: {
+    global: { max: 20, window: 3600 }, // 20 per hour (per phone)
+  },
+  order_delivery_failed: {
+    global: { max: 20, window: 3600 }, // 20 per hour (per phone)
+  },
 }
 
 function getRedisKey(type, identifier, scope) {

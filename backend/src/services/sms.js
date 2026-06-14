@@ -68,4 +68,38 @@ async function sendOtp(phone, otp, deviceFingerprint) {
   return sendSms(phone, msg, 'otp', deviceFingerprint)
 }
 
-module.exports = { sendSms, sendOrderConfirmation, sendOtp }
+async function sendOrderShipped(phone, orderRef) {
+  const { getTemplate, renderTemplate } = require('./sms-templates')
+  const template = await getTemplate('order_shipped')
+  const msg = renderTemplate(template, {
+    ORDER_REF: orderRef,
+  })
+  return sendSms(phone, msg, 'order_shipped')
+}
+
+async function sendOrderDelivered(phone, orderRef) {
+  const { getTemplate, renderTemplate } = require('./sms-templates')
+  const template = await getTemplate('order_delivered')
+  const msg = renderTemplate(template, {
+    ORDER_REF: orderRef,
+  })
+  return sendSms(phone, msg, 'order_delivered')
+}
+
+async function sendOrderDeliveryFailed(phone, orderRef) {
+  const { getTemplate, renderTemplate } = require('./sms-templates')
+  const template = await getTemplate('order_delivery_failed')
+  const msg = renderTemplate(template, {
+    ORDER_REF: orderRef,
+  })
+  return sendSms(phone, msg, 'order_delivery_failed')
+}
+
+module.exports = {
+  sendSms,
+  sendOrderConfirmation,
+  sendOtp,
+  sendOrderShipped,
+  sendOrderDelivered,
+  sendOrderDeliveryFailed,
+}

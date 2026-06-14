@@ -42,9 +42,17 @@ async function sendOrderOtp(orderId, phone) {
       throw { code: 'ORDER_NOT_FOUND', message: 'Order not found.' }
     }
 
-    // Send SMS
-    const msg = `Your Midnight Pick order code is ${otp}. Reply with this code on Messenger/WhatsApp to confirm your order.`
-    await sendSms(phone, msg, 'order_otp')
+    // Send SMS using template
+    try {
+      const { getTemplate, renderTemplate } = require('./sms-templates')
+      const template = await getTemplate('order_otp')
+      const msg = renderTemplate(template, { OTP_CODE: otp })
+      await sendSms(phone, msg, 'order_otp')
+    } catch (smsErr) {
+      console.error('[order-otp] SMS send failed:', smsErr.message || smsErr)
+      // Still store the OTP in DB even if SMS fails, so user can retry
+      throw { code: 'SMS_SEND_FAILED', message: `OTP generated but SMS delivery failed: ${smsErr?.message || 'Unknown error'}` }
+    }
 
     return {
       ok: true,

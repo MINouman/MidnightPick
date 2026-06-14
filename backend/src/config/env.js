@@ -29,6 +29,10 @@ const env = {
   SMS_RATE_LIMIT_OTP_GLOBAL:    parseInt(process.env.SMS_RATE_LIMIT_OTP_GLOBAL || '3', 10),
   SMS_RATE_LIMIT_OTP_DEVICE:    parseInt(process.env.SMS_RATE_LIMIT_OTP_DEVICE || '5', 10),
   SMS_RATE_LIMIT_GENERAL:       parseInt(process.env.SMS_RATE_LIMIT_GENERAL || '10', 10),
+  STEADFAST_API_KEY:            process.env.STEADFAST_API_KEY || '',
+  STEADFAST_SECRET_KEY:         process.env.STEADFAST_SECRET_KEY || '',
+  STEADFAST_WEBHOOK_BEARER_TOKEN: process.env.STEADFAST_WEBHOOK_BEARER_TOKEN || '',
+  STEADFAST_INSECURE:           process.env.STEADFAST_INSECURE === 'true', // For development SSL issues
 }
 
 module.exports = { env }

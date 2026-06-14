@@ -318,7 +318,8 @@ function Orders() {
           // Keep form open until verification completes
           return;
         } else {
-          alert('Order created but failed to send OTP. Order status: Processing');
+          const errorMsg = otpRes?.error?.message || 'Failed to send OTP. Please try manually clicking "Send OTP" from the order panel.';
+          alert(`Order created but ${errorMsg}`);
           // Continue and close form anyway
         }
       }
