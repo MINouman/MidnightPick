@@ -1,13 +1,15 @@
 'use strict'
 
 const { query, withTransaction } = require('../config/db')
-const { sendOrderConfirmation }  = require('../services/sms')
+const { sendOrderConfirmation, sendOrderShipped }  = require('../services/sms')
 const { getRateLimitConfig } = require('../config/rate-limits')
 const { calculatePointsForOrder, awardPoints, reversePoints } = require('../services/points')
 const { syncCommissionForDeliveredOrder, reverseCommissionForOrder, validateCoupon, recordCouponUsage, restoreCouponUsageForOrder } = require('../services/crew')
 const { toEndOfDayDhaka } = require('../services/dates')
 const { normalizeBdMobile } = require('../services/phone')
 const { generateOrderRef } = require('../services/orders')
+const { createOrder, mapSteadfastStatusToOrderStatus } = require('../services/steadfast')
+const { sendOrderOtp, verifyOrderOtp, getOrderOtpStatus } = require('../services/order-otp')
 
 module.exports = async function adminRoutes(app) {
 
@@ -51,7 +53,7 @@ module.exports = async function adminRoutes(app) {
     const { rows } = await query(
       `SELECT o.id, o.order_ref, o.status, o.total, o.subtotal,
               o.discount_amount, o.coupon_code, o.payment_type,
-              o.points_earned, o.created_at,
+              o.points_earned, o.steadfast_consignment_id, o.created_at,
               COALESCE(o.customer_name, u.name)  AS customer_name,
               COALESCE(o.customer_phone, u.phone) AS customer_phone,
               (SELECT json_agg(json_build_object('name', oi.name_snapshot, 'qty', oi.qty, 'unit_price', oi.unit_price))
@@ -149,6 +151,215 @@ module.exports = async function adminRoutes(app) {
     })
 
     return { ok: true, data: result }
+  })
+
+  // POST /admin/orders/:id/send-otp — send OTP to customer phone
+  app.post('/orders/:id/send-otp', {
+    schema: {
+      params: { type: 'object', properties: { id: { type: 'string', format: 'uuid' } }, required: ['id'] },
+    },
+  }, async (req) => {
+    const orderId = req.params.id
+    const { rows: [order] } = await query(
+      `SELECT id, customer_phone FROM orders WHERE id = $1`,
+      [orderId]
+    )
+    if (!order) {
+      throw { code: 'NOT_FOUND', message: 'Order not found.' }
+    }
+    const result = await sendOrderOtp(orderId, order.customer_phone)
+    return { ok: true, data: result }
+  })
+
+  // POST /admin/orders/:id/verify-otp — verify OTP and confirm order
+  app.post('/orders/:id/verify-otp', {
+    schema: {
+      params: { type: 'object', properties: { id: { type: 'string', format: 'uuid' } }, required: ['id'] },
+      body: {
+        type: 'object', required: ['otp'],
+        properties: { otp: { type: 'string', maxLength: 10 } },
+        additionalProperties: false,
+      },
+    },
+  }, async (req) => {
+    const orderId = req.params.id
+    const { otp } = req.body
+    const result = await verifyOrderOtp(orderId, otp)
+    return { ok: true, data: result }
+  })
+
+  // GET /admin/orders/:id/otp-status — check OTP status
+  app.get('/orders/:id/otp-status', {
+    schema: {
+      params: { type: 'object', properties: { id: { type: 'string', format: 'uuid' } }, required: ['id'] },
+    },
+  }, async (req) => {
+    const orderId = req.params.id
+    const status = await getOrderOtpStatus(orderId)
+    return { ok: true, data: status }
+  })
+
+  // POST /admin/orders/:id/handoff-to-steadfast — send order to delivery partner
+  app.post('/orders/:id/handoff-to-steadfast', {
+    schema: {
+      params: { type: 'object', properties: { id: { type: 'string', format: 'uuid' } }, required: ['id'] },
+    },
+  }, async (req) => {
+    const orderId = req.params.id
+
+    const result = await withTransaction(async (client) => {
+      const { rows: orderRows } = await client.query(
+        `SELECT id, order_ref, status, total,
+                customer_name, customer_phone, address_snapshot, notes, user_id
+         FROM orders
+         WHERE id = $1
+         FOR UPDATE`,
+        [orderId]
+      )
+
+      if (!orderRows.length) {
+        throw { code: 'NOT_FOUND', message: 'Order not found.' }
+      }
+
+      const order = orderRows[0]
+
+      // Only handoff orders in packed status
+      if (order.status !== 'packed') {
+        throw {
+          code: 'INVALID_STATUS',
+          message: `Order must be in "packed" status to handoff. Current status: ${order.status}`,
+        }
+      }
+
+      const address = order.address_snapshot
+        ? (typeof order.address_snapshot === 'string' ? JSON.parse(order.address_snapshot) : order.address_snapshot)
+        : {}
+      const addressLine = address.line1 || ''
+
+      if (!order.customer_phone || !addressLine) {
+        throw {
+          code: 'INCOMPLETE_ORDER',
+          message: 'Order missing phone number or delivery address.',
+        }
+      }
+
+      // Call Steadfast API to create shipment
+      let steadfastResponse
+      try {
+        steadfastResponse = await createOrder({
+          invoice: order.order_ref,
+          recipientName: order.customer_name || 'Customer',
+          recipientPhone: order.customer_phone,
+          recipientAddress: addressLine,
+          codAmount: order.total,
+          note: order.notes || undefined,
+        })
+      } catch (err) {
+        // Return error to admin without changing order status
+        console.error('[admin] Steadfast handoff failed:', err)
+        throw {
+          code: 'STEADFAST_HANDOFF_FAILED',
+          message: err.message || 'Failed to handoff order to Steadfast',
+          details: err.details || null,
+        }
+      }
+
+      // Update order with Steadfast consignment ID and change status to shipped
+      const { rows: updated } = await client.query(
+        `UPDATE orders
+         SET steadfast_consignment_id = $1, status = 'shipped', updated_at = NOW()
+         WHERE id = $2
+         RETURNING id, order_ref, status, steadfast_consignment_id`,
+        [steadfastResponse.consignmentId, orderId]
+      )
+
+      // Add tracking event
+      await client.query(
+        `INSERT INTO order_tracking (order_id, step, detail, source)
+         VALUES ($1, 'shipped', $2, 'system')`,
+        [orderId, `Steadfast consignment #${steadfastResponse.consignmentId}`]
+      )
+
+      return updated[0]
+    })
+
+    // Send SMS notification after transaction completes
+    try {
+      const { rows } = await query(
+        `SELECT customer_phone FROM orders WHERE id = $1`,
+        [orderId]
+      )
+      if (rows[0]?.customer_phone) {
+        await sendOrderShipped(rows[0].customer_phone, result.order_ref)
+      }
+    } catch (err) {
+      console.error('[admin] Failed to send shipped SMS:', err.message)
+      // Don't fail the request if SMS fails
+    }
+
+    return { ok: true, data: result }
+  })
+
+  // GET /admin/orders/:id/steadfast-status — refresh order status from Steadfast API
+  app.get('/orders/:id/steadfast-status', {
+    schema: {
+      params: { type: 'object', properties: { id: { type: 'string', format: 'uuid' } }, required: ['id'] },
+    },
+  }, async (req) => {
+    const orderId = req.params.id
+    const { getStatus, mapSteadfastStatusToOrderStatus } = require('../services/steadfast')
+
+    const { rows: orderRows } = await query(
+      `SELECT id, steadfast_consignment_id, order_ref, status FROM orders WHERE id = $1`,
+      [orderId]
+    )
+
+    if (!orderRows.length) {
+      throw { code: 'NOT_FOUND', message: 'Order not found.' }
+    }
+
+    const order = orderRows[0]
+    if (!order.steadfast_consignment_id) {
+      throw { code: 'INVALID_STATUS', message: 'Order not linked to Steadfast.' }
+    }
+
+    // Poll Steadfast API for current status
+    let steadfastStatus
+    try {
+      steadfastStatus = await getStatus(order.steadfast_consignment_id)
+    } catch (err) {
+      throw {
+        code: 'STEADFAST_ERROR',
+        message: `Failed to fetch status from Steadfast: ${err.message}`,
+      }
+    }
+
+    const newOrderStatus = mapSteadfastStatusToOrderStatus(steadfastStatus.status)
+
+    // Update order status if it changed
+    if (newOrderStatus !== order.status) {
+      await query(
+        `UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2`,
+        [newOrderStatus, orderId]
+      )
+
+      // Log tracking event
+      await query(
+        `INSERT INTO order_tracking (order_id, step, detail, source, steadfast_status)
+         VALUES ($1, $2, $3, 'manual', $4)
+         ON CONFLICT (order_id, step) DO UPDATE
+         SET detail = EXCLUDED.detail, source = 'manual', steadfast_status = EXCLUDED.steadfast_status, created_at = NOW()`,
+        [orderId, newOrderStatus, `Steadfast: ${steadfastStatus.status}`, steadfastStatus.status]
+      )
+    }
+
+    return {
+      ok: true,
+      data: {
+        status: newOrderStatus,
+        steadfast_status: steadfastStatus.status,
+      },
+    }
   })
 
   // GET /admin/customers — from persistent customers table (upserted on each order)

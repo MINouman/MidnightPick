@@ -172,6 +172,10 @@ function Orders() {
   const [newOrderPanel, setNewOrderPanel] = useState(false);
   const [newOrder, setNewOrder] = useState({ customer: "", phone: "", address: "", orderItems: [], total: "", payment: "bKash", coupon: "", notes: "", status: "processing" });
   const [couponPreview, setCouponPreview] = useState(null); // { ok, message }
+  const [otpInput, setOtpInput] = useState("");
+  const [otpSending, setOtpSending] = useState(false);
+  const [otpVerifying, setOtpVerifying] = useState(false);
+  const [otpStatus, setOtpStatus] = useState(null);
 
   useEffect(() => { setOrders(ctxOrders || []); }, [ctxOrders]);
 
@@ -208,6 +212,47 @@ function Orders() {
       setPanel(updated);
     } catch (e) {
       alert(e?.message || 'Could not update the order status.');
+    }
+  }
+
+  async function handoffToSteadfast() {
+    if (!panel) return;
+    try {
+      const res = await window.mpApi.fetch(`/admin/orders/${panel.id}/handoff-to-steadfast`, {
+        method: 'POST',
+      });
+      if (!res?.ok) {
+        alert(res?.error?.message || 'Handoff failed. Check order details and try again.');
+        return;
+      }
+      const updated = { ...panel, status: res.data?.status, steadfast_consignment_id: res.data?.steadfast_consignment_id };
+      setOrders(prev => prev.map(o => o.id === panel.id ? updated : o));
+      setPanel(updated);
+      alert('Order handed off to Steadfast successfully!');
+    } catch (e) {
+      alert(e?.message || 'Failed to handoff order.');
+    }
+  }
+
+  async function refreshSteadfastStatus() {
+    if (!panel || !panel.steadfast_consignment_id) {
+      alert('No Steadfast tracking ID for this order.');
+      return;
+    }
+    try {
+      const res = await window.mpApi.fetch(`/admin/orders/${panel.id}/steadfast-status`, {
+        method: 'GET',
+      });
+      if (!res?.ok) {
+        alert(res?.error?.message || 'Failed to refresh status.');
+        return;
+      }
+      const updated = { ...panel, status: res.data?.status };
+      setOrders(prev => prev.map(o => o.id === panel.id ? updated : o));
+      setPanel(updated);
+      alert('Status refreshed!');
+    } catch (e) {
+      alert(e?.message || 'Failed to refresh status.');
     }
   }
 
@@ -273,8 +318,70 @@ function Orders() {
     return true;
   });
 
-  function openPanel(o) {
+  async function openPanel(o) {
     setPanel(o);
+    setOtpInput("");
+    setOtpStatus(null);
+    // Load OTP status if order exists
+    if (o.id) {
+      const res = await window.mpApi.fetch(`/admin/orders/${o.id}/otp-status`).catch(() => null);
+      if (res?.ok && res.data) {
+        setOtpStatus(res.data);
+      }
+    }
+  }
+
+  async function sendOtp() {
+    if (!panel || !panel.id || !panel.customer_phone) {
+      alert("Cannot send OTP: no phone number on this order.");
+      return;
+    }
+    setOtpSending(true);
+    try {
+      const res = await window.mpApi.fetch(`/admin/orders/${panel.id}/send-otp`, {
+        method: 'POST',
+      });
+      if (!res?.ok) {
+        alert(res?.error?.message || 'Failed to send OTP.');
+        return;
+      }
+      setOtpStatus({ has_otp: true, otp_sent_at: new Date().toISOString(), otp_verified: false, otp_attempts: 0 });
+      setOtpInput("");
+      alert(`OTP sent to ${panel.customer_phone}`);
+    } catch (e) {
+      alert(e?.message || 'Failed to send OTP.');
+    } finally {
+      setOtpSending(false);
+    }
+  }
+
+  async function verifyOtp() {
+    if (!panel || !panel.id) return;
+    if (!otpInput || otpInput.trim().length === 0) {
+      alert("Please enter the OTP.");
+      return;
+    }
+    setOtpVerifying(true);
+    try {
+      const res = await window.mpApi.fetch(`/admin/orders/${panel.id}/verify-otp`, {
+        method: 'POST',
+        body: JSON.stringify({ otp: otpInput }),
+      });
+      if (!res?.ok) {
+        alert(res?.error?.message || 'Failed to verify OTP.');
+        return;
+      }
+      const verified = res.data;
+      setPanel(f => ({ ...f, status: verified.order.status }));
+      setOrders(prev => prev.map(o => o.id === panel.id ? { ...o, status: verified.order.status } : o));
+      setOtpStatus({ has_otp: true, otp_verified_at: new Date().toISOString(), otp_verified: true });
+      setOtpInput("");
+      alert("Order confirmed!");
+    } catch (e) {
+      alert(e?.message || 'Failed to verify OTP.');
+    } finally {
+      setOtpVerifying(false);
+    }
   }
 
   const statusOpts = [
@@ -361,7 +468,35 @@ function Orders() {
                 {panel.coupon_code && <div className="row-between mb8 text-sm"><span className="text-muted">Coupon</span><span className="mono" style={{ color: "var(--blue)" }}>{panel.coupon_code}</span></div>}
                 <div className="row-between mb8 text-sm"><span className="text-muted">Date</span><span>{fmtDate(panel.created_at)}</span></div>
                 <div className="row-between mb16 text-sm"><span className="text-muted">Status</span><StatusBadge status={panel.status} /></div>
+                {panel.steadfast_consignment_id && <div className="row-between mb8 text-sm"><span className="text-muted">Steadfast ID</span><span className="mono text-xs" style={{ color: "var(--orange)" }}>{panel.steadfast_consignment_id}</span></div>}
                 <div className="divider" />
+
+                {panel.customer_phone && !otpStatus?.otp_verified && (
+                  <div style={{ marginTop: 12, marginBottom: 12 }}>
+                    <div className="eyebrow mb10">Phone Verification</div>
+                    {otpStatus?.has_otp ? (
+                      <>
+                        <div style={{ fontSize: 13, color: "var(--text-65)", marginBottom: 12 }}>
+                          OTP sent to <strong>{panel.customer_phone}</strong> at {otpStatus.otp_sent_at ? new Date(otpStatus.otp_sent_at).toLocaleTimeString() : 'unknown time'}.
+                        </div>
+                        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+                          <input type="text" className="input" placeholder="Enter 4-digit OTP" value={otpInput} onChange={e => setOtpInput(e.target.value)} maxLength="4" style={{ flex: 1 }} />
+                          <button className="btn btn-primary btn-sm" onClick={verifyOtp} disabled={otpVerifying || !otpInput}>
+                            {otpVerifying ? "Verifying..." : "Verify"}
+                          </button>
+                        </div>
+                        <button className="btn btn-ghost btn-sm btn-full" onClick={sendOtp} disabled={otpSending} style={{ fontSize: 11 }}>
+                          {otpSending ? "Sending..." : "Resend OTP"}
+                        </button>
+                      </>
+                    ) : (
+                      <button className="btn btn-primary btn-sm btn-full" onClick={sendOtp} disabled={otpSending}>
+                        <i className="fa fa-sms" style={{ marginRight: 6, fontSize: 11 }} />
+                        {otpSending ? "Sending OTP..." : "Send OTP to Customer"}
+                      </button>
+                    )}
+                  </div>
+                )}
 
                 {panel.status !== "cancelled" && panel.status !== "delivered" && (
                   <div style={{ marginTop: 12, marginBottom: 12 }}>
@@ -374,8 +509,8 @@ function Orders() {
                       )}
                       {panel.status === "packed" && (
                         <>
-                          <button className="btn btn-primary btn-sm" onClick={() => updateStatus("shipped")}>
-                            <i className="fa fa-truck" style={{ fontSize: 11 }} /> Hand to Delivery Service
+                          <button className="btn btn-primary btn-sm" onClick={() => handoffToSteadfast()}>
+                            <i className="fa fa-truck" style={{ fontSize: 11 }} /> Handoff to Steadfast
                           </button>
                           <button className="btn btn-ghost btn-sm" onClick={() => updateStatus("delivered")}>
                             <i className="fa fa-person-walking" style={{ fontSize: 11 }} /> Personally Delivered
@@ -385,8 +520,13 @@ function Orders() {
                       {panel.status === "shipped" && (
                         <>
                           <div style={{ fontSize: 12, color: "var(--blue)", padding: "8px 12px", background: "rgba(100,181,246,0.1)", border: "1px solid rgba(100,181,246,0.2)", borderRadius: 8 }}>
-                            <i className="fa fa-info-circle" style={{ marginRight: 6 }} />Tracking status will auto-update via the delivery service API.
+                            <i className="fa fa-info-circle" style={{ marginRight: 6 }} />Tracking status will auto-update via Steadfast webhooks.
                           </div>
+                          {panel.steadfast_consignment_id && (
+                            <button className="btn btn-ghost btn-sm" onClick={() => refreshSteadfastStatus()}>
+                              <i className="fa fa-refresh" style={{ fontSize: 11 }} /> Refresh Steadfast Status
+                            </button>
+                          )}
                           <button className="btn btn-primary btn-sm" onClick={() => updateStatus("delivered")}>
                             <i className="fa fa-check-circle" style={{ fontSize: 11 }} /> Mark as Delivered
                           </button>
