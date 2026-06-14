@@ -599,7 +599,7 @@ function Orders() {
                     <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
                       {newOrder.orderItems.map((it, idx) => (
                         <div key={it.id} style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--bg-soft)", borderRadius: 6, padding: "6px 10px" }}>
-                          <span style={{ flex: 1, fontSize: 13 }}>{it.name}</span>
+                          <span style={{ flex: 1, fontSize: 13, color: "var(--text)", fontWeight: 500 }}>{it.name}</span>
                           <span style={{ color: "var(--text-65)", fontSize: 12, whiteSpace: "nowrap" }}>৳{it.unit_price}</span>
                           <input type="number" min="1" value={it.qty} onChange={e => updateOrderItemQty(idx, e.target.value)} style={{ width: 52, textAlign: "center" }} className="input" />
                           <button className="icon-btn" onClick={() => removeOrderItem(idx)}><i className="fa fa-times" /></button>
