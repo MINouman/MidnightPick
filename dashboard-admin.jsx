@@ -324,7 +324,7 @@ function Orders() {
     setOtpStatus(null);
     // Load OTP status if order exists
     if (o.id) {
-      const res = await window.mpApi.fetch(`/admin/orders/${o.id}/otp-status`).catch(() => null);
+      const res = await window.mpApi.fetch(`/api/v1/admin/orders/${o.id}/otp-status`).catch(() => null);
       if (res?.ok && res.data) {
         setOtpStatus(res.data);
       }
@@ -338,7 +338,7 @@ function Orders() {
     }
     setOtpSending(true);
     try {
-      const res = await window.mpApi.fetch(`/admin/orders/${panel.id}/send-otp`, {
+      const res = await window.mpApi.fetch(`/api/v1/admin/orders/${panel.id}/send-otp`, {
         method: 'POST',
       });
       if (!res?.ok) {
@@ -363,7 +363,7 @@ function Orders() {
     }
     setOtpVerifying(true);
     try {
-      const res = await window.mpApi.fetch(`/admin/orders/${panel.id}/verify-otp`, {
+      const res = await window.mpApi.fetch(`/api/v1/admin/orders/${panel.id}/verify-otp`, {
         method: 'POST',
         body: JSON.stringify({ otp: otpInput }),
       });
