@@ -50,9 +50,10 @@ export default function AdminFeedback() {
         ...(filters.to && { to: filters.to }),
       })
 
-      const response = await fetch(`/api/v1/admin/feedback?${params}`, {
-        credentials: 'include',
-      })
+      const response = await (window.mpApi?.fetch
+        ? window.mpApi.fetch(`/admin/feedback?${params}`)
+        : fetch(`/api/v1/admin/feedback?${params}`, { credentials: 'include' })
+      )
 
       if (!response.ok) throw new Error('Failed to load feedbacks')
 

@@ -23,7 +23,10 @@ export default function Reviews() {
         limit: 10,
       })
 
-      const response = await fetch(`/api/v1/reviews?${params}`)
+      const response = await (window.mpApi?.fetch
+        ? window.mpApi.fetch(`/reviews?${params}`)
+        : fetch(`/api/v1/reviews?${params}`)
+      )
 
       if (!response.ok) throw new Error('Failed to load reviews')
 

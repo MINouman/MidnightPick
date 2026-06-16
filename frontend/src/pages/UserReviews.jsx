@@ -14,9 +14,10 @@ export default function UserReviews() {
   const loadUserReviews = async () => {
     try {
       setLoading(true)
-      const response = await fetch('/api/v1/reviews/user', {
-        credentials: 'include',
-      })
+      const response = await (window.mpApi?.fetch
+        ? window.mpApi.fetch('/reviews')
+        : fetch('/api/v1/reviews', { credentials: 'include' })
+      )
 
       if (!response.ok) {
         if (response.status === 401) {

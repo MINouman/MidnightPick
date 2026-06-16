@@ -27,9 +27,10 @@ export default function AdminReviews() {
         ...(filters.rating !== 'all' && { rating: filters.rating }),
       })
 
-      const response = await fetch(`/api/v1/admin/reviews?${params}`, {
-        credentials: 'include',
-      })
+      const response = await (window.mpApi?.fetch
+        ? window.mpApi.fetch(`/admin/reviews?${params}`)
+        : fetch(`/api/v1/admin/reviews?${params}`, { credentials: 'include' })
+      )
 
       if (!response.ok) throw new Error('Failed to load reviews')
 
@@ -45,9 +46,10 @@ export default function AdminReviews() {
 
   const loadStats = async () => {
     try {
-      const response = await fetch('/api/v1/admin/reviews', {
-        credentials: 'include',
-      })
+      const response = await (window.mpApi?.fetch
+        ? window.mpApi.fetch('/admin/reviews')
+        : fetch('/api/v1/admin/reviews', { credentials: 'include' })
+      )
 
       if (!response.ok) throw new Error('Failed to load stats')
 
@@ -60,12 +62,18 @@ export default function AdminReviews() {
 
   const handleStatusChange = async (reviewId, newStatus) => {
     try {
-      const response = await fetch(`/api/v1/admin/reviews/${reviewId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ status: newStatus }),
-      })
+      const response = await (window.mpApi?.fetch
+        ? window.mpApi.fetch(`/admin/reviews/${reviewId}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ status: newStatus }),
+          })
+        : fetch(`/api/v1/admin/reviews/${reviewId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ status: newStatus }),
+          })
+      )
 
       if (!response.ok) throw new Error('Failed to update review')
 
@@ -82,10 +90,10 @@ export default function AdminReviews() {
     if (!window.confirm('Delete this review permanently?')) return
 
     try {
-      const response = await fetch(`/api/v1/admin/reviews/${reviewId}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      })
+      const response = await (window.mpApi?.fetch
+        ? window.mpApi.fetch(`/admin/reviews/${reviewId}`, { method: 'DELETE' })
+        : fetch(`/api/v1/admin/reviews/${reviewId}`, { method: 'DELETE', credentials: 'include' })
+      )
 
       if (!response.ok) throw new Error('Failed to delete review')
 

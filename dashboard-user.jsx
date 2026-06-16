@@ -998,7 +998,7 @@ function ReviewsTab() {
   useEffect(() => {
     async function loadReviews() {
       try {
-        const res = await mpApi.fetch("/reviews");
+        const res = await window.mpApi.fetch("/reviews");
         if (res?.data) {
           const allReviews = res.data.reviews || [];
           setReviews(allReviews);
