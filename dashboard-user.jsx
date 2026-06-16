@@ -990,6 +990,98 @@ function PointsTab() {
 const CREW_METHODS = ["Friends & family", "Facebook", "Instagram", "TikTok", "WhatsApp groups", "Campus / office", "Other"];
 const CREW_COUPON_BLANK = { code: "", discount_type: "pct", discount_value: "", max_uses: "", expires_at: "", internal_note: "" };
 
+function ReviewsTab() {
+  const [reviews, setReviews] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState(null);
+
+  useEffect(() => {
+    async function loadReviews() {
+      try {
+        const res = await mpApi.fetch("/reviews");
+        if (res?.data) {
+          const allReviews = res.data.reviews || [];
+          setReviews(allReviews);
+          if (allReviews.length > 0) {
+            const avgRating = allReviews.reduce((sum, r) => sum + r.rating, 0) / allReviews.length;
+            setStats({ count: allReviews.length, avg_rating: avgRating });
+          }
+        }
+      } catch (e) {
+        console.error("Failed to load reviews:", e);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadReviews();
+  }, []);
+
+  if (loading) return <div style={{ padding: "20px", textAlign: "center" }}>Loading your reviews...</div>;
+
+  return (
+    <div className="dash-section">
+      <h2>My Reviews</h2>
+
+      {stats && (
+        <div style={{ display: "flex", gap: "20px", marginBottom: "20px", flexWrap: "wrap" }}>
+          <div style={{ background: "rgba(255,255,255,0.05)", padding: "15px", borderRadius: "8px", flex: 1, minWidth: "120px" }}>
+            <div style={{ fontSize: "24px", fontWeight: "bold", color: "#f39c12" }}>{stats.count}</div>
+            <div style={{ fontSize: "12px", color: "#999", marginTop: "5px" }}>Reviews Written</div>
+          </div>
+          <div style={{ background: "rgba(255,255,255,0.05)", padding: "15px", borderRadius: "8px", flex: 1, minWidth: "120px" }}>
+            <div style={{ fontSize: "24px", fontWeight: "bold", color: "#f39c12" }}>{stats.avg_rating.toFixed(1)}</div>
+            <div style={{ fontSize: "12px", color: "#999", marginTop: "5px" }}>Average Rating</div>
+          </div>
+        </div>
+      )}
+
+      {reviews.length > 0 ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+          {reviews.map((review) => (
+            <div
+              key={review.id}
+              style={{
+                background: "rgba(255,255,255,0.05)",
+                padding: "15px",
+                borderRadius: "8px",
+                borderLeft: "3px solid #f39c12",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: "10px" }}>
+                <div>
+                  <div style={{ fontWeight: "600", marginBottom: "5px", textTransform: "capitalize" }}>{review.product_slug}</div>
+                  <div style={{ fontSize: "14px", color: "#f39c12" }}>{"⭐".repeat(review.rating)}</div>
+                </div>
+                <div style={{ fontSize: "11px", background: review.status === "visible" ? "#27ae60" : "#e74c3c", color: "white", padding: "4px 8px", borderRadius: "4px" }}>
+                  {review.status === "visible" ? "✓ Visible" : "Hidden"}
+                </div>
+              </div>
+              {review.highlight_tags && review.highlight_tags.length > 0 && (
+                <div style={{ display: "flex", gap: "5px", flexWrap: "wrap", marginBottom: "10px" }}>
+                  {review.highlight_tags.map((tag) => (
+                    <span key={tag} style={{ fontSize: "11px", background: "rgba(243,156,18,0.2)", color: "#f39c12", padding: "2px 6px", borderRadius: "10px" }}>
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {review.comment && <p style={{ margin: "10px 0 0 0", fontSize: "14px", color: "#ddd", lineHeight: "1.4" }}>{review.comment}</p>}
+              <div style={{ marginTop: "10px", fontSize: "12px", color: "#999" }}>
+                {new Date(review.created_at).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" })}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div style={{ textAlign: "center", padding: "40px 20px", color: "#999" }}>
+          <p>No reviews yet</p>
+          <p style={{ fontSize: "12px", marginTop: "10px" }}>Start reviewing products you've purchased!</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CrewTab() {
   const { user, crew, reload } = useContext(DashCtx);
   const state = crewState(crew, user);
@@ -1786,7 +1878,8 @@ function BottomNav({ tab, setTab, isCrew }) {
     { id: "home",         icon: "fa-home",          label: "Home" },
     { id: "orders",       icon: "fa-box",            label: "Orders" },
     { id: "subscription", icon: "fa-calendar-check", label: "Plan" },
-    { id: "points",       icon: "fa-star",           label: "Points" },
+    { id: "reviews",      icon: "fa-star",           label: "Reviews" },
+    { id: "points",       icon: "fa-heart",          label: "Points" },
     ...(isCrew ? [{ id: "crew", icon: "fa-mug-hot", label: "Crew" }] : []),
     { id: "account",      icon: "fa-user",           label: "Account" },
   ];
@@ -1850,6 +1943,7 @@ function UserDashboard() {
       case "home":         return <HomeTab setTab={setTab} />;
       case "orders":       return <OrdersTab />;
       case "subscription": return <SubscriptionTab />;
+      case "reviews":      return <ReviewsTab />;
       case "points":       return <PointsTab />;
       case "crew":         return <CrewTab />;
       case "account":      return <AccountTab setTab={setTab} />;
