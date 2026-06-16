@@ -14,6 +14,12 @@ module.exports = async function memberReviewRoutes(app) {
     return { ok: true, data: result }
   })
 
+  // GET /reviews — get all reviews for the authenticated user
+  app.get('/', async (req) => {
+    const result = await reviewsSvc.getUserReviews(req.user.sub)
+    return { ok: true, data: result }
+  })
+
   // POST /reviews/submit — verified-purchase review, live immediately
   app.post('/submit', {
     config: { rateLimit: { max: 5, timeWindow: '10 minutes' } },

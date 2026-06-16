@@ -135,6 +135,17 @@ async function dismissPrompt(userId, source) {
   return { snoozed_days: 7 }
 }
 
+async function getUserReviews(userId) {
+  const { rows } = await query(
+    `SELECT id, product_slug, rating, highlight_tags, comment, is_verified, status, created_at
+     FROM   reviews
+     WHERE  user_id = $1
+     ORDER  BY created_at DESC`,
+    [userId]
+  )
+  return { reviews: rows }
+}
+
 // ── Legacy guest submission (kept for backwards compatibility) ──────────────
 
 async function submitReview({ product_slug = 'midnight-blend', reviewer_name, reviewer_phone, rating, comment }) {
@@ -214,7 +225,7 @@ async function deleteReview(id) {
 
 module.exports = {
   listReviews, submitReview,
-  getEligibility, submitMemberReview, dismissPrompt,
+  getEligibility, submitMemberReview, dismissPrompt, getUserReviews,
   listAllReviews, reviewAdminStats, setReviewStatus, deleteReview,
   HIGHLIGHT_TAGS,
 }
