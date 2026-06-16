@@ -1,5 +1,5 @@
 // ── Lazy Image Loader with Skeleton ────────────────────────────
-function LazyImage({ src, alt = "", className = "", style = {}, width, height, onLoad }) {
+function LazyImage({ src, alt = "", className = "", style = {}, width, height, onLoad, srcset, webpSrcset }) {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
   const imgRef = useRef(null);
@@ -15,6 +15,7 @@ function LazyImage({ src, alt = "", className = "", style = {}, width, height, o
             setLoaded(true);
             if (imgRef.current) {
               imgRef.current.src = src;
+              if (srcset) imgRef.current.srcset = srcset;
             }
             if (onLoad) onLoad();
           };
@@ -31,22 +32,46 @@ function LazyImage({ src, alt = "", className = "", style = {}, width, height, o
 
     observer.observe(imgRef.current);
     return () => observer.disconnect();
-  }, [src, onLoad]);
+  }, [src, srcset, onLoad]);
+
+  const isWebP = src?.endsWith('.webp') || webpSrcset;
 
   return (
     <>
-      <img
-        ref={imgRef}
-        alt={alt}
-        className={className}
-        style={{
-          ...style,
-          opacity: loaded ? 1 : 0.8,
-          transition: 'opacity 0.3s ease',
-        }}
-        width={width}
-        height={height}
-      />
+      {isWebP && webpSrcset ? (
+        <picture>
+          <source srcSet={webpSrcset} type="image/webp" />
+          <img
+            ref={imgRef}
+            alt={alt}
+            className={className}
+            src={src}
+            srcSet={srcset}
+            style={{
+              ...style,
+              opacity: loaded ? 1 : 0.8,
+              transition: 'opacity 0.3s ease',
+            }}
+            width={width}
+            height={height}
+          />
+        </picture>
+      ) : (
+        <img
+          ref={imgRef}
+          alt={alt}
+          className={className}
+          src={src}
+          srcSet={srcset}
+          style={{
+            ...style,
+            opacity: loaded ? 1 : 0.8,
+            transition: 'opacity 0.3s ease',
+          }}
+          width={width}
+          height={height}
+        />
+      )}
       {!loaded && !error && (
         <div
           style={{

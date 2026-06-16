@@ -266,7 +266,12 @@ function Story() {
           </div>
         </div>
         <div className="story-img">
-          <LazyImage src="assets/serene-morning-coffee-plantation.jpg" alt="Serene morning at a coffee plantation" style={{ width: '100%', height: '100%' }} />
+          <LazyImage
+            src="assets/serene-morning-lg.webp"
+            alt="Serene morning at a coffee plantation"
+            style={{ width: '100%', height: '100%' }}
+            webpSrcset="assets/serene-morning-sm.webp 320w, assets/serene-morning-md.webp 768w, assets/serene-morning-lg.webp 1920w"
+          />
           <div className="story-tag"><span className="pulse" /> Now shipping nationwide</div>
         </div>
       </div>

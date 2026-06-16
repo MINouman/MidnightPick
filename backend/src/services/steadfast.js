@@ -222,9 +222,104 @@ function mapSteadfastStatusToOrderStatus(steadfastStatus) {
   return STATUS_MAP[steadfastStatus] || 'shipped'
 }
 
+// ── Get detailed tracking info from Steadfast ───────────────────────────
+
+async function getTracking(trackingCode) {
+  if (!trackingCode) {
+    throw {
+      code: 'INVALID_INPUT',
+      message: 'trackingCode is required',
+    }
+  }
+
+  const response = await makeRequest('GET', `/tracking/${trackingCode}`)
+
+  // Response from Steadfast tracking endpoint
+  if (!response.tracking) {
+    throw {
+      code: 'STEADFAST_INVALID_RESPONSE',
+      message: 'Steadfast tracking data not found',
+      details: response,
+    }
+  }
+
+  const tracking = response.tracking
+
+  return {
+    trackingCode: tracking.tracking_code,
+    status: tracking.status,
+    location: tracking.current_location || null,
+    latitude: tracking.latitude || null,
+    longitude: tracking.longitude || null,
+    estimated_delivery_at: tracking.estimated_delivery_at || null,
+    delivered_at: tracking.delivered_at || null,
+    attempts: tracking.delivery_attempts || 0,
+    notes: tracking.notes || null,
+    raw: tracking,
+  }
+}
+
+// ── Batch tracking for multiple orders ────────────────────────────────
+
+async function getMultipleTracking(trackingCodes) {
+  if (!Array.isArray(trackingCodes) || trackingCodes.length === 0) {
+    throw {
+      code: 'INVALID_INPUT',
+      message: 'trackingCodes must be non-empty array',
+    }
+  }
+
+  // For performance, batch requests in groups of 10
+  const batchSize = 10
+  const results = []
+
+  for (let i = 0; i < trackingCodes.length; i += batchSize) {
+    const batch = trackingCodes.slice(i, i + batchSize)
+    const batchResults = await Promise.allSettled(
+      batch.map(code => getTracking(code))
+    )
+
+    for (const result of batchResults) {
+      if (result.status === 'fulfilled') {
+        results.push(result.value)
+      } else {
+        results.push({
+          error: result.reason.message,
+          trackingCode: batch[results.length],
+        })
+      }
+    }
+  }
+
+  return results
+}
+
+// ── Health check / Connectivity test ─────────────────────────────────
+
+async function healthCheck() {
+  try {
+    // Simple endpoint to verify API connectivity
+    const response = await makeRequest('GET', '/status')
+    return {
+      status: 'ok',
+      api_version: response.version || 'unknown',
+      timestamp: new Date(),
+    }
+  } catch (err) {
+    return {
+      status: 'error',
+      message: err.message,
+      timestamp: new Date(),
+    }
+  }
+}
+
 module.exports = {
   createOrder,
   getStatus,
+  getTracking,
+  getMultipleTracking,
+  healthCheck,
   validateRecipientPhone,
   mapSteadfastStatusToOrderStatus,
   STATUS_MAP,

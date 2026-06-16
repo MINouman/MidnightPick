@@ -3,10 +3,10 @@
 const { query, withTransaction } = require('../config/db')
 const { validateCoupon, recordCouponUsage, restoreCouponUsageForOrder, reverseCommissionForOrder } = require('./crew')
 const { normalizeBdMobile } = require('./phone')
+const { calculatePointsForOrder, awardPoints, reversePoints } = require('./points')
 
 const crypto = require('crypto')
-
-const DELIVERY_FEE = 0  // free delivery; update when zone-based fees are added
+const { calculateDeliveryFee } = require('./delivery')
 
 // ── Internal helpers ────────────────────────────────────────────────────────
 
@@ -120,7 +120,31 @@ async function placeOrder(userId, body) {
       coupon         = c.coupon
     }
 
-    const total = subtotal - discountAmount + DELIVERY_FEE
+    // Calculate delivery fee based on district
+    const district = addressSnapshot.district || 'Dhaka'
+    let deliveryFee = 0
+    let deliveryZoneId = null
+    try {
+      const feeInfo = await calculateDeliveryFee(district)
+      deliveryFee = feeInfo.total_fee
+      // Get zone ID for the district (simplified - using first match)
+      const zoneQuery = await client.query(
+        `SELECT z.id FROM delivery_zones z
+         JOIN delivery_districts d ON d.zone_id = z.id
+         WHERE LOWER(d.district_name) = LOWER($1)
+         LIMIT 1`,
+        [district]
+      )
+      if (zoneQuery.rows.length) {
+        deliveryZoneId = zoneQuery.rows[0].id
+      }
+    } catch (err) {
+      // If zone lookup fails, default to base fee (won't block order)
+      console.warn('[orders] Zone lookup failed for district:', district, err.message)
+      deliveryFee = 0
+    }
+
+    const total = subtotal - discountAmount + deliveryFee
 
     // 5. Generate order reference
     const orderRef = await generateOrderRef(client)
@@ -129,13 +153,16 @@ async function placeOrder(userId, body) {
     const { rows: orderRows } = await client.query(
       `INSERT INTO orders
          (order_ref, user_id, address_snapshot, payment_type, payment_number,
-          coupon_code, discount_amount, subtotal, delivery_fee, total, notes)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          coupon_code, discount_amount, subtotal, delivery_fee_paid, total, notes,
+          delivery_zone_id, estimated_delivery_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        RETURNING id, order_ref, status, created_at`,
       [orderRef, userId, JSON.stringify(addressSnapshot),
        payment_type, payment_number,
        coupon ? coupon.code : null, discountAmount,
-       subtotal, DELIVERY_FEE, total, notes ?? null]
+       subtotal, deliveryFee, total, notes ?? null,
+       deliveryZoneId,
+       new Date(Date.now() + 2 * 24 * 60 * 60 * 1000)] // Default 2-day delivery estimate
     )
     const order = orderRows[0]
 
@@ -167,7 +194,20 @@ async function placeOrder(userId, body) {
       })
     }
 
-    // 10. First tracking event: confirmed
+    // 10. Award points for order
+    const pointsEarned = calculatePointsForOrder(total)
+    if (pointsEarned > 0) {
+      await awardPoints(client, userId, pointsEarned,
+        `Earned on order ${orderRef}`, order.id)
+
+      // Update order record with points earned
+      await client.query(
+        `UPDATE orders SET points_earned = $1 WHERE id = $2`,
+        [pointsEarned, order.id]
+      )
+    }
+
+    // 11. First tracking event: confirmed
     await client.query(
       `INSERT INTO order_tracking (order_id, step, detail)
        VALUES ($1, 'confirmed', 'Order received and confirmed.')`,
@@ -180,9 +220,9 @@ async function placeOrder(userId, body) {
       status:          order.status,
       subtotal,
       discount_amount: discountAmount,
-      delivery_fee:    DELIVERY_FEE,
+      delivery_fee:    deliveryFee,
       total,
-      points_earned:   0,
+      points_earned:   pointsEarned,
       created_at:      order.created_at,
     }
   })
@@ -310,6 +350,12 @@ async function cancelOrder(userId, orderId) {
     if (order.coupon_code) {
       await restoreCouponUsageForOrder(client, order.id, order.coupon_code)
       await reverseCommissionForOrder(client, order.id)
+    }
+
+    // Reverse points if user earned any
+    if (order.points_earned > 0) {
+      await reversePoints(client, userId, order.points_earned,
+        `Reversed: order ${order.order_ref} cancelled`, order.id)
     }
 
     return { order_ref: order.order_ref, status: 'cancelled' }

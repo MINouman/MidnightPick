@@ -192,6 +192,8 @@ async function build() {
   await app.register(require('./routes/orders-guest'), { prefix: '/api/v1/orders' })
   await app.register(require('./routes/reviews'),      { prefix: '/api/v1/reviews' })
   await app.register(require('./routes/feedback'),     { prefix: '/api/v1/feedback' })
+  await app.register(require('./routes/delivery'),     { prefix: '/api/v1/delivery' })
+  await app.register(require('./routes/tracking'),     { prefix: '/api/v1/tracking' })
   await app.register(require('./routes/policies'),     { prefix: '/api/v1' })
   await app.register(require('./routes/webhooks'),     { prefix: '/webhooks' })
 
@@ -202,8 +204,18 @@ async function build() {
     await api.register(require('./routes/orders'),        { prefix: '/orders' })
     await api.register(require('./routes/reviews-user'),  { prefix: '/reviews' })
     await api.register(require('./routes/subscriptions'), { prefix: '/subscriptions' })
+    await api.register(require('./routes/points'),        { prefix: '/me' })
     await api.register(require('./routes/admin'),         { prefix: '/admin' })
+    await api.register(require('./routes/admin-zones'),   { prefix: '/admin' })
+    await api.register(require('./routes/admin-rewards'),  { prefix: '/admin' })
   }, { prefix: '/api/v1' })
+
+  // ── Scheduled Jobs ───────────────────────────────────────────────────────
+
+  if (env.NODE_ENV === 'production') {
+    const { initializeScheduler } = require('./config/scheduler')
+    initializeScheduler()
+  }
 
   // Health check (used by load balancer)
   app.get('/health', { logLevel: 'silent' }, async () => ({

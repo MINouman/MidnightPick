@@ -218,9 +218,18 @@ module.exports = async function subscriptionRoutes(app) {
     const userId = req.user.sub
     const { rows } = await query(
       `UPDATE subscriptions
-       SET status      = 'active',
+       SET status = 'active',
            pause_until = NULL,
-           updated_at  = NOW()
+           next_delivery_date = CASE
+             WHEN pause_until <= CURRENT_DATE
+             THEN CASE
+               WHEN DATE_TRUNC('month', CURRENT_DATE)::date + (billing_day || ' days')::interval > CURRENT_DATE
+               THEN DATE_TRUNC('month', CURRENT_DATE)::date + (billing_day || ' days')::interval
+               ELSE DATE_TRUNC('month', CURRENT_DATE)::date + INTERVAL '1 month' + (billing_day || ' days')::interval
+             END
+             ELSE pause_until
+           END,
+           updated_at = NOW()
        WHERE user_id = $1 AND status = 'paused'
        RETURNING *`,
       [userId]
