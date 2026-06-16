@@ -98,11 +98,16 @@ async function build() {
       // Verify the token
       req.user = app.jwt.verify(token);
 
-      // Check if token is blacklisted
+      // Check if token is blacklisted (critical security check)
+      // If Redis is unavailable, this will return true (fail secure)
       if (await isBlacklisted(token)) {
         return reply.code(401).send({ ok: false, error: { code: 'UNAUTHORIZED', message: 'Token has been revoked.' } })
       }
     } catch (err) {
+      // Log authentication failures for monitoring
+      if (err.name !== 'JsonWebTokenError') {
+        app.log.warn({ err }, 'Authentication middleware error')
+      }
       return reply.code(401).send({ ok: false, error: { code: 'UNAUTHORIZED', message: 'Authentication required.' } })
     }
   })

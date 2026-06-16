@@ -4,6 +4,11 @@ const crypto  = require('crypto')
 const { query }  = require('../config/db')
 const { redis }  = require('../config/redis')
 
+// Simple logger for critical errors
+const logCritical = (message, err) => {
+  console.error(`[CRITICAL-AUTH] ${message}:`, err?.message || err)
+}
+
 const REFRESH_TTL_SEC = 30 * 24 * 3600  // 30 days
 
 function generateRefreshToken() {
@@ -66,19 +71,33 @@ async function revokeTokens(fastify, rawAccessToken, rawRefreshToken) {
       if (decoded?.exp) {
         const ttl = decoded.exp - Math.floor(Date.now() / 1000)
         if (ttl > 0) {
-          await redis.setex(`token:blacklist:${rawAccessToken}`, ttl, '1')
+          try {
+            await redis.setex(`token:blacklist:${rawAccessToken}`, ttl, '1')
+          } catch (err) {
+            logCritical('Failed to blacklist access token in Redis', err)
+            throw { code: 'INTERNAL_ERROR', message: 'Logout failed - token revocation unavailable' }
+          }
         }
       }
-    } catch { /* malformed token — nothing to blacklist */ }
+    } catch (err) {
+      // Re-throw if it's our custom error about Redis failure
+      if (err.code === 'INTERNAL_ERROR') throw err
+      // Otherwise it's a malformed token — nothing to blacklist
+    }
   }
 
   if (rawRefreshToken) {
     const hash = hashToken(rawRefreshToken)
-    await query(
-      `UPDATE refresh_tokens SET revoked_at = NOW()
-       WHERE token_hash = $1 AND revoked_at IS NULL`,
-      [hash]
-    )
+    try {
+      await query(
+        `UPDATE refresh_tokens SET revoked_at = NOW()
+         WHERE token_hash = $1 AND revoked_at IS NULL`,
+        [hash]
+      )
+    } catch (err) {
+      logCritical('Failed to revoke refresh token in database', err)
+      throw { code: 'INTERNAL_ERROR', message: 'Logout failed - token revocation unavailable' }
+    }
   }
 }
 
@@ -87,8 +106,14 @@ async function isBlacklisted(rawAccessToken) {
   try {
     const hit = await redis.get(`token:blacklist:${rawAccessToken}`)
     return hit !== null
-  } catch {
-    return false // Redis unavailable — skip blacklist check, JWT still verified
+  } catch (err) {
+    // FAIL SECURE: If Redis is unavailable, assume token is blacklisted to prevent
+    // unauthorized access with revoked tokens. This is critical for security:
+    // - User logout would be bypassed if Redis fails
+    // - Admin can't revoke user access if Redis is down
+    // Better to temporarily block valid users than leak access to revoked ones.
+    logCritical('Redis blacklist check failed - rejecting token for safety', err)
+    return true
   }
 }
 

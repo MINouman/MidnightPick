@@ -1,11 +1,13 @@
 'use strict'
 
+const crypto = require('crypto')
 const { sendOtp, verifyOtp }              = require('../services/otp')
 const { registerUser, loginUser, findOrCreateGoogleUser, findOrCreateUser } = require('../services/users')
 const { createTokenPair, rotateRefreshToken, revokeTokens } = require('../services/tokens')
 const { adminLogin, bootstrapAdmin }      = require('../services/admin')
 const { verifyGoogleCredential }          = require('../services/google')
 const { normalizeBdMobile }               = require('../services/phone')
+const { redis }                            = require('../config/redis')
 
 module.exports = async function authRoutes(app) {
 
@@ -306,14 +308,16 @@ module.exports = async function authRoutes(app) {
   }, async (req, reply) => {
     const raw = req.headers.authorization?.replace('Bearer ', '') || ''
     await revokeTokens(app, raw, req.body?.refresh_token)
-    // Clear httpOnly cookies
+    // Clear httpOnly cookies with secure flag matching login configuration
     reply.clearCookie('mp_access_token', {
       httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
       sameSite: 'Strict',
       path: '/'
     })
     reply.clearCookie('mp_refresh_token', {
       httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
       sameSite: 'Strict',
       path: '/'
     })
@@ -321,11 +325,27 @@ module.exports = async function authRoutes(app) {
   })
 
   // GET /auth/csrf-token — CSRF protection
-  app.get('/csrf-token', async (req, reply) => {
-    const crypto = require('crypto')
-    const token = crypto.randomBytes(32).toString('hex')
-    // Store in session (or you can store in Redis for distributed systems)
-    // For now, just return it and let frontend send it back
-    return { ok: true, data: { csrf_token: token } }
+  app.get('/csrf-token', {}, async (req, reply) => {
+    try {
+      const token = crypto.randomBytes(32).toString('hex')
+      const sessionId = crypto.randomBytes(16).toString('hex')
+
+      // Store CSRF token in Redis with 1-hour expiration
+      // Key format: csrf:sessionId:hash to allow verification
+      const tokenHash = crypto.createHash('sha256').update(token).digest('hex')
+      await redis.setex(`csrf:${sessionId}:${tokenHash}`, 3600, '1')
+
+      // Return both session ID and token to client
+      return reply.send({
+        ok: true,
+        data: {
+          csrf_token: token,
+          session_id: sessionId
+        }
+      })
+    } catch (err) {
+      app.log.error({ err }, 'CSRF token generation failed')
+      throw { code: 'INTERNAL_ERROR', message: 'Failed to generate CSRF token' }
+    }
   })
 }
