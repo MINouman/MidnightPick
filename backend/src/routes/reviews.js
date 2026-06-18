@@ -4,6 +4,74 @@ const reviewsSvc = require('../services/reviews')
 
 module.exports = async function reviewRoutes(app) {
 
+  // GET /reviews/eligibility — check if logged-in user can review a product
+  app.get('/eligibility', {
+    schema: {
+      querystring: {
+        type: 'object',
+        properties: {
+          product:  { type: 'string', default: 'midnight-blend' },
+          order_id: { type: 'string' },
+          prompt:   { type: 'string', default: 'false' },
+        },
+      },
+    },
+  }, async (req, reply) => {
+    if (!req.user) {
+      return reply.code(401).send({ ok: false, error: { code: 'UNAUTHORIZED', message: 'Login required.' } })
+    }
+    const prompt = req.query.prompt === 'true'
+    const result = await reviewsSvc.getEligibility(req.user.sub, req.query.product, {
+      prompt,
+      orderId: req.query.order_id || null,
+    })
+    return { ok: true, data: result }
+  })
+
+  // POST /reviews/dismiss — snooze the review prompt for 7 days
+  app.post('/dismiss', {
+    config: { rateLimit: { max: 10, timeWindow: '1 hour' } },
+    schema: {
+      body: {
+        type: 'object',
+        properties: { source: { type: 'string', maxLength: 50 } },
+        additionalProperties: false,
+      },
+    },
+  }, async (req, reply) => {
+    if (!req.user) {
+      return reply.code(401).send({ ok: false, error: { code: 'UNAUTHORIZED', message: 'Login required.' } })
+    }
+    const result = await reviewsSvc.dismissPrompt(req.user.sub, req.body?.source || null)
+    return { ok: true, data: result }
+  })
+
+  // POST /reviews/submit — authenticated member review submission
+  app.post('/submit', {
+    config: { rateLimit: { max: 5, timeWindow: '1 hour' } },
+    schema: {
+      body: {
+        type: 'object',
+        required: ['rating'],
+        properties: {
+          product_slug:    { type: 'string', default: 'midnight-blend', maxLength: 50 },
+          order_id:        { type: 'string' },
+          rating:          { type: 'integer', minimum: 1, maximum: 5 },
+          highlight_tags:  { type: 'array', items: { type: 'string' }, maxItems: 10 },
+          review_text:     { type: 'string', maxLength: 1000 },
+          source:          { type: 'string', maxLength: 50 },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req, reply) => {
+    if (!req.user) {
+      return reply.code(401).send({ ok: false, error: { code: 'UNAUTHORIZED', message: 'Login required.' } })
+    }
+    const review = await reviewsSvc.submitMemberReview(req.user.sub, req.body)
+    return reply.code(201).send({ ok: true, data: review })
+  })
+
   // GET /reviews — dual-mode endpoint (returns user's reviews if authenticated, public reviews otherwise)
   app.get('/', {
     schema: {
