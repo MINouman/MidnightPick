@@ -5,7 +5,9 @@ const reviewsSvc = require('../services/reviews')
 module.exports = async function reviewRoutes(app) {
 
   // GET /reviews/eligibility — check if logged-in user can review a product
+  // onRequest: authenticate so req.user is populated (route lives in the public plugin scope)
   app.get('/eligibility', {
+    onRequest: [app.authenticate],
     schema: {
       querystring: {
         type: 'object',
@@ -16,10 +18,7 @@ module.exports = async function reviewRoutes(app) {
         },
       },
     },
-  }, async (req, reply) => {
-    if (!req.user) {
-      return reply.code(401).send({ ok: false, error: { code: 'UNAUTHORIZED', message: 'Login required.' } })
-    }
+  }, async (req) => {
     const prompt = req.query.prompt === 'true'
     const result = await reviewsSvc.getEligibility(req.user.sub, req.query.product, {
       prompt,
@@ -30,6 +29,7 @@ module.exports = async function reviewRoutes(app) {
 
   // POST /reviews/dismiss — snooze the review prompt for 7 days
   app.post('/dismiss', {
+    onRequest: [app.authenticate],
     config: { rateLimit: { max: 10, timeWindow: '1 hour' } },
     schema: {
       body: {
@@ -38,16 +38,14 @@ module.exports = async function reviewRoutes(app) {
         additionalProperties: false,
       },
     },
-  }, async (req, reply) => {
-    if (!req.user) {
-      return reply.code(401).send({ ok: false, error: { code: 'UNAUTHORIZED', message: 'Login required.' } })
-    }
+  }, async (req) => {
     const result = await reviewsSvc.dismissPrompt(req.user.sub, req.body?.source || null)
     return { ok: true, data: result }
   })
 
   // POST /reviews/submit — authenticated member review submission
   app.post('/submit', {
+    onRequest: [app.authenticate],
     config: { rateLimit: { max: 5, timeWindow: '1 hour' } },
     schema: {
       body: {
@@ -65,9 +63,6 @@ module.exports = async function reviewRoutes(app) {
       },
     },
   }, async (req, reply) => {
-    if (!req.user) {
-      return reply.code(401).send({ ok: false, error: { code: 'UNAUTHORIZED', message: 'Login required.' } })
-    }
     const review = await reviewsSvc.submitMemberReview(req.user.sub, req.body)
     return reply.code(201).send({ ok: true, data: review })
   })
