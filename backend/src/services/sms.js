@@ -40,6 +40,14 @@ async function sendSms(phone, message, smsType = 'general', deviceFingerprint = 
     }
 
     console.log('[sms] gateway response:', res.status, responseText)
+    let parsed
+    try { parsed = JSON.parse(responseText) } catch { parsed = null }
+    if (parsed && parsed.response_code && parsed.response_code !== 202) {
+      const errMsg = parsed.error_message || responseText
+      console.error('[sms] gateway rejected:', errMsg)
+      await logSms(phone, message, smsType, 'failed', { status: res.status, error: errMsg })
+      throw { code: 'SMS_SEND_FAILED', message: errMsg }
+    }
     await logSms(phone, message, smsType, 'sent', { status: res.status, response: responseText })
     return { ok: true }
   } catch (err) {
