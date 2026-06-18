@@ -1030,10 +1030,9 @@ function Footer({ onTrack, onShowPolicy }) {
           <Logo variant="light" height={70} />
           <p className="footer-tag">Fuel your dreams, one cup at a time. Freeze-dried in Colombia, packed in Dhaka, shipped wherever the night runs long.</p>
           <div className="social">
-            <a href="#" aria-label="X/Twitter">{SocialIcons.x}</a>
-            <a href="#" aria-label="Instagram">{SocialIcons.ig}</a>
-            <a href="#" aria-label="Facebook">{SocialIcons.fb}</a>
-            <a href="https://wa.me/8801829531588" aria-label="WhatsApp">{SocialIcons.wa}</a>
+            <a href="https://www.instagram.com/_midnightpick" target="_blank" rel="noopener noreferrer" aria-label="Instagram">{SocialIcons.ig}</a>
+            <a href="https://www.facebook.com/midnightpick/" target="_blank" rel="noopener noreferrer" aria-label="Facebook">{SocialIcons.fb}</a>
+            <a href="https://wa.me/8801829531588" target="_blank" rel="noopener noreferrer" aria-label="WhatsApp">{SocialIcons.wa}</a>
           </div>
         </div>
         <div>

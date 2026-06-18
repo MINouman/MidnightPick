@@ -1412,7 +1412,6 @@ function ShopPage() {
         <div className="shop-visual">
           <div className="shop-img-card">
             <div className="shop-img-wrapper">
-              {product.badge && <span className="shop-img-badge">{product.badge}</span>}
               {product.images.length > 0 ? (
                 <img
                   key={imgKey}
