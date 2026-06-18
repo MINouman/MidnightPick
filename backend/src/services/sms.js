@@ -39,7 +39,8 @@ async function sendSms(phone, message, smsType = 'general', deviceFingerprint = 
       throw { code: 'SMS_SEND_FAILED', message: 'Failed to send SMS.' }
     }
 
-    await logSms(phone, message, smsType, 'sent', { status: res.status })
+    console.log('[sms] gateway response:', res.status, responseText)
+    await logSms(phone, message, smsType, 'sent', { status: res.status, response: responseText })
     return { ok: true }
   } catch (err) {
     if (err.code === 'SMS_SEND_FAILED') throw err
