@@ -1778,7 +1778,7 @@ module.exports = async function adminRoutes(app) {
         properties: {
           apiUrl: { type: 'string', format: 'uri' },
           apiKey: { type: 'string', minLength: 1 },
-          senderId: { type: 'string', minLength: 1, maxLength: 11 },
+          senderId: { type: 'string', minLength: 1, maxLength: 20 },
           balanceApiUrl: { type: 'string', format: 'uri' },
         },
         additionalProperties: false,
