@@ -82,6 +82,29 @@ function Nav({ onSignIn, loggedIn, dashUrl, onLogout }) {
   }, []);
 
   useEffect(() => {
+    const sections = [
+      { id: "home",       name: "home" },
+      { id: "collection", name: "product" },
+      { id: "story",      name: "about" },
+      { id: "journal",    name: "blog" },
+      { id: "faq",        name: "contact" },
+    ];
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          const sec = sections.find(s => s.id === entry.target.id);
+          if (sec) setActive(sec.name);
+        }
+      });
+    }, { threshold: 0.3 });
+    sections.forEach(s => {
+      const el = document.getElementById(s.id);
+      if (el) io.observe(el);
+    });
+    return () => io.disconnect();
+  }, []);
+
+  useEffect(() => {
     document.body.style.overflow = menuOpen ? "hidden" : "";
     return () => { document.body.style.overflow = ""; };
   }, [menuOpen]);
