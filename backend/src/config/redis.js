@@ -6,9 +6,9 @@ const { env } = require('./env')
 const redis = new Redis(env.REDIS_URL, {
   maxRetriesPerRequest: 0,           // fail immediately, don't retry commands
   enableOfflineQueue:   false,       // don't queue commands when Redis is down
-  enableReadyCheck:     false,
-  lazyConnect:          true,
-  connectTimeout:       2000,
+  enableReadyCheck:     true,
+  lazyConnect:          false,       // connect on startup, not on first command
+  connectTimeout:       5000,
   retryStrategy: (times) => Math.min(times * 500, 10000),
 })
 

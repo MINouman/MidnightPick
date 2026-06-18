@@ -125,7 +125,8 @@ sudo systemctl restart redis-server
 **Option A — GitHub (recommended):**
 ```bash
 cd ~
-git clone https://github.com/YOUR_USER/YOUR_REPO.git midnight_pick
+git clone https://github.com/MINouman/MidnightPick.git midnight_pick
+
 ```
 **Option B — upload from your PC** (run this on YOUR computer, not the server):
 ```bash
