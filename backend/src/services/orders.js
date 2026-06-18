@@ -451,20 +451,10 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
       coupon         = c.coupon
     }
 
-    // Calculate delivery fee — default to 0 if zone lookup fails
-    let deliveryFee = 0
-    try {
-      // Try to extract district from address (format: "street, area, city")
-      const addressParts = address.split(',').map(p => p.trim())
-      const district = addressParts.length >= 2 ? addressParts[addressParts.length - 2] : 'Dhaka'
-      const feeInfo = await calculateDeliveryFee(district)
-      deliveryFee = feeInfo.total_fee
-    } catch (err) {
-      console.warn('[orders] Zone lookup failed for guest order, using fallback fee:', err.message)
-      deliveryFee = await getFallbackDeliveryFee()
-    }
+    // Delivery fee is calculated and added to COD amount at Steadfast dispatch time
+    const deliveryFee = 0
 
-    const total     = subtotal - discountAmount + deliveryFee
+    const total     = subtotal - discountAmount
     const orderRef  = await generateOrderRef(client)
     const addrSnap  = { label: 'Delivery', line1: address }
 
@@ -594,20 +584,10 @@ async function placeQuickOrder(userId, { product_id, qty, address, coupon_code, 
       coupon         = c.coupon
     }
 
-    // Calculate delivery fee — default to 0 if zone lookup fails
-    let deliveryFee = 0
-    try {
-      // Try to extract district from address (format: "street, area, city")
-      const addressParts = address.split(',').map(p => p.trim())
-      const district = addressParts.length >= 2 ? addressParts[addressParts.length - 2] : 'Dhaka'
-      const feeInfo = await calculateDeliveryFee(district)
-      deliveryFee = feeInfo.total_fee
-    } catch (err) {
-      console.warn('[orders] Zone lookup failed for quick order, using fallback fee:', err.message)
-      deliveryFee = await getFallbackDeliveryFee()
-    }
+    // Delivery fee is calculated and added to COD amount at Steadfast dispatch time
+    const deliveryFee = 0
 
-    const total    = subtotal - discountAmount + deliveryFee
+    const total    = subtotal - discountAmount
     const orderRef = await generateOrderRef(client)
     const addrSnap = { label: 'Delivery', line1: address }
 

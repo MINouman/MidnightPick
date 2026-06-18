@@ -12,6 +12,7 @@ const { toEndOfDayDhaka } = require('../services/dates')
 const { normalizeBdMobile } = require('../services/phone')
 const { generateOrderRef } = require('../services/orders')
 const { createOrder, mapSteadfastStatusToOrderStatus } = require('../services/steadfast')
+const { getWeightBasedFee } = require('../services/delivery')
 const { sendOrderOtp, verifyOrderOtp, getOrderOtpStatus } = require('../services/order-otp')
 
 module.exports = async function adminRoutes(app) {
@@ -366,6 +367,29 @@ module.exports = async function adminRoutes(app) {
         }
       }
 
+      // Calculate delivery fee: weight-based (inside vs outside Dhaka)
+      // Address format: "street, area, city" — city is last part
+      const addressParts = addressLine.split(',').map(p => p.trim())
+      const district = addressParts[addressParts.length - 1] || 'Dhaka'
+
+      // Total weight in grams from order items × product weight (p.qty in grams)
+      const { rows: weightRows } = await client.query(
+        `SELECT COALESCE(SUM(oi.qty * COALESCE(p.qty, 95)), 95) AS total_weight_grams
+         FROM order_items oi
+         LEFT JOIN products p ON p.id = oi.product_id
+         WHERE oi.order_id = $1`,
+        [orderId]
+      )
+      const weightGrams = Number(weightRows[0]?.total_weight_grams) || 95
+      const deliveryFee = getWeightBasedFee(district, weightGrams)
+      const codAmount   = Number(order.total) + deliveryFee
+
+      // Persist delivery fee on the order for accounting
+      await client.query(
+        `UPDATE orders SET delivery_fee = $1, total = $2 WHERE id = $3`,
+        [deliveryFee, codAmount, orderId]
+      )
+
       // Call Steadfast API to create shipment
       let steadfastResponse
       try {
@@ -374,7 +398,7 @@ module.exports = async function adminRoutes(app) {
           recipientName: order.customer_name || 'Customer',
           recipientPhone: order.customer_phone,
           recipientAddress: addressLine,
-          codAmount: order.total,
+          codAmount,
           note: order.notes || undefined,
         })
       } catch (err) {

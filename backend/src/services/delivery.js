@@ -124,6 +124,17 @@ async function getFallbackDeliveryFee() {
   }
 }
 
+// ── Weight-based delivery fee (used at Steadfast dispatch time) ──────────
+// Inside Dhaka: ≤150g→55, ≤500g→65
+// Outside Dhaka (all other districts): ≤150g→110, ≤500g→130
+
+function getWeightBasedFee(district, weightGrams) {
+  const insideDhaka = (district || '').trim().toLowerCase() === 'dhaka'
+  if (weightGrams <= 150) return insideDhaka ? 55 : 110
+  if (weightGrams <= 500) return insideDhaka ? 65 : 130
+  return insideDhaka ? 80 : 150  // >500g fallback
+}
+
 // ── List supported districts ────────────────────────────────────────────
 
 async function getSupportedDistricts() {
@@ -145,4 +156,5 @@ module.exports = {
   getDeliveryEstimate,
   applyDeliveryFee,
   getSupportedDistricts,
+  getWeightBasedFee,
 }
