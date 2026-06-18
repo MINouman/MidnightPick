@@ -2760,11 +2760,11 @@ function SmsManagement() {
             </div>
             <div className="input-group">
               <label className="input-label">API Key</label>
-              <input className="input" type="password" value={form.apiKey} onChange={e => setForm(f => ({ ...f, apiKey: e.target.value }))} placeholder="Your API key" />
+              <input className="input" type="text" value={form.apiKey} onChange={e => setForm(f => ({ ...f, apiKey: e.target.value }))} placeholder="Enter API key (required each save)" autoComplete="off" />
             </div>
             <div className="input-group">
               <label className="input-label">Sender ID</label>
-              <input className="input" value={form.senderId} onChange={e => setForm(f => ({ ...f, senderId: e.target.value }))} maxLength="11" placeholder="MidnightPick" />
+              <input className="input" value={form.senderId} onChange={e => setForm(f => ({ ...f, senderId: e.target.value }))} maxLength="20" placeholder="MidnightPick" />
             </div>
             <div className="input-group" style={{ marginBottom: 0 }}>
               <label className="input-label">Balance Check API URL</label>
