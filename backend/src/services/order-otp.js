@@ -3,6 +3,7 @@
 const crypto = require('crypto')
 const { pool } = require('../config/db')
 const { sendSms } = require('./sms')
+const { checkAndIncrementDailyLimit } = require('./otp-daily-limit')
 
 function generateOtpCode() {
   // crypto.randomInt is cryptographically secure and unbiased, unlike Math.random
@@ -12,6 +13,13 @@ function generateOtpCode() {
 async function sendOrderOtp(orderId, phone) {
   if (!phone) {
     throw { code: 'NO_PHONE', message: 'Customer phone number is required to send OTP.' }
+  }
+
+  // Daily cap per phone number (overridable by admin)
+  try {
+    await checkAndIncrementDailyLimit(phone)
+  } catch (err) {
+    throw { code: err.code || 'OTP_DAILY_LIMIT', message: err.message }
   }
 
   const client = await pool.connect()

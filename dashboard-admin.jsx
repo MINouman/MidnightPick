@@ -2835,8 +2835,141 @@ function SmsManagement() {
         )}
       </div>
 
+      {/* OTP Daily Limits */}
+      <OtpDailyLimits />
+
       {/* SMS Templates */}
       <SmsTemplatesEditor />
+    </div>
+  );
+}
+
+// OTP Daily Limit Overrides Component
+function OtpDailyLimits() {
+  const [data, setData]       = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy]       = useState(false);
+  const [form, setForm]       = useState({ phone: '', daily_limit: '', note: '' });
+  const [formErr, setFormErr] = useState('');
+  const [showForm, setShowForm] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    const res = await window.mpApi.fetch('/admin/otp-daily-limits').catch(() => null);
+    if (res?.ok) setData(res.data);
+    setLoading(false);
+  }
+
+  useEffect(() => { load(); }, []);
+
+  async function handleSave(e) {
+    e.preventDefault();
+    setFormErr('');
+    const limit = parseInt(form.daily_limit, 10);
+    if (!form.phone.trim()) return setFormErr('Phone is required.');
+    if (!limit || limit < 1 || limit > 200) return setFormErr('Limit must be between 1 and 200.');
+    setBusy(true);
+    const res = await window.mpApi.fetch('/admin/otp-daily-limits', {
+      method: 'POST',
+      body: JSON.stringify({ phone: form.phone.trim(), daily_limit: limit, note: form.note.trim() || undefined }),
+    }).catch(() => null);
+    setBusy(false);
+    if (res?.ok) { setShowForm(false); setForm({ phone: '', daily_limit: '', note: '' }); load(); }
+    else setFormErr(res?.error?.message || 'Failed to save override.');
+  }
+
+  async function handleDelete(phone) {
+    if (!confirm(`Remove override for ${phone}? It will revert to the default limit.`)) return;
+    await window.mpApi.fetch(`/admin/otp-daily-limits/${encodeURIComponent(phone)}`, { method: 'DELETE' });
+    load();
+  }
+
+  async function handleReset(phone) {
+    if (!confirm(`Reset today's OTP count for ${phone} to 0?`)) return;
+    await window.mpApi.fetch(`/admin/otp-daily-limits/${encodeURIComponent(phone)}/reset-today`, { method: 'POST' });
+    load();
+  }
+
+  return (
+    <div className="card mb20">
+      <div className="row-between mb12">
+        <div className="eyebrow">OTP Daily Limits</div>
+        <button className="btn btn-sm btn-ghost" onClick={() => { setShowForm(v => !v); setFormErr(''); }}>
+          <i className={`fa ${showForm ? 'fa-times' : 'fa-plus'}`} style={{ marginRight: 4 }} />
+          {showForm ? 'Cancel' : 'Add Override'}
+        </button>
+      </div>
+
+      {loading ? (
+        <div style={{ padding: 16, textAlign: 'center' }}><i className="fa fa-spinner fa-spin" /></div>
+      ) : (
+        <>
+          <div style={{ fontSize: 12, color: 'var(--text-65)', marginBottom: 12 }}>
+            Default limit: <strong>{data?.default_limit ?? 5} OTPs / number / day.</strong> Add an override below to raise or lower it for a specific number.
+          </div>
+
+          {showForm && (
+            <form onSubmit={handleSave} style={{ background: 'var(--bg-soft)', borderRadius: 8, padding: 14, marginBottom: 14 }}>
+              <div className="input-group">
+                <label className="input-label">Phone Number</label>
+                <input className="input" placeholder="01XXXXXXXXX" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} />
+              </div>
+              <div className="input-group">
+                <label className="input-label">Daily OTP Limit</label>
+                <input className="input" type="number" min="1" max="200" placeholder="e.g. 20" value={form.daily_limit} onChange={e => setForm(f => ({ ...f, daily_limit: e.target.value }))} />
+              </div>
+              <div className="input-group" style={{ marginBottom: 0 }}>
+                <label className="input-label">Note (optional)</label>
+                <input className="input" placeholder="Reason for override" value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))} />
+              </div>
+              {formErr && <div style={{ color: 'var(--red)', fontSize: 12, marginTop: 8 }}>{formErr}</div>}
+              <button className="btn btn-primary mt12" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save Override'}</button>
+            </form>
+          )}
+
+          {data?.overrides?.length > 0 ? (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                    <th style={{ textAlign: 'left', padding: '6px 8px', fontWeight: 600 }}>Phone</th>
+                    <th style={{ textAlign: 'center', padding: '6px 8px', fontWeight: 600 }}>Limit/day</th>
+                    <th style={{ textAlign: 'center', padding: '6px 8px', fontWeight: 600 }}>Today</th>
+                    <th style={{ textAlign: 'left', padding: '6px 8px', fontWeight: 600 }}>Note</th>
+                    <th style={{ padding: '6px 8px' }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.overrides.map(r => (
+                    <tr key={r.phone} style={{ borderBottom: '1px solid var(--border)' }}>
+                      <td style={{ padding: '8px 8px', fontFamily: 'monospace', fontSize: 12 }}>{r.phone}</td>
+                      <td style={{ textAlign: 'center', padding: '8px 8px' }}>
+                        <span style={{ fontWeight: 700, color: 'var(--orange)' }}>{r.daily_limit}</span>
+                      </td>
+                      <td style={{ textAlign: 'center', padding: '8px 8px' }}>
+                        <span style={{ color: r.today_count >= r.daily_limit ? 'var(--red)' : 'var(--text)' }}>{r.today_count}</span>
+                        {r.today_count > 0 && (
+                          <button title="Reset today's count" onClick={() => handleReset(r.phone)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-65)', marginLeft: 4, fontSize: 11 }}>
+                            <i className="fa fa-undo" />
+                          </button>
+                        )}
+                      </td>
+                      <td style={{ padding: '8px 8px', color: 'var(--text-65)', fontSize: 12 }}>{r.note || '—'}</td>
+                      <td style={{ padding: '8px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        <button className="btn btn-sm btn-ghost" style={{ color: 'var(--red)', borderColor: 'rgba(220,53,69,.3)' }} onClick={() => handleDelete(r.phone)}>
+                          <i className="fa fa-trash" style={{ fontSize: 11 }} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div style={{ color: 'var(--text-65)', fontSize: 13, fontStyle: 'italic' }}>No overrides yet. All numbers use the default limit of {data?.default_limit ?? 5}/day.</div>
+          )}
+        </>
+      )}
     </div>
   );
 }

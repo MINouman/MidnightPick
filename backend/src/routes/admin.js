@@ -14,6 +14,7 @@ const { generateOrderRef } = require('../services/orders')
 const { createOrder, mapSteadfastStatusToOrderStatus } = require('../services/steadfast')
 const { getWeightBasedFee } = require('../services/delivery')
 const { sendOrderOtp, verifyOrderOtp, getOrderOtpStatus } = require('../services/order-otp')
+const { checkAndIncrementDailyLimit, getDailyCount, resetDailyCount, getPhoneOverride, DEFAULT_DAILY_LIMIT } = require('../services/otp-daily-limit')
 
 module.exports = async function adminRoutes(app) {
 
@@ -198,6 +199,9 @@ module.exports = async function adminRoutes(app) {
   }, async (req) => {
     const { phone, customer_name } = req.body
     try {
+      // Daily cap per phone (admin-overridable via /admin/otp-daily-limits)
+      await checkAndIncrementDailyLimit(normalizeBdMobile(phone))
+
       const { sendSms } = require('../services/sms')
       const { getTemplate, renderTemplate } = require('../services/sms-templates')
       const otp = String(crypto.randomInt(1000, 10000))
@@ -2231,5 +2235,76 @@ module.exports = async function adminRoutes(app) {
     )
     if (!rows.length) throw { code: 'NOT_FOUND', message: 'Claim not found.' }
     return { ok: true, data: rows[0] }
+  })
+
+  // ── OTP Daily Limit Overrides ──────────────────────────────────────────────
+
+  // GET /admin/otp-daily-limits — list all overrides + today's Redis counts
+  app.get('/otp-daily-limits', async (req) => {
+    const { rows } = await query(
+      `SELECT o.phone, o.daily_limit, o.note, o.updated_at,
+              u.name AS updated_by_name
+       FROM   otp_phone_overrides o
+       LEFT   JOIN users u ON u.id = o.created_by
+       ORDER  BY o.updated_at DESC`
+    )
+    const withCounts = await Promise.all(rows.map(async r => ({
+      ...r,
+      today_count: await getDailyCount(r.phone),
+    })))
+    return { ok: true, data: { default_limit: DEFAULT_DAILY_LIMIT, overrides: withCounts } }
+  })
+
+  // POST /admin/otp-daily-limits — upsert a phone override
+  app.post('/otp-daily-limits', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['phone', 'daily_limit'],
+        properties: {
+          phone:       { type: 'string', maxLength: 20 },
+          daily_limit: { type: 'integer', minimum: 1, maximum: 200 },
+          note:        { type: 'string', maxLength: 255 },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req) => {
+    const { phone, daily_limit, note } = req.body
+    const normalized = normalizeBdMobile(phone)
+    const { rows } = await query(
+      `INSERT INTO otp_phone_overrides (phone, daily_limit, note, created_by, updated_at)
+       VALUES ($1, $2, $3, $4, NOW())
+       ON CONFLICT (phone) DO UPDATE
+         SET daily_limit = EXCLUDED.daily_limit,
+             note        = EXCLUDED.note,
+             created_by  = EXCLUDED.created_by,
+             updated_at  = NOW()
+       RETURNING *`,
+      [normalized, daily_limit, note || null, req.user.id]
+    )
+    return { ok: true, data: rows[0] }
+  })
+
+  // DELETE /admin/otp-daily-limits/:phone — remove override (revert to default)
+  app.delete('/otp-daily-limits/:phone', {
+    schema: {
+      params: { type: 'object', properties: { phone: { type: 'string', maxLength: 20 } }, required: ['phone'] },
+    },
+  }, async (req) => {
+    const normalized = normalizeBdMobile(req.params.phone)
+    await query(`DELETE FROM otp_phone_overrides WHERE phone = $1`, [normalized])
+    return { ok: true, data: { message: 'Override removed. Default limit restored.' } }
+  })
+
+  // POST /admin/otp-daily-limits/:phone/reset-today — clear today's Redis count
+  app.post('/otp-daily-limits/:phone/reset-today', {
+    schema: {
+      params: { type: 'object', properties: { phone: { type: 'string', maxLength: 20 } }, required: ['phone'] },
+    },
+  }, async (req) => {
+    const normalized = normalizeBdMobile(req.params.phone)
+    await resetDailyCount(normalized)
+    return { ok: true, data: { message: "Today's OTP count reset to 0." } }
   })
 }
