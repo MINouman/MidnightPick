@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+Disallow: /dashboard-admin.html
+Disallow: /dashboard-user.html
+Disallow: /dashboard-influencer.html
+Disallow: /track-order.html
+
+Sitemap: https://midnightpick.com/sitemap.xml

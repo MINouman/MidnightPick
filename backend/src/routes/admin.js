@@ -110,7 +110,7 @@ module.exports = async function adminRoutes(app) {
       // Award points when order first moves to delivered and is linked to a user
       if (newStatus === 'delivered' && order.status !== 'delivered' && order.user_id && order.total > 0 && order.points_earned === 0) {
         const ptSettings = await getPointsSettings(client)
-        const pts = calculatePointsForOrder(order.total, ptSettings.points_per_100_taka)
+        const pts = calculatePointsForOrder(order.total, ptSettings.points_per_100_taka || 10)
         if (pts > 0) {
           await awardPoints(client, order.user_id, pts, `Order #${order.order_ref} delivered`, order.id)
           await client.query(`UPDATE orders SET points_earned = $2 WHERE id = $1`, [order.id, pts])
