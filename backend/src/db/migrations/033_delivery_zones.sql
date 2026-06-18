@@ -92,9 +92,8 @@ CREATE TABLE IF NOT EXISTS order_tracking_latest (
 CREATE INDEX idx_delivery_zones_active ON delivery_zones(is_active);
 CREATE INDEX idx_delivery_districts_zone ON delivery_districts(zone_id);
 CREATE INDEX idx_delivery_districts_active ON delivery_districts(is_active);
-CREATE INDEX idx_order_tracking_order ON order_tracking(order_id);
-CREATE INDEX idx_order_tracking_status ON order_tracking(status);
-CREATE INDEX idx_order_tracking_created ON order_tracking(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_order_tracking_order ON order_tracking(order_id);
+CREATE INDEX IF NOT EXISTS idx_order_tracking_created ON order_tracking(created_at DESC);
 CREATE INDEX idx_order_tracking_latest_status ON order_tracking_latest(status);
 
 -- Add delivery_fee_paid column to orders table
