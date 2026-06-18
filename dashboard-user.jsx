@@ -212,7 +212,11 @@ function HomeTab({ setTab }) {
             </div>
             <div className="pts-mini-progress">
               <div className="pts-mini-progress-labels">
-                <span>{toNext.toLocaleString()} pts to {tierInfo?.nextTier?.name || "next tier"}</span>
+                <span>
+                  {tierInfo?.nextTier
+                    ? `${toNext.toLocaleString()} more pts to ${tierInfo.nextTier.reward_product_name ? `free ${tierInfo.nextTier.reward_product_name}` : tierInfo.nextTier.name}`
+                    : pts > 0 ? "Top tier reached!" : "Earn pts with every order"}
+                </span>
                 <span>{pct}%</span>
               </div>
               <div className="pts-mini-track">
@@ -899,7 +903,10 @@ function PointsTab() {
             {nextTier && (
               <div className="pts-progress-wrap">
                 <div className="pts-progress-labels">
-                  <span>{(ptsToNext ?? 0).toLocaleString()} pts to <strong>{nextTier.name}</strong></span>
+                  <span>
+                    {(ptsToNext ?? 0).toLocaleString()} more pts to <strong>{nextTier.name}</strong>
+                    {nextTier.reward_product_name && <span style={{ color: "var(--orange)", fontWeight: 600 }}> · Free {nextTier.reward_product_name}!</span>}
+                  </span>
                   <span>{tierPct}%</span>
                 </div>
                 <div className="pts-track">

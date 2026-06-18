@@ -260,6 +260,20 @@ function Orders() {
     }
   }
 
+  async function awardOrderPoints() {
+    if (!panel?.id) return;
+    try {
+      const res = await window.mpApi.fetch(`/admin/orders/${panel.id}/award-points`, { method: 'POST' });
+      if (!res?.ok) { alert(res?.error?.message || 'Failed to award points.'); return; }
+      const updated = { ...panel, points_earned: res.data.pts_awarded };
+      setOrders(prev => prev.map(o => o.id === panel.id ? updated : o));
+      setPanel(updated);
+      alert(`Done! ${res.data.pts_awarded} points awarded.`);
+    } catch (e) {
+      alert(e?.message || 'Failed to award points.');
+    }
+  }
+
   function addOrderItem(productId) {
     const p = (adminProducts || []).find(x => x.id === productId);
     if (!p) return;
@@ -691,6 +705,11 @@ function Orders() {
                   {panel.status !== "cancelled" && (
                     <button className="btn btn-full" style={{ background: "rgba(217,64,64,.08)", color: "var(--red)", border: "1px solid rgba(217,64,64,.25)" }} onClick={() => setCancelConfirm(true)}>
                       <i className="fa fa-times-circle" style={{ fontSize: 12 }} /> Cancel Order
+                    </button>
+                  )}
+                  {panel.status === "delivered" && !panel.points_earned && (
+                    <button className="btn btn-ghost btn-full" style={{ color: "var(--orange)", border: "1px solid rgba(255,145,0,.3)" }} onClick={awardOrderPoints}>
+                      <i className="fa fa-star" style={{ fontSize: 12 }} /> Award Points
                     </button>
                   )}
                   <button className="btn btn-ghost btn-full"><i className="fa fa-flag" style={{ fontSize: 12 }} /> Flag for Review</button>

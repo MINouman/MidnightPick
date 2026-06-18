@@ -10,7 +10,7 @@ module.exports = async function pointsRoutes(app) {
     const userId = req.user.sub
     const [userRes, tiersRes, claimRes] = await Promise.all([
       query(`SELECT points_balance, points_lifetime FROM users WHERE id = $1`, [userId]),
-      query(`SELECT id, name, min_lifetime_pts, badge_color FROM loyalty_tiers WHERE is_active = true ORDER BY min_lifetime_pts ASC`),
+      query(`SELECT lt.id, lt.name, lt.min_lifetime_pts, lt.badge_color, lt.reward_product_id, p.name AS reward_product_name FROM loyalty_tiers lt LEFT JOIN products p ON p.id = lt.reward_product_id WHERE lt.is_active = true ORDER BY lt.min_lifetime_pts ASC`),
       query(
         `SELECT trc.*, lt.name AS tier_name, lt.badge_color
          FROM   tier_reward_claims trc
@@ -54,7 +54,7 @@ module.exports = async function pointsRoutes(app) {
         [userId, limit]
       ),
       query(`SELECT points_balance, points_lifetime FROM users WHERE id = $1`, [userId]),
-      query(`SELECT id, name, min_lifetime_pts, badge_color FROM loyalty_tiers WHERE is_active = true ORDER BY min_lifetime_pts ASC`),
+      query(`SELECT lt.id, lt.name, lt.min_lifetime_pts, lt.badge_color, lt.reward_product_id, p.name AS reward_product_name FROM loyalty_tiers lt LEFT JOIN products p ON p.id = lt.reward_product_id WHERE lt.is_active = true ORDER BY lt.min_lifetime_pts ASC`),
       query(
         `SELECT trc.*, lt.name AS tier_name, lt.badge_color
          FROM   tier_reward_claims trc

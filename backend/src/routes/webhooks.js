@@ -99,8 +99,9 @@ module.exports = async function webhookRoutes(app) {
 
       // Award points if order just transitioned to delivered
       if (justDelivered && o.user_id && o.total > 0 && Number(o.points_earned) === 0) {
-        const { calculatePointsForOrder, awardPoints } = require('../services/points')
-        const pts = calculatePointsForOrder(o.total)
+        const { calculatePointsForOrder, awardPoints, getPointsSettings } = require('../services/points')
+        const ptSettings = await getPointsSettings(client)
+        const pts = calculatePointsForOrder(o.total, ptSettings.points_per_100_taka || 10)
         if (pts > 0) {
           await awardPoints(client, o.user_id, pts, `Order #${o.order_ref} delivered`, o.id)
           await client.query(

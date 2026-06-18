@@ -156,6 +156,32 @@ module.exports = async function adminRoutes(app) {
     return { ok: true, data: result }
   })
 
+  // POST /admin/orders/:id/award-points — backfill points for a delivered order with 0 pts
+  app.post('/orders/:id/award-points', {
+    schema: { params: { type: 'object', properties: { id: { type: 'string', format: 'uuid' } }, required: ['id'] } },
+  }, async (req) => {
+    const orderId = req.params.id
+    return withTransaction(async (client) => {
+      const { rows } = await client.query(
+        `SELECT id, order_ref, status, user_id, total, points_earned FROM orders WHERE id = $1 FOR UPDATE`,
+        [orderId]
+      )
+      if (!rows.length) throw { code: 'NOT_FOUND', message: 'Order not found.' }
+      const order = rows[0]
+      if (order.status !== 'delivered') throw { code: 'VALIDATION_ERROR', message: 'Only delivered orders can earn points.' }
+      if (!order.user_id) throw { code: 'VALIDATION_ERROR', message: 'Order is not linked to a user account.' }
+      if (Number(order.points_earned) > 0) throw { code: 'VALIDATION_ERROR', message: `Points already awarded: ${order.points_earned} pts.` }
+      if (Number(order.total) <= 0) throw { code: 'VALIDATION_ERROR', message: 'Order total is 0.' }
+      const ptSettings = await getPointsSettings(client)
+      const pts = calculatePointsForOrder(Number(order.total), ptSettings.points_per_100_taka || 10)
+      if (pts <= 0) throw { code: 'VALIDATION_ERROR', message: 'Calculated 0 points. Check the points rate in Settings → Points.' }
+      await awardPoints(client, order.user_id, pts, `Order #${order.order_ref} delivered`, order.id)
+      await client.query(`UPDATE orders SET points_earned = $2 WHERE id = $1`, [order.id, pts])
+      await checkAndUpdateTier(client, order.user_id)
+      return { ok: true, data: { pts_awarded: pts, order_ref: order.order_ref } }
+    })
+  })
+
   // POST /admin/send-order-otp — send OTP without creating order (for pre-verification)
   app.post('/send-order-otp', {
     schema: {
@@ -2105,8 +2131,8 @@ module.exports = async function adminRoutes(app) {
           name:              { type: 'string', minLength: 1, maxLength: 50 },
           min_lifetime_pts:  { type: 'integer', minimum: 0 },
           badge_color:       { type: 'string', maxLength: 20 },
-          reward_product_id: { type: 'string', format: 'uuid' },
-          reward_variant_id: { type: 'string', format: 'uuid' },
+          reward_product_id: { type: ['string', 'null'] },
+          reward_variant_id: { type: ['string', 'null'] },
           sort_order:        { type: 'integer', minimum: 0 },
           is_active:         { type: 'boolean' },
         },
