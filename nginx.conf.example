@@ -1,0 +1,82 @@
+# Nginx configuration for Midnight Pick
+# Place at: /etc/nginx/sites-available/midnightpick
+# Enable with: ln -s /etc/nginx/sites-available/midnightpick /etc/nginx/sites-enabled/
+# Then: nginx -t && systemctl reload nginx
+
+server {
+    listen 80;
+    server_name yourdomain.com www.yourdomain.com;
+
+    # Redirect all HTTP to HTTPS
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name yourdomain.com www.yourdomain.com;
+
+    # SSL — managed by certbot (run: certbot --nginx -d yourdomain.com)
+    ssl_certificate     /etc/letsencrypt/live/yourdomain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/yourdomain.com/privkey.pem;
+    include             /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;
+
+    # Security headers (supplement backend's @fastify/helmet)
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+
+    # --- Static frontend files ---
+    root /var/www/midnightpick;   # copy the repo root here (excluding backend/)
+    index index.html;
+
+    # Cache vendor assets aggressively — they're versioned in file names
+    location /vendor/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+
+    location /assets/ {
+        expires 30d;
+        add_header Cache-Control "public";
+    }
+
+    location /font/ {
+        expires 30d;
+        add_header Cache-Control "public";
+    }
+
+    # --- Backend API --- proxy to Node.js (PM2 cluster on port 3000)
+    location /api/ {
+        proxy_pass         http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_set_header   Upgrade           $http_upgrade;
+        proxy_set_header   Connection        "upgrade";
+        proxy_read_timeout 30s;
+        proxy_send_timeout 30s;
+    }
+
+    # Webhooks (Steadfast callbacks)
+    location /webhooks/ {
+        proxy_pass         http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+    }
+
+    # Health check endpoint
+    location /health {
+        proxy_pass http://127.0.0.1:3000;
+    }
+
+    # SPA fallback — serve index.html for unknown paths so client-side routing works
+    location / {
+        try_files $uri $uri/ $uri.html /index.html;
+    }
+}

@@ -1,10 +1,12 @@
 'use strict'
 
+const crypto = require('crypto')
 const { pool } = require('../config/db')
 const { sendSms } = require('./sms')
 
 function generateOtpCode() {
-  return String(Math.floor(1000 + Math.random() * 9000))
+  // crypto.randomInt is cryptographically secure and unbiased, unlike Math.random
+  return String(crypto.randomInt(1000, 10000))
 }
 
 async function sendOrderOtp(orderId, phone) {

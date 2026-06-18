@@ -1,6 +1,6 @@
 // Midnight Pick — Admin Dashboard
 
-const { useState, useRef, useEffect, useContext, createContext } = React;
+const { useState, useRef, useEffect, useContext, useCallback, createContext } = React;
 
 const DashCtx = createContext(null);
 
@@ -1052,11 +1052,22 @@ function Coupons() {
   const [festCoupons, setFestCoupons] = useState([]);
   const [festLoading, setFestLoading] = useState(false);
   const [savingCoupon, setSavingCoupon] = useState(false);
-  const emptyForm = { code: "", type: "Percentage", value: "", minOrder: "", cap: "", expiry: "" };
+  const emptyForm = { code: "", type: "Percentage", value: "", minOrder: "", cap: "", expiry: "", targetType: "all" };
   const [form, setForm] = useState(emptyForm);
   const [editingCode, setEditingCode] = useState(null);
   const [editForm, setEditForm] = useState({});
   const [savingEdit, setSavingEdit] = useState(false);
+  // Customer targeting state
+  const [managingTargets, setManagingTargets] = useState(null); // coupon code currently managing
+  const [targetUsers, setTargetUsers] = useState([]); // already-assigned users for open coupon
+  const [targetSearch, setTargetSearch] = useState("");
+  const [targetSearchResults, setTargetSearchResults] = useState([]);
+  const [targetSearching, setTargetSearching] = useState(false);
+  // Form-level selected users (when creating a specific coupon)
+  const [formTargetUsers, setFormTargetUsers] = useState([]); // [{id,name,email,phone}]
+  const [formTargetSearch, setFormTargetSearch] = useState("");
+  const [formTargetResults, setFormTargetResults] = useState([]);
+  const [formTargetSearching, setFormTargetSearching] = useState(false);
 
   useEffect(() => {
     if (coupTab !== "Festival") return;
@@ -1066,10 +1077,34 @@ function Coupons() {
     }).catch(() => {}).finally(() => setFestLoading(false));
   }, [coupTab]);
 
+  async function searchFormTargetUsers(q) {
+    if (!q || q.length < 2) { setFormTargetResults([]); return; }
+    setFormTargetSearching(true);
+    try {
+      const res = await window.mpApi.fetch(`/admin/customers/search?q=${encodeURIComponent(q)}`);
+      setFormTargetResults(res?.data?.customers || []);
+    } catch { setFormTargetResults([]); }
+    finally { setFormTargetSearching(false); }
+  }
+
+  async function searchTargetUsers(q) {
+    if (!q || q.length < 2) { setTargetSearchResults([]); return; }
+    setTargetSearching(true);
+    try {
+      const res = await window.mpApi.fetch(`/admin/customers/search?q=${encodeURIComponent(q)}`);
+      setTargetSearchResults(res?.data?.customers || []);
+    } catch { setTargetSearchResults([]); }
+    finally { setTargetSearching(false); }
+  }
+
   async function createCoupon() {
     if (!form.code || !form.value) return;
     if (form.type === 'Percentage' && parseFloat(form.value) > 100) {
       alert('Percentage discounts cannot exceed 100%.');
+      return;
+    }
+    if (form.targetType === 'specific_customers' && formTargetUsers.length === 0) {
+      alert('Please select at least one customer for a customer-specific coupon.');
       return;
     }
     setSavingCoupon(true);
@@ -1084,11 +1119,16 @@ function Coupons() {
           min_order: parseFloat(form.minOrder) || 0,
           max_uses: form.cap ? parseInt(form.cap) : undefined,
           expires_at: form.expiry || undefined,
+          target_type: form.targetType,
+          user_ids: formTargetUsers.map(u => u.id),
         }),
       });
       if (res?.ok) {
-        setFestCoupons(prev => [res.data, ...prev]);
+        setFestCoupons(prev => [{ ...res.data, target_customer_count: formTargetUsers.length }, ...prev]);
         setForm(emptyForm);
+        setFormTargetUsers([]);
+        setFormTargetSearch("");
+        setFormTargetResults([]);
         setShowForm(false);
       } else {
         alert(res?.error?.message || 'Failed to create coupon.');
@@ -1238,7 +1278,14 @@ function Coupons() {
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                   <div className="input-group"><label className="input-label">Code</label><input className="input" placeholder="SUMMER25" value={form.code} onChange={e => setForm(f => ({ ...f, code: e.target.value.toUpperCase() }))} /></div>
                   <div className="input-group">
-                    <label className="input-label">Type</label>
+                    <label className="input-label">Availability</label>
+                    <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: "1.5px solid var(--border)" }}>
+                      <button type="button" onClick={() => setForm(f => ({ ...f, targetType: "all" }))} style={{ flex: 1, padding: "10px 12px", background: form.targetType === "all" ? "var(--orange)" : "transparent", color: form.targetType === "all" ? "#fff" : "var(--text-65)", fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 13, border: "none", cursor: "pointer", transition: "background .15s" }}>All Customers</button>
+                      <button type="button" onClick={() => setForm(f => ({ ...f, targetType: "specific_customers" }))} style={{ flex: 1, padding: "10px 12px", background: form.targetType === "specific_customers" ? "var(--orange)" : "transparent", color: form.targetType === "specific_customers" ? "#fff" : "var(--text-65)", fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 13, border: "none", borderLeft: "1.5px solid var(--border)", cursor: "pointer", transition: "background .15s" }}>Specific Customers</button>
+                    </div>
+                  </div>
+                  <div className="input-group">
+                    <label className="input-label">Discount Type</label>
                     <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: "1.5px solid var(--border)" }}>
                       <button type="button" onClick={() => setForm(f => ({ ...f, type: "Percentage" }))} style={{ flex: 1, padding: "10px 12px", background: form.type === "Percentage" ? "var(--orange)" : "transparent", color: form.type === "Percentage" ? "#fff" : "var(--text-65)", fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 13, border: "none", cursor: "pointer", transition: "background .15s" }}>% Percentage</button>
                       <button type="button" onClick={() => setForm(f => ({ ...f, type: "Flat amount" }))} style={{ flex: 1, padding: "10px 12px", background: form.type === "Flat amount" ? "var(--orange)" : "transparent", color: form.type === "Flat amount" ? "#fff" : "var(--text-65)", fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 13, border: "none", borderLeft: "1.5px solid var(--border)", cursor: "pointer", transition: "background .15s" }}>৳ Amount</button>
@@ -1253,7 +1300,40 @@ function Coupons() {
                   </div>
                   <div className="input-group"><label className="input-label">Min Order (৳)</label><input className="input" placeholder="200" value={form.minOrder} onChange={e => setForm(f => ({ ...f, minOrder: e.target.value }))} /></div>
                   <div className="input-group"><label className="input-label">Usage Cap</label><input className="input" placeholder="100" value={form.cap} onChange={e => setForm(f => ({ ...f, cap: e.target.value }))} /></div>
-                  <div className="input-group" style={{ gridColumn: "1/-1" }}><label className="input-label">Expiry</label><input className="input" type="date" value={form.expiry} onChange={e => setForm(f => ({ ...f, expiry: e.target.value }))} /></div>
+                  <div className="input-group" style={{ gridColumn: "1/-1" }}><label className="input-label">Expiry Date</label><input className="input" type="date" value={form.expiry} onChange={e => setForm(f => ({ ...f, expiry: e.target.value }))} /></div>
+                  {form.targetType === "specific_customers" && (
+                    <div className="input-group" style={{ gridColumn: "1/-1" }}>
+                      <label className="input-label">Add Customers (must have placed at least 1 order)</label>
+                      <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+                        <input className="input" style={{ flex: 1 }} placeholder="Search by name, email or phone…" value={formTargetSearch}
+                          onChange={e => { setFormTargetSearch(e.target.value); searchFormTargetUsers(e.target.value); }} />
+                      </div>
+                      {formTargetSearching && <div style={{ fontSize: 12, color: "var(--text-65)" }}>Searching…</div>}
+                      {formTargetResults.length > 0 && (
+                        <div style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden", marginBottom: 8 }}>
+                          {formTargetResults.filter(r => !formTargetUsers.find(u => u.id === r.id)).map(r => (
+                            <div key={r.id} style={{ padding: "8px 12px", cursor: "pointer", borderBottom: "1px solid var(--border)", fontSize: 13 }}
+                              onClick={() => { setFormTargetUsers(p => [...p, r]); setFormTargetResults([]); setFormTargetSearch(""); }}>
+                              <span style={{ fontWeight: 600 }}>{r.name}</span>
+                              <span style={{ color: "var(--text-65)", marginLeft: 8 }}>{r.phone || r.email}</span>
+                              <span style={{ float: "right", fontSize: 11, color: "var(--text-65)" }}>{r.order_count} order{r.order_count !== 1 ? "s" : ""}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {formTargetUsers.length > 0 && (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                          {formTargetUsers.map(u => (
+                            <span key={u.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(255,145,0,.12)", border: "1px solid rgba(255,145,0,.3)", borderRadius: 20, padding: "3px 10px", fontSize: 12 }}>
+                              {u.name}
+                              <button type="button" onClick={() => setFormTargetUsers(p => p.filter(x => x.id !== u.id))} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-65)", padding: 0, lineHeight: 1, fontWeight: 700 }}>×</button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {formTargetUsers.length === 0 && <div style={{ fontSize: 12, color: "var(--text-65)", marginTop: 4 }}>Search and select customers. They must log in to use this coupon.</div>}
+                    </div>
+                  )}
                 </div>
                 <div className="row mt8" style={{ gap: 10 }}>
                   <button className="btn btn-primary" disabled={savingCoupon || !form.code || !form.value} onClick={createCoupon}>{savingCoupon ? 'Saving…' : 'Create Coupon'}</button>
@@ -1266,12 +1346,12 @@ function Coupons() {
           <SectionCard style={{ padding: 0, overflow: "hidden" }}>
             <div className="table-wrap">
               <table className="data-table">
-                <thead><tr><th>Code</th><th>Discount</th><th>Min Order</th><th>Used / Cap</th><th>Expiry</th><th>Status</th><th>Actions</th></tr></thead>
+                <thead><tr><th>Code</th><th>Discount</th><th>Min Order</th><th>Used / Cap</th><th>Target</th><th>Expiry</th><th>Status</th><th>Actions</th></tr></thead>
                 <tbody>
                   {festLoading ? (
-                    <tr><td colSpan={7} style={{ textAlign: "center", padding: 24, color: "var(--text-65)" }}>Loading…</td></tr>
+                    <tr><td colSpan={8} style={{ textAlign: "center", padding: 24, color: "var(--text-65)" }}>Loading…</td></tr>
                   ) : festCoupons.length === 0 ? (
-                    <tr><td colSpan={7} style={{ textAlign: "center", padding: 32, color: "var(--text-65)" }}>No festival coupons yet.</td></tr>
+                    <tr><td colSpan={8} style={{ textAlign: "center", padding: 32, color: "var(--text-65)" }}>No festival coupons yet.</td></tr>
                   ) : festCoupons.map(c => (
                     <React.Fragment key={c.code}>
                       <tr>
@@ -1279,6 +1359,13 @@ function Coupons() {
                         <td>{c.discount_type === 'pct' ? `${c.discount_value}%` : `৳${c.discount_value}`}</td>
                         <td className="muted">৳{c.min_order || 0}</td>
                         <td>{c.used_count} / {c.max_uses ?? '∞'}</td>
+                        <td>
+                          {c.target_type === 'all' ? (
+                            <span className="muted" style={{ fontSize: 12 }}>All customers</span>
+                          ) : (
+                            <span style={{ fontSize: 12, color: "var(--text-65)" }}>{c.target_customer_count || 0} customer{(c.target_customer_count || 0) !== 1 ? 's' : ''}</span>
+                          )}
+                        </td>
                         <td className="muted">{c.expires_at ? new Date(c.expires_at).toLocaleDateString() : '—'}</td>
                         <td>
                           <span className={`badge ${c.is_active ? "badge-green" : "badge-gray"}`}>{c.is_active ? "Active" : "Inactive"}</span>
@@ -1291,6 +1378,21 @@ function Coupons() {
                             <button className="btn btn-sm btn-ghost" style={{ padding: "5px 10px", fontSize: 11 }} onClick={() => editingCode === c.code ? setEditingCode(null) : startEdit(c)}>
                               {editingCode === c.code ? "Cancel" : "Edit"}
                             </button>
+                            {c.target_type === 'specific_customers' && (
+                              <button className="btn btn-sm btn-ghost" style={{ padding: "5px 10px", fontSize: 11 }} onClick={() => {
+                                if (managingTargets === c.code) {
+                                  setManagingTargets(null); setTargetUsers([]); setTargetSearch(""); setTargetSearchResults([]);
+                                } else {
+                                  setManagingTargets(c.code);
+                                  setTargetUsers([]); setTargetSearch(""); setTargetSearchResults([]);
+                                  window.mpApi.fetch(`/admin/coupons/${c.code}/targeting`).then(res => {
+                                    if (res?.ok) setTargetUsers(res.data.users || []);
+                                  });
+                                }
+                              }}>
+                                Customers
+                              </button>
+                            )}
                             <button className="btn btn-sm btn-ghost" style={{ padding: "5px 10px", fontSize: 11 }} onClick={() => toggleCoupon(c.code)}>
                               {c.is_active ? "Deactivate" : "Activate"}
                             </button>
@@ -1300,7 +1402,7 @@ function Coupons() {
                       </tr>
                       {editingCode === c.code && (
                         <tr style={{ background: "rgba(255,145,0,.04)" }}>
-                          <td colSpan={7} style={{ padding: "16px 20px" }}>
+                          <td colSpan={8} style={{ padding: "16px 20px" }}>
                             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, alignItems: "flex-end" }}>
                               <div className="input-group" style={{ marginBottom: 0 }}>
                                 <label className="input-label">Type</label>
@@ -1323,6 +1425,74 @@ function Coupons() {
                               </div>
                               <button className="btn btn-primary" style={{ whiteSpace: "nowrap", marginBottom: 0 }} disabled={savingEdit || !editForm.value} onClick={() => saveEdit(c.code)}>
                                 {savingEdit ? "Saving…" : "Save"}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                      {managingTargets === c.code && c.target_type === 'specific_customers' && (
+                        <tr style={{ background: "rgba(76,175,80,.04)" }}>
+                          <td colSpan={8} style={{ padding: "16px 20px" }}>
+                            <div style={{ marginBottom: 8 }}>
+                              <div className="eyebrow" style={{ marginBottom: 8 }}>Manage Customers — {c.code}</div>
+                              {/* Current customers */}
+                              {targetUsers.length > 0 && (
+                                <div style={{ marginBottom: 10 }}>
+                                  <div style={{ fontSize: 12, color: "var(--text-65)", marginBottom: 6 }}>Current ({targetUsers.length})</div>
+                                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                                    {targetUsers.map(u => (
+                                      <span key={u.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(76,175,80,.12)", border: "1px solid rgba(76,175,80,.3)", borderRadius: 20, padding: "3px 10px", fontSize: 12 }}>
+                                        {u.name} <span style={{ color: "var(--text-65)" }}>{u.phone || u.email}</span>
+                                        <button type="button" onClick={() => {
+                                          window.mpApi.fetch(`/admin/coupons/${c.code}/customers`, {
+                                            method: 'DELETE',
+                                            body: JSON.stringify({ user_ids: [u.id] }),
+                                          }).then(res => {
+                                            if (res?.ok) {
+                                              setTargetUsers(p => p.filter(x => x.id !== u.id));
+                                              setFestCoupons(prev => prev.map(cp => cp.code === c.code ? { ...cp, target_customer_count: Math.max(0, (cp.target_customer_count || 1) - 1) } : cp));
+                                            }
+                                          });
+                                        }} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--red)", padding: 0, lineHeight: 1, fontWeight: 700 }}>×</button>
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              {targetUsers.length === 0 && <div style={{ fontSize: 12, color: "var(--text-65)", marginBottom: 8 }}>No customers assigned yet.</div>}
+                              {/* Add new customers */}
+                              <div style={{ fontSize: 12, color: "var(--text-65)", marginBottom: 6 }}>Add customers (search by name, email or phone):</div>
+                              <input className="input" style={{ marginBottom: 6 }} placeholder="Type to search registered customers with orders…"
+                                value={targetSearch} onChange={e => { setTargetSearch(e.target.value); searchTargetUsers(e.target.value); }} />
+                              {targetSearching && <div style={{ fontSize: 12, color: "var(--text-65)" }}>Searching…</div>}
+                              {targetSearchResults.length > 0 && (
+                                <div style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden", marginBottom: 8 }}>
+                                  {targetSearchResults.filter(r => !targetUsers.find(u => u.id === r.id)).map(r => (
+                                    <div key={r.id} style={{ padding: "8px 12px", cursor: "pointer", borderBottom: "1px solid var(--border)", fontSize: 13 }}
+                                      onClick={() => {
+                                        window.mpApi.fetch(`/admin/coupons/${c.code}/customers`, {
+                                          method: 'POST',
+                                          body: JSON.stringify({ user_ids: [r.id] }),
+                                        }).then(res => {
+                                          if (res?.ok) {
+                                            setTargetUsers(p => [...p, r]);
+                                            setFestCoupons(prev => prev.map(cp => cp.code === c.code ? { ...cp, target_customer_count: (cp.target_customer_count || 0) + res.data.added } : cp));
+                                            setTargetSearchResults([]);
+                                            setTargetSearch("");
+                                          } else {
+                                            alert(res?.error?.message || 'Failed to add customer.');
+                                          }
+                                        });
+                                      }}>
+                                      <span style={{ fontWeight: 600 }}>{r.name}</span>
+                                      <span style={{ color: "var(--text-65)", marginLeft: 8 }}>{r.phone || r.email}</span>
+                                      <span style={{ float: "right", fontSize: 11, color: "var(--text-65)" }}>{r.order_count} order{r.order_count !== 1 ? "s" : ""}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                              <button className="btn btn-ghost btn-sm" style={{ fontSize: 12, marginTop: 4 }} onClick={() => { setManagingTargets(null); setTargetUsers([]); setTargetSearch(""); setTargetSearchResults([]); }}>
+                                Close
                               </button>
                             </div>
                           </td>
@@ -1679,6 +1849,8 @@ function CrewManagement() {
           </div>
           <div className="grid-2">
             {[
+              ["Accept crew applications", "applications_enabled"],
+              ["Allow reapply after rejection", "allow_reapply_after_rejection"],
               ["Require admin approval for new crew coupons", "require_coupon_approval"],
               ["Allow crew to edit active coupons", "allow_crew_edit_active_coupon"],
               ["Allow crew to deactivate coupons", "allow_crew_deactivate_coupon"],
@@ -1741,156 +1913,398 @@ function CrewManagement() {
   );
 }
 
-// ── Section: Points & Redemptions ─────────────────────
-function PointsAdmin() {
-  const [rewards, setRewards]   = useState([]);
-  const [loading, setLoading]   = useState(true);
-  const [panel, setPanel]       = useState(null); // null | { mode: 'add' | 'edit', data }
-  const [busy, setBusy]         = useState(false);
-  const [form, setForm]         = useState({ label: "", pts_cost: "", worth: "", is_active: true, sort_order: 0 });
-  const [redemptions, setRedemptions] = useState([]);
-  const [redLoading, setRedLoading]   = useState(true);
+// ── Section: User Management ─────────────────────
+function UsersAdmin() {
+  const [users, setUsers]           = useState([]);
+  const [loading, setLoading]       = useState(true);
+  const [search, setSearch]         = useState('');
+  const [filterStatus, setFilterStatus] = useState('all');
+  const [page, setPage]             = useState(1);
+  const [total, setTotal]           = useState(0);
+  const [limit] = useState(20);
+  const [selectedUser, setSelectedUser] = useState(null);
+  const [actionInProgress, setActionInProgress] = useState(false);
+  const [actionMessage, setActionMessage] = useState('');
+
+  const loadUsers = useCallback(async () => {
+    setLoading(true);
+    try {
+      const query = new URLSearchParams({
+        page,
+        limit,
+        search,
+        status: filterStatus,
+      });
+      const res = await window.mpApi.fetch(`/admin/users?${query}`);
+      if (res?.ok) {
+        setUsers(res.data.users || []);
+        setTotal(res.data.total || 0);
+      }
+    } catch (err) {
+      console.error('Failed to load users:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [page, limit, search, filterStatus]);
 
   useEffect(() => {
-    window.mpApi.fetch('/admin/point-rewards')
-      .then(res => setRewards(res?.data?.rewards || []))
-      .catch(() => {})
-      .finally(() => setLoading(false));
-    window.mpApi.fetch('/admin/redemptions')
-      .then(res => setRedemptions(res?.data?.redemptions || []))
-      .catch(() => {})
-      .finally(() => setRedLoading(false));
-  }, []);
+    loadUsers();
+  }, [loadUsers]);
 
-  async function resolveRedemption(r, status) {
-    if (status === 'cancelled') {
-      const c = await Swal.fire({
-        title: 'Cancel redemption?',
-        text: `${Number(r.pts_cost).toLocaleString()} pts will be refunded to ${r.user_name || 'the customer'}.`,
-        icon: 'warning',
-        showCancelButton: true,
-        confirmButtonText: 'Cancel & Refund',
-        confirmButtonColor: '#d33',
-        background: '#fff',
-      });
-      if (!c.isConfirmed) return;
-    }
-    const res = await window.mpApi.fetch(`/admin/redemptions/${r.id}`, {
-      method: 'PATCH', body: JSON.stringify({ status }),
-    }).catch(() => null);
-    if (res?.ok) setRedemptions(prev => prev.map(x => x.id === r.id ? { ...x, status } : x));
-    else alert(res?.error?.message || 'Failed to update redemption.');
-  }
-
-  function openAdd() {
-    setForm({ label: "", pts_cost: "", worth: "", is_active: true, sort_order: 0 });
-    setPanel({ mode: "add" });
-  }
-
-  function openEdit(r) {
-    setForm({ label: r.label, pts_cost: String(r.pts_cost), worth: r.worth || "", is_active: r.is_active, sort_order: r.sort_order });
-    setPanel({ mode: "edit", id: r.id });
-  }
-
-  async function handleSave() {
-    if (!form.label.trim() || !form.pts_cost) return;
-    setBusy(true);
+  const handleActivate = async (userId, userEmail) => {
+    if (!confirm(`Activate user ${userEmail}?`)) return;
+    setActionInProgress(true);
+    setActionMessage('');
     try {
-      const body = {
-        label:      form.label.trim(),
-        pts_cost:   parseInt(form.pts_cost),
-        worth:      form.worth.trim() || null,
-        is_active:  form.is_active,
-        sort_order: parseInt(form.sort_order) || 0,
-      };
-      if (panel.mode === "add") {
-        const res = await window.mpApi.fetch('/admin/point-rewards', { method: 'POST', body: JSON.stringify(body) });
-        if (res?.ok) setRewards(prev => [...prev, res.data]);
-        else alert(res?.error?.message || 'Failed to create reward.');
+      const res = await window.mpApi.fetch(`/admin/users/${userId}/activate`, { method: 'PATCH' });
+      if (res?.ok) {
+        setActionMessage(`✓ ${userEmail} has been activated`);
+        setTimeout(() => setActionMessage(''), 3000);
+        loadUsers();
       } else {
-        const res = await window.mpApi.fetch(`/admin/point-rewards/${panel.id}`, { method: 'PATCH', body: JSON.stringify(body) });
-        if (res?.ok) setRewards(prev => prev.map(r => r.id === panel.id ? res.data : r));
-        else alert(res?.error?.message || 'Failed to update reward.');
+        throw new Error(res?.error?.message || 'Failed to activate user');
       }
-      setPanel(null);
-    } catch (e) { alert(e.message); }
-    finally { setBusy(false); }
-  }
+    } catch (err) {
+      setActionMessage(`✗ ${err.message}`);
+    } finally {
+      setActionInProgress(false);
+    }
+  };
 
-  async function handleToggle(r) {
-    const res = await window.mpApi.fetch(`/admin/point-rewards/${r.id}`, {
-      method: 'PATCH', body: JSON.stringify({ is_active: !r.is_active }),
-    }).catch(() => null);
-    if (res?.ok) setRewards(prev => prev.map(x => x.id === r.id ? res.data : x));
-  }
+  const handleDeactivate = async (userId, userEmail) => {
+    if (!confirm(`Deactivate user ${userEmail}? They will not be able to log in.`)) return;
+    setActionInProgress(true);
+    setActionMessage('');
+    try {
+      const res = await window.mpApi.fetch(`/admin/users/${userId}/deactivate`, {
+        method: 'PATCH',
+        body: JSON.stringify({ reason: 'Deactivated by admin' }),
+      });
+      if (res?.ok) {
+        setActionMessage(`✓ ${userEmail} has been deactivated`);
+        setTimeout(() => setActionMessage(''), 3000);
+        loadUsers();
+      } else {
+        throw new Error(res?.error?.message || 'Failed to deactivate user');
+      }
+    } catch (err) {
+      setActionMessage(`✗ ${err.message}`);
+    } finally {
+      setActionInProgress(false);
+    }
+  };
 
-  async function handleDelete(r) {
-    const confirmed = await Swal.fire({
-      title: 'Delete reward?',
-      text: `"${r.label}" will be permanently removed.`,
-      icon: 'warning',
-      showCancelButton: true,
-      confirmButtonText: 'Delete',
-      confirmButtonColor: '#d33',
-      background: '#fff',
-    });
-    if (!confirmed.isConfirmed) return;
-    const res = await window.mpApi.fetch(`/admin/point-rewards/${r.id}`, { method: 'DELETE' }).catch(() => null);
-    if (res?.ok) setRewards(prev => prev.filter(x => x.id !== r.id));
-    else alert(res?.error?.message || 'Failed to delete reward.');
-  }
+  const totalPages = Math.ceil(total / limit);
+
+  return (
+    <div className="admin-section">
+      <div className="admin-header">
+        <h1>User Management</h1>
+        <p>Manage user accounts and activation status</p>
+      </div>
+
+      <div className="admin-filters">
+        <input
+          type="text"
+          placeholder="Search by email, phone, or name…"
+          value={search}
+          onChange={e => { setSearch(e.target.value); setPage(1); }}
+          className="input input-sm"
+          style={{ flex: 1 }}
+        />
+        <select
+          value={filterStatus}
+          onChange={e => { setFilterStatus(e.target.value); setPage(1); }}
+          className="select select-sm"
+        >
+          <option value="all">All Users</option>
+          <option value="active">Active Only</option>
+          <option value="inactive">Inactive Only</option>
+        </select>
+      </div>
+
+      {actionMessage && (
+        <div style={{
+          padding: '12px 16px',
+          marginBottom: '16px',
+          borderRadius: '6px',
+          background: actionMessage.startsWith('✗') ? 'rgba(255, 68, 68, 0.1)' : 'rgba(76, 175, 80, 0.1)',
+          color: actionMessage.startsWith('✗') ? '#ff4444' : '#4caf50',
+          fontSize: '13px',
+          fontWeight: 500,
+        }}>
+          {actionMessage}
+        </div>
+      )}
+
+      {loading ? (
+        <LoadingScreen message="Loading users…" />
+      ) : users.length === 0 ? (
+        <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--cream-soft)' }}>
+          No users found
+        </div>
+      ) : (
+        <>
+          <div className="admin-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>Email</th>
+                  <th>Phone</th>
+                  <th>Name</th>
+                  <th>Role</th>
+                  <th>Status</th>
+                  <th>Points</th>
+                  <th>Joined</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {users.map(user => (
+                  <tr key={user.id}>
+                    <td>{user.email || '—'}</td>
+                    <td>{user.phone || '—'}</td>
+                    <td>{user.name || '—'}</td>
+                    <td>
+                      <span style={{
+                        padding: '4px 8px',
+                        borderRadius: '4px',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        background: user.role === 'admin' ? 'rgba(255, 145, 0, 0.2)' : 'rgba(76, 175, 80, 0.2)',
+                        color: user.role === 'admin' ? 'var(--flame)' : '#4caf50',
+                        textTransform: 'uppercase',
+                      }}>
+                        {user.role}
+                      </span>
+                    </td>
+                    <td>
+                      <span style={{
+                        padding: '4px 8px',
+                        borderRadius: '4px',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        background: user.is_active ? 'rgba(76, 175, 80, 0.2)' : 'rgba(255, 68, 68, 0.2)',
+                        color: user.is_active ? '#4caf50' : '#ff4444',
+                        textTransform: 'uppercase',
+                      }}>
+                        {user.is_active ? 'Active' : 'Inactive'}
+                      </span>
+                    </td>
+                    <td>{user.points_balance.toLocaleString()}</td>
+                    <td style={{ fontSize: '12px', color: 'var(--cream-soft)' }}>
+                      {new Date(user.created_at).toLocaleDateString()}
+                    </td>
+                    <td>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        {user.is_active ? (
+                          <button
+                            onClick={() => handleDeactivate(user.id, user.email || user.phone)}
+                            disabled={actionInProgress}
+                            className="btn btn-sm btn-outline"
+                            style={{ color: '#ff4444', borderColor: '#ff4444' }}
+                          >
+                            Deactivate
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleActivate(user.id, user.email || user.phone)}
+                            disabled={actionInProgress}
+                            className="btn btn-sm btn-primary"
+                          >
+                            Activate
+                          </button>
+                        )}
+                        <button
+                          onClick={() => setSelectedUser(user.id === selectedUser ? null : user.id)}
+                          className="btn btn-sm btn-ghost"
+                        >
+                          <i className="fa fa-chevron-down" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {totalPages > 1 && (
+            <div className="pagination" style={{ marginTop: '24px' }}>
+              <button
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                disabled={page === 1}
+                className="btn btn-sm btn-ghost"
+              >
+                ← Prev
+              </button>
+              <span style={{ padding: '8px 16px', color: 'var(--cream-soft)' }}>
+                Page {page} of {totalPages}
+              </span>
+              <button
+                onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                disabled={page === totalPages}
+                className="btn btn-sm btn-ghost"
+              >
+                Next →
+              </button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── Section: Points & Redemptions ─────────────────────
+function PointsAdmin() {
+  const [tab, setTab] = useState("tiers");
 
   return (
     <div className="dash-inner">
       <div className="page-title">Points &amp; Redemptions</div>
-
-      {/* Rewards catalogue */}
-      <div className="row-between mb10">
-        <div className="eyebrow" style={{ marginBottom: 0 }}>Point Rewards Catalogue</div>
-        <button className="btn btn-primary btn-sm" onClick={openAdd}>
-          <i className="fa fa-plus" style={{ fontSize: 11 }} /> Add Reward
-        </button>
+      <div className="toggle-group mb20" style={{ flexWrap: "wrap" }}>
+        {["tiers", "settings", "catalogue", "redemptions", "claims"].map(t => (
+          <button key={t} className={`toggle-btn ${tab === t ? "active" : ""}`} onClick={() => setTab(t)} style={{ textTransform: "capitalize" }}>{t === "claims" ? "Tier Claims" : t}</button>
+        ))}
       </div>
+      {tab === "tiers"       && <PointsTiersTab />}
+      {tab === "settings"    && <PointsSettingsTab />}
+      {tab === "catalogue"   && <PointsCatalogueTab />}
+      {tab === "redemptions" && <PointsRedemptionsTab />}
+      {tab === "claims"      && <PointsTierClaimsTab />}
+    </div>
+  );
+}
 
+function PointsSettingsTab() {
+  const [settings, setSettings] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    window.mpApi.fetch('/admin/points-settings').then(r => setSettings(r?.data || null)).catch(() => null);
+  }, []);
+
+  async function save() {
+    if (!settings) return;
+    setBusy(true);
+    const res = await window.mpApi.fetch('/admin/points-settings', {
+      method: 'PATCH',
+      body: JSON.stringify({ points_per_100_taka: Number(settings.points_per_100_taka), min_order_amount: Number(settings.min_order_amount) }),
+    }).catch(() => null);
+    setBusy(false);
+    if (res?.ok) Swal.fire({ title: "Saved", icon: "success", timer: 1200, showConfirmButton: false, background: "#fff" });
+    else alert(res?.error?.message || "Failed to save.");
+  }
+
+  if (!settings) return <div style={{ textAlign: "center", padding: 32 }}><i className="fa fa-spinner fa-spin" style={{ color: "var(--orange)" }} /></div>;
+
+  return (
+    <SectionCard>
+      <div className="eyebrow mb14">Earning Rate</div>
+      <div className="grid-2">
+        <div className="input-group">
+          <label className="input-label">Points awarded per ৳100 spent</label>
+          <input className="input" type="number" min="0" value={settings.points_per_100_taka} onChange={e => setSettings(s => ({ ...s, points_per_100_taka: e.target.value }))} />
+        </div>
+        <div className="input-group">
+          <label className="input-label">Minimum order amount to earn points (৳)</label>
+          <input className="input" type="number" min="0" value={settings.min_order_amount} onChange={e => setSettings(s => ({ ...s, min_order_amount: e.target.value }))} />
+        </div>
+      </div>
+      <div className="text-sm text-muted mb16" style={{ marginTop: -8 }}>
+        At current rate: ৳100 = {settings.points_per_100_taka} pts &nbsp;·&nbsp; ৳1,000 = {settings.points_per_100_taka * 10} pts
+      </div>
+      <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? "Saving…" : "Save Settings"}</button>
+    </SectionCard>
+  );
+}
+
+function PointsTiersTab() {
+  const [tiers, setTiers]     = useState([]);
+  const [products, setProducts] = useState([]);
+  const [panel, setPanel]     = useState(null);
+  const [busy, setBusy]       = useState(false);
+  const BLANK = { name: "", min_lifetime_pts: "", badge_color: "#CD7F32", reward_product_id: "", reward_variant_id: "", sort_order: 0, is_active: true };
+  const [form, setForm]       = useState(BLANK);
+
+  useEffect(() => {
+    window.mpApi.fetch('/admin/loyalty-tiers').then(r => setTiers(r?.data?.tiers || [])).catch(() => null);
+    fetch('/api/v1/products').then(r => r.json()).then(r => setProducts(r?.data?.products || [])).catch(() => null);
+  }, []);
+
+  const selectedProduct = products.find(p => p.id === form.reward_product_id);
+  const variants = selectedProduct
+    ? (selectedProduct.variants || [])
+    : [];
+
+  function openAdd() { setForm(BLANK); setPanel({ mode: "add" }); }
+  function openEdit(t) {
+    setForm({ name: t.name, min_lifetime_pts: String(t.min_lifetime_pts), badge_color: t.badge_color, reward_product_id: t.reward_product_id || "", reward_variant_id: t.reward_variant_id || "", sort_order: t.sort_order, is_active: t.is_active });
+    setPanel({ mode: "edit", id: t.id });
+  }
+
+  async function handleSave() {
+    if (!form.name.trim() || form.min_lifetime_pts === "") return;
+    setBusy(true);
+    try {
+      const body = {
+        name:              form.name.trim(),
+        min_lifetime_pts:  parseInt(form.min_lifetime_pts),
+        badge_color:       form.badge_color || "#CD7F32",
+        reward_product_id: form.reward_product_id || null,
+        reward_variant_id: form.reward_variant_id || null,
+        sort_order:        parseInt(form.sort_order) || 0,
+        is_active:         form.is_active,
+      };
+      if (panel.mode === "add") {
+        const res = await window.mpApi.fetch('/admin/loyalty-tiers', { method: 'POST', body: JSON.stringify(body) });
+        if (res?.ok) { setTiers(prev => [...prev, res.data]); setPanel(null); }
+        else alert(res?.error?.message || 'Failed to create tier.');
+      } else {
+        const res = await window.mpApi.fetch(`/admin/loyalty-tiers/${panel.id}`, { method: 'PATCH', body: JSON.stringify(body) });
+        if (res?.ok) { setTiers(prev => prev.map(t => t.id === panel.id ? res.data : t)); setPanel(null); }
+        else alert(res?.error?.message || 'Failed to update tier.');
+      }
+    } finally { setBusy(false); }
+  }
+
+  async function handleDelete(t) {
+    const c = await Swal.fire({ title: `Deactivate "${t.name}"?`, icon: 'warning', showCancelButton: true, confirmButtonText: 'Deactivate', confirmButtonColor: '#d33', background: '#fff' });
+    if (!c.isConfirmed) return;
+    const res = await window.mpApi.fetch(`/admin/loyalty-tiers/${t.id}`, { method: 'DELETE' }).catch(() => null);
+    if (res?.ok) setTiers(prev => prev.map(x => x.id === t.id ? { ...x, is_active: false } : x));
+  }
+
+  return (
+    <>
+      <div className="row-between mb10">
+        <div className="eyebrow" style={{ marginBottom: 0 }}>Loyalty Tiers</div>
+        <button className="btn btn-primary btn-sm" onClick={openAdd}><i className="fa fa-plus" style={{ fontSize: 11 }} /> Add Tier</button>
+      </div>
       <div className="card mb20">
-        {loading ? (
-          <div style={{ textAlign: "center", padding: 24 }}><i className="fa fa-spinner fa-spin" style={{ color: "var(--orange)" }} /></div>
-        ) : rewards.length === 0 ? (
-          <div style={{ textAlign: "center", padding: "24px 0", color: "var(--text-65)", fontSize: 13 }}>No rewards yet. Add one above.</div>
+        {tiers.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "24px 0", color: "var(--text-65)", fontSize: 13 }}>No tiers yet. Create one to start rewarding customers.</div>
         ) : (
           <div className="table-wrap">
             <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Label</th>
-                  <th>Points Cost</th>
-                  <th>Worth</th>
-                  <th>Order</th>
-                  <th>Status</th>
-                  <th></th>
-                </tr>
-              </thead>
+              <thead><tr><th>Tier</th><th>Lifetime pts needed</th><th>Reward product</th><th>Status</th><th></th></tr></thead>
               <tbody>
-                {rewards.map(r => (
-                  <tr key={r.id}>
-                    <td style={{ fontWeight: 600 }}>{r.label}</td>
-                    <td style={{ color: "var(--orange)", fontWeight: 700 }}>{Number(r.pts_cost).toLocaleString()} pts</td>
-                    <td className="text-muted">{r.worth || "—"}</td>
-                    <td className="text-muted">{r.sort_order}</td>
+                {tiers.map(t => (
+                  <tr key={t.id}>
                     <td>
-                      <span className={`badge ${r.is_active ? "badge-green" : "badge-gray"}`}>
-                        {r.is_active ? "Active" : "Hidden"}
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+                        <span style={{ width: 12, height: 12, borderRadius: "50%", background: t.badge_color, flexShrink: 0 }} />
+                        <span style={{ fontWeight: 700 }}>{t.name}</span>
                       </span>
                     </td>
+                    <td style={{ color: "var(--orange)", fontWeight: 700 }}>{Number(t.min_lifetime_pts).toLocaleString()} pts</td>
+                    <td className="text-muted">{t.product_name || "—"}{t.variant_label ? ` — ${t.variant_label}` : ""}</td>
+                    <td><span className={`badge ${t.is_active ? "badge-green" : "badge-gray"}`}>{t.is_active ? "Active" : "Inactive"}</span></td>
                     <td>
                       <div className="row" style={{ gap: 6, justifyContent: "flex-end" }}>
-                        <button className="btn btn-ghost btn-sm" onClick={() => openEdit(r)}>Edit</button>
-                        <button className="btn btn-ghost btn-sm" onClick={() => handleToggle(r)}>
-                          {r.is_active ? "Hide" : "Show"}
-                        </button>
-                        <button className="btn btn-ghost btn-sm" style={{ color: "var(--red)" }} onClick={() => handleDelete(r)}>
-                          Delete
-                        </button>
+                        <button className="btn btn-ghost btn-sm" onClick={() => openEdit(t)}>Edit</button>
+                        {t.is_active && <button className="btn btn-ghost btn-sm" style={{ color: "var(--red)" }} onClick={() => handleDelete(t)}>Deactivate</button>}
                       </div>
                     </td>
                   </tr>
@@ -1901,48 +2315,114 @@ function PointsAdmin() {
         )}
       </div>
 
-      {/* Redemption requests */}
-      <div className="eyebrow mb10">Redemption Requests</div>
+      {panel && (
+        <div className="overlay" onClick={() => setPanel(null)}>
+          <div className="sheet" onClick={e => e.stopPropagation()}>
+            <div className="sheet-handle" />
+            <div className="sheet-title">{panel.mode === "add" ? "Add Tier" : "Edit Tier"}</div>
+            <div className="input-group"><label className="input-label">Tier name</label><input className="input" placeholder="e.g. Silver" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} /></div>
+            <div className="input-group"><label className="input-label">Lifetime points required</label><input className="input" type="number" min="0" placeholder="e.g. 1000" value={form.min_lifetime_pts} onChange={e => setForm(f => ({ ...f, min_lifetime_pts: e.target.value }))} /></div>
+            <div className="input-group"><label className="input-label">Badge color</label><input className="input" type="color" value={form.badge_color} onChange={e => setForm(f => ({ ...f, badge_color: e.target.value }))} style={{ height: 40, padding: "2px 6px", cursor: "pointer" }} /></div>
+            <div className="input-group">
+              <label className="input-label">Reward product (free on next order)</label>
+              <select className="select" value={form.reward_product_id} onChange={e => setForm(f => ({ ...f, reward_product_id: e.target.value, reward_variant_id: "" }))}>
+                <option value="">— No reward product —</option>
+                {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </div>
+            {selectedProduct?.variants?.length > 0 && (
+              <div className="input-group">
+                <label className="input-label">Reward variant</label>
+                <select className="select" value={form.reward_variant_id} onChange={e => setForm(f => ({ ...f, reward_variant_id: e.target.value }))}>
+                  <option value="">— Default variant —</option>
+                  {selectedProduct.variants.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
+                </select>
+              </div>
+            )}
+            <div className="input-group"><label className="input-label">Sort order</label><input className="input" type="number" min="0" value={form.sort_order} onChange={e => setForm(f => ({ ...f, sort_order: e.target.value }))} /></div>
+            <label className="row mb16" style={{ gap: 8, cursor: "pointer" }}><input type="checkbox" checked={form.is_active} onChange={e => setForm(f => ({ ...f, is_active: e.target.checked }))} /> <span className="text-sm">Active</span></label>
+            <div className="col-gap">
+              <button className="btn btn-primary btn-full" onClick={handleSave} disabled={busy || !form.name.trim() || form.min_lifetime_pts === ""}>{busy ? "Saving…" : "Save Tier"}</button>
+              <button className="btn btn-ghost btn-full" onClick={() => setPanel(null)} disabled={busy}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function PointsCatalogueTab() {
+  const [rewards, setRewards]   = useState([]);
+  const [loading, setLoading]   = useState(true);
+  const [panel, setPanel]       = useState(null);
+  const [busy, setBusy]         = useState(false);
+  const [form, setForm]         = useState({ label: "", pts_cost: "", worth: "", is_active: true, sort_order: 0 });
+
+  useEffect(() => {
+    window.mpApi.fetch('/admin/point-rewards').then(res => setRewards(res?.data?.rewards || [])).catch(() => {}).finally(() => setLoading(false));
+  }, []);
+
+  function openAdd() { setForm({ label: "", pts_cost: "", worth: "", is_active: true, sort_order: 0 }); setPanel({ mode: "add" }); }
+  function openEdit(r) { setForm({ label: r.label, pts_cost: String(r.pts_cost), worth: r.worth || "", is_active: r.is_active, sort_order: r.sort_order }); setPanel({ mode: "edit", id: r.id }); }
+
+  async function handleSave() {
+    if (!form.label.trim() || !form.pts_cost) return;
+    setBusy(true);
+    try {
+      const body = { label: form.label.trim(), pts_cost: parseInt(form.pts_cost), worth: form.worth.trim() || null, is_active: form.is_active, sort_order: parseInt(form.sort_order) || 0 };
+      if (panel.mode === "add") {
+        const res = await window.mpApi.fetch('/admin/point-rewards', { method: 'POST', body: JSON.stringify(body) });
+        if (res?.ok) setRewards(prev => [...prev, res.data]);
+        else alert(res?.error?.message || 'Failed.');
+      } else {
+        const res = await window.mpApi.fetch(`/admin/point-rewards/${panel.id}`, { method: 'PATCH', body: JSON.stringify(body) });
+        if (res?.ok) setRewards(prev => prev.map(r => r.id === panel.id ? res.data : r));
+        else alert(res?.error?.message || 'Failed.');
+      }
+      setPanel(null);
+    } finally { setBusy(false); }
+  }
+
+  async function handleToggle(r) {
+    const res = await window.mpApi.fetch(`/admin/point-rewards/${r.id}`, { method: 'PATCH', body: JSON.stringify({ is_active: !r.is_active }) }).catch(() => null);
+    if (res?.ok) setRewards(prev => prev.map(x => x.id === r.id ? res.data : x));
+  }
+
+  async function handleDelete(r) {
+    const c = await Swal.fire({ title: 'Delete reward?', text: `"${r.label}" will be removed.`, icon: 'warning', showCancelButton: true, confirmButtonText: 'Delete', confirmButtonColor: '#d33', background: '#fff' });
+    if (!c.isConfirmed) return;
+    const res = await window.mpApi.fetch(`/admin/point-rewards/${r.id}`, { method: 'DELETE' }).catch(() => null);
+    if (res?.ok) setRewards(prev => prev.filter(x => x.id !== r.id));
+  }
+
+  return (
+    <>
+      <div className="row-between mb10">
+        <div className="eyebrow" style={{ marginBottom: 0 }}>Point Rewards Catalogue</div>
+        <button className="btn btn-primary btn-sm" onClick={openAdd}><i className="fa fa-plus" style={{ fontSize: 11 }} /> Add Reward</button>
+      </div>
       <div className="card mb20">
-        {redLoading ? (
-          <div style={{ textAlign: "center", padding: 24 }}><i className="fa fa-spinner fa-spin" style={{ color: "var(--orange)" }} /></div>
-        ) : redemptions.length === 0 ? (
-          <div style={{ textAlign: "center", padding: "24px 0", color: "var(--text-65)", fontSize: 13 }}>No redemptions yet.</div>
-        ) : (
+        {loading ? <div style={{ textAlign: "center", padding: 24 }}><i className="fa fa-spinner fa-spin" style={{ color: "var(--orange)" }} /></div>
+        : rewards.length === 0 ? <div style={{ textAlign: "center", padding: "24px 0", color: "var(--text-65)", fontSize: 13 }}>No rewards yet.</div>
+        : (
           <div className="table-wrap">
             <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Customer</th>
-                  <th>Reward</th>
-                  <th>Points</th>
-                  <th>Requested</th>
-                  <th>Status</th>
-                  <th></th>
-                </tr>
-              </thead>
+              <thead><tr><th>Label</th><th>Points Cost</th><th>Worth</th><th>Order</th><th>Status</th><th></th></tr></thead>
               <tbody>
-                {redemptions.map(r => (
+                {rewards.map(r => (
                   <tr key={r.id}>
-                    <td>
-                      <div style={{ fontWeight: 600 }}>{r.user_name || "—"}</div>
-                      <div className="text-muted" style={{ fontSize: 12 }}>{r.user_phone || ""}</div>
-                    </td>
-                    <td>{r.reward_label}{r.worth ? <span className="text-muted"> ({r.worth})</span> : null}</td>
+                    <td style={{ fontWeight: 600 }}>{r.label}</td>
                     <td style={{ color: "var(--orange)", fontWeight: 700 }}>{Number(r.pts_cost).toLocaleString()} pts</td>
-                    <td className="text-muted">{new Date(r.created_at).toLocaleDateString()}</td>
+                    <td className="text-muted">{r.worth || "—"}</td>
+                    <td className="text-muted">{r.sort_order}</td>
+                    <td><span className={`badge ${r.is_active ? "badge-green" : "badge-gray"}`}>{r.is_active ? "Active" : "Hidden"}</span></td>
                     <td>
-                      <span className={`badge ${r.status === 'fulfilled' ? "badge-green" : r.status === 'cancelled' ? "badge-gray" : "badge-orange"}`}>
-                        {r.status === 'fulfilled' ? "Fulfilled" : r.status === 'cancelled' ? "Cancelled" : "Pending"}
-                      </span>
-                    </td>
-                    <td>
-                      {r.status === 'pending' && (
-                        <div className="row" style={{ gap: 6, justifyContent: "flex-end" }}>
-                          <button className="btn btn-ghost btn-sm" onClick={() => resolveRedemption(r, 'fulfilled')}>Fulfil</button>
-                          <button className="btn btn-ghost btn-sm" style={{ color: "var(--red)" }} onClick={() => resolveRedemption(r, 'cancelled')}>Cancel</button>
-                        </div>
-                      )}
+                      <div className="row" style={{ gap: 6, justifyContent: "flex-end" }}>
+                        <button className="btn btn-ghost btn-sm" onClick={() => openEdit(r)}>Edit</button>
+                        <button className="btn btn-ghost btn-sm" onClick={() => handleToggle(r)}>{r.is_active ? "Hide" : "Show"}</button>
+                        <button className="btn btn-ghost btn-sm" style={{ color: "var(--red)" }} onClick={() => handleDelete(r)}>Delete</button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -1951,47 +2431,124 @@ function PointsAdmin() {
           </div>
         )}
       </div>
-
-      {/* Add / Edit panel */}
       {panel && (
         <div className="overlay" onClick={() => setPanel(null)}>
           <div className="sheet" onClick={e => e.stopPropagation()}>
             <div className="sheet-handle" />
             <div className="sheet-title">{panel.mode === "add" ? "Add Reward" : "Edit Reward"}</div>
-
-            <div className="input-group">
-              <label className="input-label">Label</label>
-              <input className="input" placeholder="e.g. 1 Free Sachet" value={form.label} onChange={e => setForm(f => ({ ...f, label: e.target.value }))} />
-            </div>
-            <div className="input-group">
-              <label className="input-label">Points Cost</label>
-              <input className="input" type="number" min="1" placeholder="e.g. 1000" value={form.pts_cost} onChange={e => setForm(f => ({ ...f, pts_cost: e.target.value }))} />
-            </div>
-            <div className="input-group">
-              <label className="input-label">Worth (display only, e.g. ৳25)</label>
-              <input className="input" placeholder="Optional" value={form.worth} onChange={e => setForm(f => ({ ...f, worth: e.target.value }))} />
-            </div>
-            <div className="input-group">
-              <label className="input-label">Sort Order (lower = first)</label>
-              <input className="input" type="number" min="0" value={form.sort_order} onChange={e => setForm(f => ({ ...f, sort_order: e.target.value }))} />
-            </div>
-            <div className="input-group" style={{ marginBottom: 0 }}>
-              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-                <input type="checkbox" checked={form.is_active} onChange={e => setForm(f => ({ ...f, is_active: e.target.checked }))} style={{ accentColor: "var(--orange)" }} />
-                <span className="input-label" style={{ marginBottom: 0 }}>Active (visible to customers)</span>
-              </label>
-            </div>
-
-            <div className="col-gap" style={{ marginTop: 20 }}>
-              <button className="btn btn-primary btn-full" onClick={handleSave} disabled={busy || !form.label.trim() || !form.pts_cost}>
-                {busy ? <><i className="fa fa-spinner fa-spin" /> Saving…</> : "Save Reward"}
-              </button>
+            <div className="input-group"><label className="input-label">Label</label><input className="input" placeholder="e.g. 1 Free Sachet" value={form.label} onChange={e => setForm(f => ({ ...f, label: e.target.value }))} /></div>
+            <div className="input-group"><label className="input-label">Points Cost</label><input className="input" type="number" min="1" value={form.pts_cost} onChange={e => setForm(f => ({ ...f, pts_cost: e.target.value }))} /></div>
+            <div className="input-group"><label className="input-label">Worth (display, e.g. ৳25)</label><input className="input" placeholder="Optional" value={form.worth} onChange={e => setForm(f => ({ ...f, worth: e.target.value }))} /></div>
+            <div className="input-group"><label className="input-label">Sort Order</label><input className="input" type="number" min="0" value={form.sort_order} onChange={e => setForm(f => ({ ...f, sort_order: e.target.value }))} /></div>
+            <label className="row mb16" style={{ gap: 8 }}><input type="checkbox" checked={form.is_active} onChange={e => setForm(f => ({ ...f, is_active: e.target.checked }))} style={{ accentColor: "var(--orange)" }} /><span className="input-label" style={{ marginBottom: 0 }}>Active (visible to customers)</span></label>
+            <div className="col-gap">
+              <button className="btn btn-primary btn-full" onClick={handleSave} disabled={busy || !form.label.trim() || !form.pts_cost}>{busy ? "Saving…" : "Save Reward"}</button>
               <button className="btn btn-ghost btn-full" onClick={() => setPanel(null)} disabled={busy}>Cancel</button>
             </div>
           </div>
         </div>
       )}
+    </>
+  );
+}
+
+function PointsRedemptionsTab() {
+  const [redemptions, setRedemptions] = useState([]);
+  const [loading, setLoading]         = useState(true);
+
+  useEffect(() => {
+    window.mpApi.fetch('/admin/redemptions').then(res => setRedemptions(res?.data?.redemptions || [])).catch(() => {}).finally(() => setLoading(false));
+  }, []);
+
+  async function resolve(r, status) {
+    if (status === 'cancelled') {
+      const c = await Swal.fire({ title: 'Cancel redemption?', text: `${Number(r.pts_cost).toLocaleString()} pts will be refunded.`, icon: 'warning', showCancelButton: true, confirmButtonText: 'Cancel & Refund', confirmButtonColor: '#d33', background: '#fff' });
+      if (!c.isConfirmed) return;
+    }
+    const res = await window.mpApi.fetch(`/admin/redemptions/${r.id}`, { method: 'PATCH', body: JSON.stringify({ status }) }).catch(() => null);
+    if (res?.ok) setRedemptions(prev => prev.map(x => x.id === r.id ? { ...x, status } : x));
+    else alert(res?.error?.message || 'Failed.');
+  }
+
+  return (
+    <div className="card">
+      {loading ? <div style={{ textAlign: "center", padding: 24 }}><i className="fa fa-spinner fa-spin" style={{ color: "var(--orange)" }} /></div>
+      : redemptions.length === 0 ? <div style={{ textAlign: "center", padding: "24px 0", color: "var(--text-65)", fontSize: 13 }}>No redemptions yet.</div>
+      : (
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead><tr><th>Customer</th><th>Reward</th><th>Points</th><th>Requested</th><th>Status</th><th></th></tr></thead>
+            <tbody>
+              {redemptions.map(r => (
+                <tr key={r.id}>
+                  <td><div style={{ fontWeight: 600 }}>{r.user_name || "—"}</div><div className="text-muted" style={{ fontSize: 12 }}>{r.user_phone || ""}</div></td>
+                  <td>{r.reward_label}{r.worth ? <span className="text-muted"> ({r.worth})</span> : null}</td>
+                  <td style={{ color: "var(--orange)", fontWeight: 700 }}>{Number(r.pts_cost).toLocaleString()} pts</td>
+                  <td className="text-muted">{new Date(r.created_at).toLocaleDateString()}</td>
+                  <td><span className={`badge ${r.status === 'fulfilled' ? "badge-green" : r.status === 'cancelled' ? "badge-gray" : "badge-orange"}`}>{r.status === 'fulfilled' ? "Fulfilled" : r.status === 'cancelled' ? "Cancelled" : "Pending"}</span></td>
+                  <td>{r.status === 'pending' && <div className="row" style={{ gap: 6, justifyContent: "flex-end" }}><button className="btn btn-ghost btn-sm" onClick={() => resolve(r, 'fulfilled')}>Fulfil</button><button className="btn btn-ghost btn-sm" style={{ color: "var(--red)" }} onClick={() => resolve(r, 'cancelled')}>Cancel</button></div>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
+  );
+}
+
+function PointsTierClaimsTab() {
+  const [claims, setClaims]   = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter]   = useState("pending");
+
+  useEffect(() => {
+    setLoading(true);
+    window.mpApi.fetch(`/admin/tier-reward-claims?status=${filter}`).then(r => setClaims(r?.data?.claims || [])).catch(() => setClaims([])).finally(() => setLoading(false));
+  }, [filter]);
+
+  async function handleOverride(c, status) {
+    const res = await window.mpApi.fetch(`/admin/tier-reward-claims/${c.id}`, { method: 'PATCH', body: JSON.stringify({ status }) }).catch(() => null);
+    if (res?.ok) setClaims(prev => prev.filter(x => x.id !== c.id));
+    else alert(res?.error?.message || 'Failed.');
+  }
+
+  return (
+    <>
+      <div className="row mb10" style={{ gap: 8 }}>
+        {["pending", "applied", "expired", "cancelled"].map(s => (
+          <button key={s} className={`toggle-btn ${filter === s ? "active" : ""}`} onClick={() => setFilter(s)} style={{ textTransform: "capitalize" }}>{s}</button>
+        ))}
+      </div>
+      <div className="card">
+        {loading ? <div style={{ textAlign: "center", padding: 24 }}><i className="fa fa-spinner fa-spin" style={{ color: "var(--orange)" }} /></div>
+        : claims.length === 0 ? <div style={{ textAlign: "center", padding: "24px 0", color: "var(--text-65)", fontSize: 13 }}>No {filter} claims.</div>
+        : (
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead><tr><th>Customer</th><th>Tier Reached</th><th>Reward Product</th><th>Status</th><th>Date</th><th></th></tr></thead>
+              <tbody>
+                {claims.map(c => (
+                  <tr key={c.id}>
+                    <td><div style={{ fontWeight: 600 }}>{c.user_name || "—"}</div><div className="text-muted" style={{ fontSize: 12 }}>{c.user_phone || ""}</div></td>
+                    <td>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ width: 10, height: 10, borderRadius: "50%", background: c.badge_color || "#CD7F32", flexShrink: 0 }} />
+                        <span style={{ fontWeight: 600 }}>{c.tier_name}</span>
+                      </span>
+                    </td>
+                    <td className="text-muted">{c.product_name}</td>
+                    <td><span className={`badge ${c.status === 'applied' ? "badge-green" : c.status === 'pending' ? "badge-orange" : "badge-gray"}`} style={{ textTransform: "capitalize" }}>{c.status}</span></td>
+                    <td className="text-muted">{new Date(c.created_at).toLocaleDateString()}</td>
+                    <td>{c.status === 'pending' && <div className="row" style={{ gap: 6, justifyContent: "flex-end" }}><button className="btn btn-ghost btn-sm" style={{ color: "var(--red)" }} onClick={() => handleOverride(c, 'cancelled')}>Cancel</button></div>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -3062,6 +3619,7 @@ function AdminTabbar({ section, setSection, onLogout }) {
     { id: "coupons",  icon: "fa-ticket-alt", label: "Coupons" },
   ];
   const more = [
+    { id: "users",      icon: "fa-user-circle",    label: "User Management" },
     { id: "customers",  icon: "fa-users",          label: "Customers" },
     { id: "subs",       icon: "fa-calendar-check", label: "Subscriptions" },
     { id: "crew",       icon: "fa-fire",           label: "Crew" },
@@ -3196,6 +3754,7 @@ function AdminDashboard() {
       case "overview":   return <Overview setSection={setSection} />;
       case "orders":     return <Orders />;
       case "products":   return <Products />;
+      case "users":      return <UsersAdmin />;
       case "customers":  return <Customers />;
       case "subs":       return <Subscriptions />;
       case "coupons":    return <Coupons />;
@@ -3725,9 +4284,23 @@ function AdminLogin({ onSuccess }) {
   const [isBootstrap, setIsBootstrap] = useState(null);
 
   useEffect(() => {
-    // Check if any admin exists
+    // Check if any admin exists by attempting to check admin status
     async function checkAdminExists() {
       try {
+        // Try to call /me with credentials to check if already authenticated
+        const meRes = await fetch(window.mpApi.base + '/me', {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+        });
+        const meData = await meRes.json();
+        if (meData.ok && meData.data?.role === 'admin') {
+          // Already authenticated as admin
+          setIsBootstrap(false);
+          return;
+        }
+
+        // Not authenticated, try bootstrap with test credentials
         const res = await fetch(window.mpApi.base + '/auth/admin/bootstrap', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -3735,8 +4308,10 @@ function AdminLogin({ onSuccess }) {
           credentials: 'include',
         });
         const data = await res.json();
-        // If bootstrap fails with ADMIN_EXISTS, then admin already exists
-        setIsBootstrap(data.error?.code !== 'ADMIN_EXISTS');
+        // If bootstrap fails with ADMIN_EXISTS, then admin already exists → show login
+        // If bootstrap succeeds or any other error → show bootstrap form
+        const adminExists = data.error?.code === 'ADMIN_EXISTS';
+        setIsBootstrap(!adminExists);
       } catch {
         setIsBootstrap(false); // Assume admin exists if we can't reach the server
       }

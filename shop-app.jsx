@@ -38,9 +38,10 @@ const PRODUCT_DEFAULT = {
 function getMidnightApiBase() {
   if (window.MIDNIGHT_API_BASE) return window.MIDNIGHT_API_BASE.replace(/\/$/, "");
 
-  const hostname = window.location.hostname || "localhost";
-  const protocol = window.location.protocol === "https:" ? "https:" : "http:";
-  const base = `${protocol}//${hostname}:3000/api/v1`;
+  const { protocol, hostname, port } = window.location;
+  const base = (!port || port === "80" || port === "443")
+    ? `${protocol}//${hostname}/api/v1`
+    : `${protocol}//${hostname}:3000/api/v1`;
   window.MIDNIGHT_API_BASE = base;
   return base;
 }
@@ -223,6 +224,14 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
   const [otpError, setOtpError]   = useState("");
   const [timeLeft, setTimeLeft]   = useState(120);
   const [timerKey, setTimerKey]   = useState(0);
+  const [savedAddresses, setSavedAddresses] = useState([]);
+  const [selectedAddressId, setSelectedAddressId] = useState("");
+  const [loadingAddresses, setLoadingAddresses] = useState(false);
+  const [showAddAddressForm, setShowAddAddressForm] = useState(false);
+  const [newAddressLabel, setNewAddressLabel] = useState("");
+  const [newAddressLine1, setNewAddressLine1] = useState("");
+  const [newAddressCity, setNewAddressCity] = useState("");
+  const [newAddressDistrict, setNewAddressDistrict] = useState("");
   const otpRefs  = useRef([]);
   const timerRef = useRef(null);
 
@@ -234,6 +243,27 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
     return () => { document.body.style.overflow = ""; };
   }, [open]);
 
+  // Fetch saved addresses when modal opens and user is logged in
+  useEffect(() => {
+    if (open && loggedUser?.id) {
+      setLoadingAddresses(true);
+      fetch(`${API_BASE}/me/addresses`, {
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+      })
+        .then(r => r.json())
+        .then(json => {
+          if (json?.ok && Array.isArray(json.data)) {
+            setSavedAddresses(json.data);
+            const defaultAddr = json.data.find(a => a.is_default);
+            if (defaultAddr) setSelectedAddressId(defaultAddr.id);
+          }
+        })
+        .catch(() => {})
+        .finally(() => setLoadingAddresses(false));
+    }
+  }, [open, loggedUser?.id]);
+
   // Full reset when modal opens
   useEffect(() => {
     if (open) {
@@ -241,6 +271,8 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
       setOtpDigits(["","","","","",""]); setOtpError("");
       setIsBusy(false); setTimerKey(0);
       setCity(""); setArea(""); setStreet("");
+      setShowAddAddressForm(false);
+      setNewAddressLabel(""); setNewAddressLine1(""); setNewAddressCity(""); setNewAddressDistrict("");
       setName(loggedUser?.name || "");
       setPhone(loggedUser?.phone || "");
     }
@@ -265,7 +297,9 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
 
   if (!open) return null;
 
-  const composedAddress = [street.trim(), area, city].filter(Boolean).join(", ");
+  const composedAddress = selectedAddressId
+    ? savedAddresses.find(a => a.id === selectedAddressId)?.line1 || [street.trim(), area, city].filter(Boolean).join(", ")
+    : [street.trim(), area, city].filter(Boolean).join(", ");
   const normalizedPhone = normalizeBdMobile(phone);
 
   // ── Shared styles ──────────────────────────────────────────────────────────
@@ -304,9 +338,6 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
           <p style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 18, color: "#FF9100", margin: "0 0 10px" }}>#{orderRef}</p>
           <p style={{ fontFamily: "var(--font-body)", fontSize: 13.5, color: "rgba(87,31,41,.65)", margin: "0 0 18px", lineHeight: 1.5 }}>
             A confirmation SMS has been sent to <strong>{phone}</strong>.
-          </p>
-          <p style={{ fontFamily: "var(--font-body)", fontSize: 13, color: "rgba(87,31,41,.5)", margin: "0 0 18px", lineHeight: 1.5 }}>
-            Our team will contact you shortly to confirm delivery.
           </p>
           {typeof MPFeedbackCard === "function" && <MPFeedbackCard orderRef={orderRef} />}
           {!loggedUser && (
@@ -486,7 +517,8 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
   // ── Form Step ──────────────────────────────────────────────────────────────
   const handleFormSubmit = async (e) => {
     e.preventDefault();
-    if (!name.trim() || !phone.trim() || !city || !street.trim() || isBusy) return;
+    const hasAddress = selectedAddressId ? true : (city && street.trim());
+    if (!name.trim() || !phone.trim() || !hasAddress || isBusy) return;
     if (!isValidBdMobile(phone)) {
       setErrorMsg("Enter a valid Bangladesh mobile number, e.g. 017XXXXXXXX or +88017XXXXXXXX.");
       return;
@@ -559,7 +591,8 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
     }
   };
 
-  const canSubmit = name.trim() && isValidBdMobile(phone) && city && street.trim() && !isBusy;
+  const hasAddress = selectedAddressId ? true : (city && street.trim());
+  const canSubmit = name.trim() && isValidBdMobile(phone) && hasAddress && !isBusy;
 
   return (
     <div style={overlay} onClick={e => e.target === e.currentTarget && onClose()}>
@@ -593,56 +626,240 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
               </div>
             )}
           </div>
-          {/* ── Delivery Address — structured ── */}
+          {/* ── Delivery Address ── */}
           <div style={{ marginBottom: 14 }}>
             <label style={lbl}>Delivery Address</label>
 
-            {/* City + Area row */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
-              {/* City */}
-              <div style={{ position: "relative" }}>
-                <select
-                  style={{ ...field, appearance: "none", WebkitAppearance: "none", paddingRight: 30, cursor: "pointer", color: city ? "#1A0A0D" : "rgba(26,10,13,.38)" }}
-                  value={city}
-                  onChange={e => { setCity(e.target.value); setArea(""); }}
-                  required
+            {/* Saved addresses section (logged in users) */}
+            {loggedUser?.id && savedAddresses.length > 0 && (
+              <>
+                <div style={{ marginBottom: 10 }}>
+                  <label style={{ ...lbl, fontSize: 11, marginBottom: 6 }}>Select Saved Address</label>
+                  <div style={{ position: "relative" }}>
+                    <select
+                      style={{ ...field, appearance: "none", WebkitAppearance: "none", paddingRight: 30, cursor: "pointer", color: selectedAddressId ? "#1A0A0D" : "rgba(26,10,13,.38)" }}
+                      value={selectedAddressId}
+                      onChange={e => {
+                        setSelectedAddressId(e.target.value);
+                        setShowAddAddressForm(false);
+                        if (e.target.value) {
+                          const addr = savedAddresses.find(a => a.id === e.target.value);
+                          if (addr) {
+                            setStreet(addr.line1);
+                            setCity(addr.city || "");
+                            setArea(addr.district || "");
+                          }
+                        }
+                      }}
+                      disabled={isBusy || loadingAddresses}
+                    >
+                      <option value="">Choose a saved address</option>
+                      {savedAddresses.map(addr => (
+                        <option key={addr.id} value={addr.id}>
+                          {addr.label ? `${addr.label} - ${addr.line1.substring(0, 30)}${addr.line1.length > 30 ? '…' : ''}` : addr.line1.substring(0, 50)}
+                        </option>
+                      ))}
+                    </select>
+                    <i className="fa-solid fa-chevron-down" aria-hidden="true" style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", fontSize: 10, color: "rgba(87,31,41,.45)", pointerEvents: "none" }} />
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => { setShowAddAddressForm(!showAddAddressForm); setSelectedAddressId(""); }}
+                  style={{ fontSize: 12, color: "#FF9100", background: "none", border: "none", cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 2, fontWeight: 600, marginBottom: 12 }}
+                >
+                  <i className="fa-solid fa-plus" aria-hidden="true" style={{ marginRight: 4 }} />
+                  Add New Address
+                </button>
+              </>
+            )}
+
+            {/* No addresses prompt (logged in but no saved addresses) */}
+            {loggedUser?.id && savedAddresses.length === 0 && !showAddAddressForm && !loadingAddresses && (
+              <div style={{ padding: "12px 12px", background: "rgba(255,145,0,.08)", borderRadius: 8, border: "1px solid rgba(255,145,0,.2)", marginBottom: 12 }}>
+                <p style={{ margin: "0 0 8px", fontFamily: "var(--font-body)", fontSize: 13, color: "rgba(87,31,41,.75)", fontWeight: 600 }}>
+                  <i className="fa-solid fa-location-dot" aria-hidden="true" style={{ marginRight: 6, color: "#FF9100" }} />
+                  Save an address for faster checkout next time
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowAddAddressForm(true)}
+                  style={{ fontSize: 12, color: "#FF9100", background: "none", border: "none", cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 2, fontWeight: 600 }}
+                >
+                  <i className="fa-solid fa-plus" aria-hidden="true" style={{ marginRight: 4 }} />
+                  Add Address
+                </button>
+              </div>
+            )}
+
+            {/* Add new address form */}
+            {(showAddAddressForm || (loggedUser?.id && savedAddresses.length === 0)) && (
+              <div style={{ background: "rgba(87,31,41,.04)", padding: 12, borderRadius: 8, marginBottom: 12 }}>
+                <div style={{ marginBottom: 10 }}>
+                  <label style={{ ...lbl, fontSize: 11, marginBottom: 4 }}>Address Label (e.g., Home, Office)</label>
+                  <input
+                    style={field}
+                    type="text"
+                    placeholder="Address label"
+                    value={newAddressLabel}
+                    onChange={e => setNewAddressLabel(e.target.value)}
+                    disabled={isBusy}
+                  />
+                </div>
+
+                <div style={{ marginBottom: 10 }}>
+                  <label style={{ ...lbl, fontSize: 11, marginBottom: 4 }}>Street Address</label>
+                  <input
+                    style={field}
+                    type="text"
+                    placeholder="House no., road, block, building…"
+                    value={newAddressLine1}
+                    onChange={e => setNewAddressLine1(e.target.value)}
+                    disabled={isBusy}
+                  />
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+                  <div style={{ position: "relative" }}>
+                    <label style={{ ...lbl, fontSize: 11, marginBottom: 4, display: "block" }}>City</label>
+                    <select
+                      style={{ ...field, appearance: "none", WebkitAppearance: "none", paddingRight: 30, cursor: "pointer", color: newAddressCity ? "#1A0A0D" : "rgba(26,10,13,.38)" }}
+                      value={newAddressCity}
+                      onChange={e => { setNewAddressCity(e.target.value); setNewAddressDistrict(""); }}
+                      disabled={isBusy}
+                    >
+                      <option value="">City</option>
+                      {Object.keys(BD_AREAS).sort().map(c => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                    <i className="fa-solid fa-chevron-down" aria-hidden="true" style={{ position: "absolute", right: 10, bottom: "50%", transform: "translateY(50%)", fontSize: 10, color: "rgba(87,31,41,.45)", pointerEvents: "none" }} />
+                  </div>
+
+                  <div style={{ position: "relative" }}>
+                    <label style={{ ...lbl, fontSize: 11, marginBottom: 4, display: "block" }}>District/Area</label>
+                    <select
+                      style={{ ...field, appearance: "none", WebkitAppearance: "none", paddingRight: 30, cursor: newAddressCity ? "pointer" : "not-allowed", color: newAddressDistrict ? "#1A0A0D" : "rgba(26,10,13,.38)", opacity: newAddressCity ? 1 : 0.55 }}
+                      value={newAddressDistrict}
+                      onChange={e => setNewAddressDistrict(e.target.value)}
+                      disabled={!newAddressCity || isBusy}
+                    >
+                      <option value="">{newAddressCity ? "Select area" : "Area"}</option>
+                      {(BD_AREAS[newAddressCity] || []).map(a => (
+                        <option key={a} value={a}>{a}</option>
+                      ))}
+                    </select>
+                    <i className="fa-solid fa-chevron-down" aria-hidden="true" style={{ position: "absolute", right: 10, bottom: "50%", transform: "translateY(50%)", fontSize: 10, color: "rgba(87,31,41,.45)", pointerEvents: "none" }} />
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!newAddressLine1.trim() || !newAddressCity) {
+                        setErrorMsg("Please fill in street address and city.");
+                        return;
+                      }
+                      setIsBusy(true);
+                      try {
+                        const res = await fetch(`${API_BASE}/me/addresses`, {
+                          method: "POST",
+                          credentials: "include",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({
+                            label: newAddressLabel.trim() || "Untitled",
+                            line1: newAddressLine1.trim(),
+                            city: newAddressCity,
+                            district: newAddressDistrict,
+                            is_default: savedAddresses.length === 0,
+                          }),
+                        });
+                        const json = await res.json();
+                        if (!res.ok) {
+                          setErrorMsg(json?.error?.message || "Failed to save address.");
+                          return;
+                        }
+                        setSavedAddresses([...savedAddresses, json.data]);
+                        setSelectedAddressId(json.data.id);
+                        setNewAddressLabel(""); setNewAddressLine1(""); setNewAddressCity(""); setNewAddressDistrict("");
+                        setShowAddAddressForm(false);
+                        setStreet(json.data.line1);
+                        setCity(json.data.city);
+                        setArea(json.data.district);
+                      } catch (err) {
+                        setErrorMsg(err.message);
+                      } finally {
+                        setIsBusy(false);
+                      }
+                    }}
+                    disabled={isBusy || !newAddressLine1.trim() || !newAddressCity}
+                    style={{ flex: 1, padding: "8px 12px", background: "#571F29", color: "#F7E3C9", borderRadius: 6, fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 12, border: "none", cursor: isBusy || !newAddressLine1.trim() || !newAddressCity ? "not-allowed" : "pointer", opacity: isBusy || !newAddressLine1.trim() || !newAddressCity ? 0.55 : 1 }}
+                  >
+                    <i className="fa-solid fa-check" aria-hidden="true" style={{ marginRight: 4 }} />
+                    Save Address
+                  </button>
+                  {savedAddresses.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => { setShowAddAddressForm(false); setSelectedAddressId(savedAddresses[0]?.id || ""); }}
+                      style={{ flex: 1, padding: "8px 12px", background: "rgba(87,31,41,.1)", color: "#571F29", borderRadius: 6, fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 12, border: "none", cursor: "pointer" }}
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Manual address entry (for guests or if not using saved addresses) */}
+            {(!loggedUser?.id || selectedAddressId === "") && (
+              <>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                  <div style={{ position: "relative" }}>
+                    <select
+                      style={{ ...field, appearance: "none", WebkitAppearance: "none", paddingRight: 30, cursor: "pointer", color: city ? "#1A0A0D" : "rgba(26,10,13,.38)" }}
+                      value={city}
+                      onChange={e => { setCity(e.target.value); setArea(""); }}
+                      required={!loggedUser?.id || selectedAddressId === ""}
+                      disabled={isBusy}
+                    >
+                      <option value="" disabled>City</option>
+                      {Object.keys(BD_AREAS).sort().map(c => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                    <i className="fa-solid fa-chevron-down" aria-hidden="true" style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", fontSize: 10, color: "rgba(87,31,41,.45)", pointerEvents: "none" }} />
+                  </div>
+
+                  <div style={{ position: "relative" }}>
+                    <select
+                      style={{ ...field, appearance: "none", WebkitAppearance: "none", paddingRight: 30, cursor: city ? "pointer" : "not-allowed", color: area ? "#1A0A0D" : "rgba(26,10,13,.38)", opacity: city ? 1 : 0.55 }}
+                      value={area}
+                      onChange={e => setArea(e.target.value)}
+                      disabled={!city || isBusy}
+                    >
+                      <option value="">{city ? "Select area" : "Area"}</option>
+                      {(BD_AREAS[city] || []).map(a => (
+                        <option key={a} value={a}>{a}</option>
+                      ))}
+                    </select>
+                    <i className="fa-solid fa-chevron-down" aria-hidden="true" style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", fontSize: 10, color: "rgba(87,31,41,.45)", pointerEvents: "none" }} />
+                  </div>
+                </div>
+
+                <input
+                  style={field}
+                  type="text"
+                  placeholder="House no., road, block, building…"
+                  value={street}
+                  onChange={e => setStreet(e.target.value)}
+                  required={!loggedUser?.id || selectedAddressId === ""}
                   disabled={isBusy}
-                >
-                  <option value="" disabled>City</option>
-                  {Object.keys(BD_AREAS).sort().map(c => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </select>
-                <i className="fa-solid fa-chevron-down" aria-hidden="true" style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", fontSize: 10, color: "rgba(87,31,41,.45)", pointerEvents: "none" }} />
-              </div>
-
-              {/* Area */}
-              <div style={{ position: "relative" }}>
-                <select
-                  style={{ ...field, appearance: "none", WebkitAppearance: "none", paddingRight: 30, cursor: city ? "pointer" : "not-allowed", color: area ? "#1A0A0D" : "rgba(26,10,13,.38)", opacity: city ? 1 : 0.55 }}
-                  value={area}
-                  onChange={e => setArea(e.target.value)}
-                  disabled={!city || isBusy}
-                >
-                  <option value="">{city ? "Select area" : "Area"}</option>
-                  {(BD_AREAS[city] || []).map(a => (
-                    <option key={a} value={a}>{a}</option>
-                  ))}
-                </select>
-                <i className="fa-solid fa-chevron-down" aria-hidden="true" style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", fontSize: 10, color: "rgba(87,31,41,.45)", pointerEvents: "none" }} />
-              </div>
-            </div>
-
-            {/* Street address */}
-            <input
-              style={field}
-              type="text"
-              placeholder="House no., road, block, building…"
-              value={street}
-              onChange={e => setStreet(e.target.value)}
-              required
-              disabled={isBusy}
-            />
+                />
+              </>
+            )}
           </div>
           <button type="submit" disabled={!canSubmit} style={primBtn(!canSubmit)}>
             {isBusy
@@ -1117,11 +1334,18 @@ function ShopPage() {
     try {
       const subtotal = product.price * qty;
       const res  = await fetch(
-        `${API_BASE}/coupons/verify?code=${encodeURIComponent(coupon.trim())}&subtotal=${subtotal}`
+        `${API_BASE}/coupons/verify?code=${encodeURIComponent(coupon.trim())}&subtotal=${subtotal}`,
+        { credentials: "include" }  // send auth cookie so specific coupons can check login
       );
       const json = await res.json();
       if (!res.ok) {
         setDiscount(0);
+        // For login-required coupons, prompt the user to sign in
+        if (json?.error?.code === 'COUPON_LOGIN_REQUIRED') {
+          setCouponError("This coupon is for registered customers only. Please sign in to use it.");
+          setCouponStatus("err");
+          return;
+        }
         setCouponError(json?.error?.message || "Invalid coupon code.");
         setCouponStatus("err");
         return;

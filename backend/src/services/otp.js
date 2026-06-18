@@ -54,10 +54,11 @@ async function sendOtp(phone, deviceFingerprint = null) {
     [phone, hash, expiresAt]
   )
 
-  // Always print OTP to console for reference (dev convenience)
-  console.log(`\n╔════════════════════════════╗`)
-  console.log(`║  OTP for ${phone}: ${otp}  ║`)
-  console.log(`╚════════════════════════════╝\n`)
+  if (env.NODE_ENV !== 'production') {
+    console.log(`\n╔════════════════════════════╗`)
+    console.log(`║  OTP for ${phone}: ${otp}  ║`)
+    console.log(`╚════════════════════════════╝\n`)
+  }
 
   // Send SMS via gateway if configured (dev or production)
   if (env.SMS_API_URL) {

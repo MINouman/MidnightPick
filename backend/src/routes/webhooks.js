@@ -1,5 +1,6 @@
 'use strict'
 
+const crypto = require('crypto')
 const { query, withTransaction } = require('../config/db')
 const { sendSms } = require('../services/sms')
 const { mapSteadfastStatusToOrderStatus } = require('../services/steadfast')
@@ -28,11 +29,15 @@ module.exports = async function webhookRoutes(app) {
       },
     },
   }, async (req, reply) => {
-    // Validate Bearer token
-    const authHeader = req.headers.authorization || ''
-    const expectedToken = `Bearer ${process.env.STEADFAST_WEBHOOK_BEARER_TOKEN}`
-
-    if (authHeader !== expectedToken) {
+    // Validate Bearer token with a constant-time comparison. If the secret is
+    // not configured we reject everything — otherwise an unset env var would
+    // make `Bearer undefined` a valid forgeable token.
+    const authHeader     = req.headers.authorization || ''
+    const configuredToken = process.env.STEADFAST_WEBHOOK_BEARER_TOKEN || ''
+    const expectedToken   = `Bearer ${configuredToken}`
+    const got      = Buffer.from(authHeader)
+    const expected = Buffer.from(expectedToken)
+    if (!configuredToken || got.length !== expected.length || !crypto.timingSafeEqual(got, expected)) {
       app.log.warn('[webhook] Invalid Steadfast token')
       return reply.code(401).send({ ok: false, error: 'Unauthorized' })
     }
@@ -56,54 +61,67 @@ module.exports = async function webhookRoutes(app) {
 
     const order = orderRows[0]
     const newStatus = mapSteadfastStatusToOrderStatus(status)
-    const statusChanged = order.current_status !== newStatus
 
-    await withTransaction(async (client) => {
+    const statusChanged = await withTransaction(async (client) => {
+      // Lock and re-read the order INSIDE the transaction. The read above is
+      // unlocked, so two concurrent deliveries (or a webhook racing an admin
+      // status update) could both observe points_earned=0 and double-award.
+      // Decisions below use the locked row, not the stale outer read.
+      const { rows: lockedRows } = await client.query(
+        `SELECT id, order_ref, status AS current_status, user_id, points_earned, total
+         FROM orders WHERE id = $1 FOR UPDATE`,
+        [order.id]
+      )
+      const o = lockedRows[0]
+      const changed = o.current_status !== newStatus
+      const justDelivered = newStatus === 'delivered' && o.current_status !== 'delivered'
+
       // Update order status if it changed
-      if (statusChanged) {
+      if (changed) {
         await client.query(
           `UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2`,
-          [newStatus, order.id]
+          [newStatus, o.id]
         )
       }
 
-      // Always log the tracking event for visibility
-      // Note: delivery_failed updates order status but logs step as 'shipped' (keeps it in valid tracking_step enum values)
-      const trackingStep = newStatus === 'delivery_failed' ? 'shipped' : newStatus
+      // Append a tracking event (event-stream model — see migrations 040/041).
+      // The legacy `step` enum only accepts confirmed/packed/shipped/delivered,
+      // so set it only for those; the `status` column carries the full state
+      // (including delivery_failed/cancelled) for everything else.
+      const VALID_STEPS  = ['confirmed', 'packed', 'shipped', 'delivered']
+      const mappedStep   = newStatus === 'delivery_failed' ? 'shipped' : newStatus
+      const trackingStep = VALID_STEPS.includes(mappedStep) ? mappedStep : null
       await client.query(
-        `INSERT INTO order_tracking (order_id, step, detail, source, steadfast_status)
-         VALUES ($1, $2, $3, 'webhook', $4)
-         ON CONFLICT (order_id, step) DO UPDATE
-         SET detail = EXCLUDED.detail,
-             source = 'webhook',
-             steadfast_status = EXCLUDED.steadfast_status,
-             created_at = NOW()`,
-        [order.id, trackingStep, `Steadfast: ${status}${note ? ` — ${note}` : ''}`, status]
+        `INSERT INTO order_tracking (order_id, step, status, detail, source, steadfast_status)
+         VALUES ($1, $2, $3, $4, 'webhook', $5)`,
+        [o.id, trackingStep, newStatus, `Steadfast: ${status}${note ? ` — ${note}` : ''}`, status]
       )
 
       // Award points if order just transitioned to delivered
-      if (newStatus === 'delivered' && order.current_status !== 'delivered' && order.user_id && order.total > 0 && order.points_earned === 0) {
+      if (justDelivered && o.user_id && o.total > 0 && Number(o.points_earned) === 0) {
         const { calculatePointsForOrder, awardPoints } = require('../services/points')
-        const pts = calculatePointsForOrder(order.total)
+        const pts = calculatePointsForOrder(o.total)
         if (pts > 0) {
-          await awardPoints(client, order.user_id, pts, `Order #${order.order_ref} delivered`, order.id)
+          await awardPoints(client, o.user_id, pts, `Order #${o.order_ref} delivered`, o.id)
           await client.query(
             `UPDATE orders SET points_earned = $2 WHERE id = $1`,
-            [order.id, pts]
+            [o.id, pts]
           )
         }
       }
 
       // Sync commission if delivered (with error handling)
-      if (newStatus === 'delivered' && order.current_status !== 'delivered') {
+      if (justDelivered) {
         try {
           const { syncCommissionForDeliveredOrder } = require('../services/crew')
-          await syncCommissionForDeliveredOrder(client, order.id)
+          await syncCommissionForDeliveredOrder(client, o.id)
         } catch (err) {
-          app.log.warn(`[webhook] Failed to sync commission for order ${order.id}:`, err.message)
+          app.log.warn(`[webhook] Failed to sync commission for order ${o.id}:`, err.message)
           // Don't fail the webhook if commission sync fails
         }
       }
+
+      return changed
     })
 
     // Send SMS notification (outside transaction to avoid blocking webhook response)

@@ -27,9 +27,10 @@ function applyPalette(name) {
 function getMidnightApiBase() {
   if (window.MIDNIGHT_API_BASE) return window.MIDNIGHT_API_BASE.replace(/\/$/, "");
 
-  const hostname = window.location.hostname || "localhost";
-  const protocol = window.location.protocol === "https:" ? "https:" : "http:";
-  const base = `${protocol}//${hostname}:3000/api/v1`;
+  const { protocol, hostname, port } = window.location;
+  const base = (!port || port === "80" || port === "443")
+    ? `${protocol}//${hostname}/api/v1`
+    : `${protocol}//${hostname}:3000/api/v1`;
   window.MIDNIGHT_API_BASE = base;
   return base;
 }
@@ -1095,17 +1096,21 @@ function App() {
   const [authOpen,  setAuthOpen]  = useState(false);
   const [policyOpen, setPolicyOpen] = useState(null);
   const [policy, setPolicy] = useState(null);
-  const [auth, setAuth] = useState(getAuthState);
+  const [auth, setAuth] = useState(getAuthState());
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     // Clear user data; tokens are in httpOnly cookies (cleared by backend on logout)
     localStorage.removeItem("mp_user");
     setAuth({ loggedIn: false, dashUrl: "dashboard-user.html" });
-    // Optionally call backend logout to clear cookies
-    fetch(getMidnightApiBase() + "/auth/logout", {
-      method: "POST",
-      credentials: "include",
-    }).catch(() => {});
+    // Call backend logout to clear cookies
+    try {
+      await fetch(getMidnightApiBase() + "/auth/logout", {
+        method: "POST",
+        credentials: "include",
+      });
+    } catch (err) {
+      console.error("Logout error:", err);
+    }
   };
 
   useEffect(() => {applyPalette(t.palette);}, [t.palette]);

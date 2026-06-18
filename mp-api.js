@@ -5,8 +5,12 @@
   function resolveApiBase() {
     if (window.MIDNIGHT_API_BASE) return window.MIDNIGHT_API_BASE.replace(/\/$/, '');
 
-    const hostname = window.location.hostname || 'localhost';
-    const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+    const { protocol, hostname, port } = window.location;
+    // On standard ports (served via nginx/proxy) use same-origin relative path.
+    // On non-standard ports (local dev file server on :5500) the backend is on :3000.
+    if (!port || port === '80' || port === '443') {
+      return `${protocol}//${hostname}/api/v1`;
+    }
     return `${protocol}//${hostname}:3000/api/v1`;
   }
 

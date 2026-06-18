@@ -106,6 +106,24 @@ async function applyDeliveryFee(orderId, districtName, distance = 0) {
   return feeInfo
 }
 
+// ── Fallback fee ─────────────────────────────────────────────────────────
+// Charged when the customer's zone can't be resolved (unparseable address,
+// district not in the zones table). Uses the highest active base fee so a
+// lookup failure never results in free shipping.
+
+const DEFAULT_FALLBACK_FEE = 150
+
+async function getFallbackDeliveryFee() {
+  try {
+    const { rows } = await query(
+      `SELECT MAX(delivery_fee_base) AS fee FROM delivery_zones WHERE is_active = true`
+    )
+    return Number(rows[0]?.fee) || DEFAULT_FALLBACK_FEE
+  } catch {
+    return DEFAULT_FALLBACK_FEE
+  }
+}
+
 // ── List supported districts ────────────────────────────────────────────
 
 async function getSupportedDistricts() {
@@ -123,6 +141,7 @@ module.exports = {
   getZoneByDistrict,
   getActiveZones,
   calculateDeliveryFee,
+  getFallbackDeliveryFee,
   getDeliveryEstimate,
   applyDeliveryFee,
   getSupportedDistricts,

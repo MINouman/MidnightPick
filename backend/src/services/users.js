@@ -48,17 +48,28 @@ async function findOrCreateGoogleUser(googleId, email, name) {
 
   if (rows.length) {
     const user = rows[0]
+
+    // Security: Admin accounts cannot use OAuth — they must use password-based login
+    // This prevents unauthorized access if an admin's Google account is compromised
+    if (user.role === 'admin') {
+      throw {
+        code: 'UNAUTHORIZED',
+        message: 'Admin accounts must use password-based login. Google OAuth is not allowed for admin access.'
+      }
+    }
+
     if (!user.is_active) throw { code: 'ACCOUNT_INACTIVE', message: 'This account has been deactivated.' }
     // Link google_id and fill name if missing
-    await query(
+    const { rows: updated } = await query(
       `UPDATE users
        SET   google_id  = COALESCE(google_id, $2),
              name       = COALESCE(name, $3),
              updated_at = NOW()
-       WHERE id = $1`,
+       WHERE id = $1
+       RETURNING id, email, name, role, is_active`,
       [user.id, googleId, name]
     )
-    return user
+    return updated[0]
   }
 
   const res = await query(

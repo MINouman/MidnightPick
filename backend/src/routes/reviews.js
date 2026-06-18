@@ -4,7 +4,7 @@ const reviewsSvc = require('../services/reviews')
 
 module.exports = async function reviewRoutes(app) {
 
-  // GET /reviews?product=midnight-blend&page=1&limit=10
+  // GET /reviews — dual-mode endpoint (returns user's reviews if authenticated, public reviews otherwise)
   app.get('/', {
     schema: {
       querystring: {
@@ -17,6 +17,12 @@ module.exports = async function reviewRoutes(app) {
       },
     },
   }, async (req) => {
+    // If authenticated user requesting their own reviews
+    if (req.user) {
+      const result = await reviewsSvc.getUserReviews(req.user.sub)
+      return { ok: true, data: result }
+    }
+    // Otherwise return public reviews
     const result = await reviewsSvc.listReviews(req.query.product, req.query)
     return { ok: true, data: result }
   })

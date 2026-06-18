@@ -7,9 +7,23 @@ const { normalizeBdMobile } = require('../services/phone')
 // Public endpoints — keep them slow enough that coupon codes can't be enumerated
 const COUPON_RATE_LIMIT = { rateLimit: { max: 30, timeWindow: '1 minute' } }
 
+// Soft auth: extract user_id from JWT cookie if present, but don't require it.
+// Used so that specific coupons can check logged-in user eligibility.
+function softReadUserId(app, req) {
+  try {
+    const token = req.cookies?.mp_access_token
+    if (!token) return null
+    const decoded = app.jwt.decode(token)
+    return decoded?.sub || null
+  } catch {
+    return null
+  }
+}
+
 module.exports = async function couponsRoutes(app) {
 
   // GET /coupons/verify?code=XXX&subtotal=YYY — public coupon validation
+  // Reads auth cookie softly so specific coupons can be checked for logged-in users.
   app.get('/verify', {
     config: COUPON_RATE_LIMIT,
     schema: {
@@ -24,7 +38,8 @@ module.exports = async function couponsRoutes(app) {
     },
   }, async (req) => {
     const { code, subtotal } = req.query
-    const { coupon: c, discount } = await validateCoupon({ query }, { code, subtotal })
+    const userId = softReadUserId(app, req)
+    const { coupon: c, discount } = await validateCoupon({ query }, { code, subtotal, userId })
     return { ok: true, data: { code: c.code, discount, discount_type: c.discount_type, discount_value: c.discount_value } }
   })
 
@@ -43,15 +58,15 @@ module.exports = async function couponsRoutes(app) {
     },
   }, async (req) => {
     const { code, subtotal, customer_phone } = req.body
-    // Usage caps are tracked against normalized numbers — match that here
     let customerPhone = customer_phone || null
     if (customerPhone) { try { customerPhone = normalizeBdMobile(customerPhone) } catch { /* keep raw */ } }
-    const { coupon: c, discount } = await validateCoupon({ query }, { code, subtotal, customerPhone })
+    const userId = softReadUserId(app, req)
+    const { coupon: c, discount } = await validateCoupon({ query }, { code, subtotal, customerPhone, userId })
     return {
       ok: true,
       data: {
         code: c.code,
-        source: c.source || c.type,
+        source: c.type,
         discount,
         discount_type: c.discount_type,
         discount_value: c.discount_value,

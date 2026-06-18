@@ -8,9 +8,10 @@
   function getMidnightApiBase() {
     if (window.MIDNIGHT_API_BASE) return window.MIDNIGHT_API_BASE.replace(/\/$/, "");
 
-    const hostname = window.location.hostname || "localhost";
-    const protocol = window.location.protocol === "https:" ? "https:" : "http:";
-    const base = `${protocol}//${hostname}:3000/api/v1`;
+    const { protocol, hostname, port } = window.location;
+    const base = (!port || port === "80" || port === "443")
+      ? `${protocol}//${hostname}/api/v1`
+      : `${protocol}//${hostname}:3000/api/v1`;
     window.MIDNIGHT_API_BASE = base;
     return base;
   }

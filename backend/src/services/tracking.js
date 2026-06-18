@@ -53,6 +53,13 @@ async function recordTrackingEvent(orderId, status, details = {}) {
       ]
     )
 
+    // Get previous status for audit trail
+    const { rows: prevOrder } = await client.query(
+      `SELECT status FROM orders WHERE id = $1`,
+      [orderId]
+    )
+    const previousStatus = prevOrder[0]?.status || null
+
     // Update or create latest tracking
     await client.query(
       `INSERT INTO order_tracking_latest (
@@ -83,6 +90,23 @@ async function recordTrackingEvent(orderId, status, details = {}) {
       `UPDATE orders SET status = $1 WHERE id = $2`,
       [mappedStatus, orderId]
     )
+
+    // Log to delivery_status_logs for audit trail (7-day return policy tracking)
+    if (previousStatus !== mappedStatus) {
+      await client.query(
+        `INSERT INTO delivery_status_logs (
+          order_id, consignment_id, previous_status, new_status, raw_webhook_payload, source
+        ) VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          orderId,
+          details.provider_ref || null,
+          previousStatus,
+          mappedStatus,
+          JSON.stringify(details.raw_response || {}),
+          details.source || 'api',
+        ]
+      )
+    }
 
     // Cache in Redis for quick access
     await redis.setex(

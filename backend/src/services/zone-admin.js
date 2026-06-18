@@ -52,15 +52,14 @@ async function updateZone(adminUserId, zoneId, updates) {
     // Record in audit trail
     await client.query(
       `INSERT INTO zone_fee_history
-       (zone_id, zone_code, old_delivery_fee_base, old_delivery_fee_per_km,
+       (zone_id, old_delivery_fee_base, old_delivery_fee_per_km,
         old_delivery_time_min, old_delivery_time_max, old_is_active,
         new_delivery_fee_base, new_delivery_fee_per_km,
         new_delivery_time_min, new_delivery_time_max, new_is_active,
         changed_by, reason)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
       [
         zoneId,
-        current.zone_code,
         current.delivery_fee_base,
         current.delivery_fee_per_km,
         current.delivery_time_min,
@@ -128,13 +127,12 @@ async function createZone(adminUserId, zoneData) {
     // Record in audit trail
     await client.query(
       `INSERT INTO zone_fee_history
-       (zone_id, zone_code, old_delivery_fee_base, new_delivery_fee_base,
+       (zone_id, old_delivery_fee_base, new_delivery_fee_base,
         new_delivery_fee_per_km, new_delivery_time_min, new_delivery_time_max,
         new_is_active, changed_by, reason)
-       VALUES ($1, $2, NULL, $3, $4, $5, $6, true, $7, $8)`,
+       VALUES ($1, NULL, $2, $3, $4, $5, true, $6, $7)`,
       [
         zone.id,
-        zone_code,
         zone.delivery_fee_base,
         zone.delivery_fee_per_km,
         zone.delivery_time_min,
@@ -193,9 +191,9 @@ async function moveDistrictToZone(adminUserId, districtId, newZoneId, reason) {
     // Record in audit trail
     await client.query(
       `INSERT INTO district_zone_changes
-       (district_id, district_name, old_zone_id, new_zone_id, changed_by, reason)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [districtId, district.district_name, district.zone_id, newZoneId, adminUserId, reason || null]
+       (district_id, old_zone_id, new_zone_id, changed_by, reason)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [districtId, district.zone_id, newZoneId, adminUserId, reason || null]
     )
 
     // Invalidate cache

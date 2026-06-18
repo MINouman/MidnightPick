@@ -130,11 +130,17 @@ function AccountTab({ setTab }) {
 
   async function handleLogout() {
     // Call logout with credentials: include (sends httpOnly cookies automatically)
-    await fetch(window.mpApi.base + "/auth/logout", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-    }).catch(() => {});
+    try {
+      await fetch(window.mpApi.base + "/auth/logout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      });
+    } catch (err) {
+      console.error("Logout error:", err);
+    }
+    // Clear local user info
+    localStorage.removeItem("mp_user");
     window.location.href = "index.html";
   }
 
@@ -369,11 +375,17 @@ function InfluencerDashboard() {
 
   async function handleLogout() {
     // Call logout with credentials: include (sends httpOnly cookies automatically)
-    await fetch(window.mpApi.base + "/auth/logout", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-    }).catch(() => {});
+    try {
+      await fetch(window.mpApi.base + "/auth/logout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      });
+    } catch (err) {
+      console.error("Logout error:", err);
+    }
+    // Clear local user info
+    localStorage.removeItem("mp_user");
     window.location.href = "index.html";
   }
 

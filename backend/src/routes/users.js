@@ -10,7 +10,9 @@ module.exports = async function userRoutes(app) {
 
   // GET /me
   app.get('/', async (req) => {
+    console.log('[DEBUG /me] req.user.sub=', req.user?.sub)
     const user = await usersSvc.getUserById(req.user.sub)
+    console.log('[DEBUG /me] retrieved user:', user ? `id=${user.id}, email=${user.email}, name=${user.name}` : 'null')
     if (!user) throw { code: 'NOT_FOUND', message: 'User not found.' }
     return { ok: true, data: user }
   })
@@ -148,87 +150,6 @@ module.exports = async function userRoutes(app) {
 
   // ── Points ──────────────────────────────────────────────────────────────
 
-  app.get('/points', async (req) => {
-    const user = await usersSvc.getUserById(req.user.sub)
-    return { ok: true, data: { balance: user?.points_balance ?? 0 } }
-  })
-
-  app.get('/point-rewards', async () => {
-    const { rows } = await query(
-      `SELECT id, label, pts_cost, worth FROM point_rewards
-       WHERE is_active = true ORDER BY sort_order ASC, created_at ASC`
-    )
-    return { ok: true, data: { rewards: rows } }
-  })
-
-  app.get('/points/history', {
-    schema: {
-      querystring: {
-        type: 'object',
-        properties: {
-          page:  { type: 'integer', minimum: 1, default: 1 },
-          limit: { type: 'integer', minimum: 1, maximum: 50, default: 20 },
-        },
-      },
-    },
-  }, async (req) => {
-    const { page = 1, limit = 20 } = req.query
-    const offset = (page - 1) * limit
-
-    const { rows: countRows } = await query(
-      `SELECT COUNT(*) FROM points_transactions WHERE user_id = $1`,
-      [req.user.sub]
-    )
-    const total = parseInt(countRows[0].count, 10)
-
-    const { rows } = await query(
-      `SELECT type, points, balance_after, description, reference_type, created_at
-       FROM   points_transactions
-       WHERE  user_id = $1
-       ORDER  BY created_at DESC
-       LIMIT  $2 OFFSET $3`,
-      [req.user.sub, limit, offset]
-    )
-    return { ok: true, data: { transactions: rows, total, page, limit } }
-  })
-
-  // POST /me/points/redeem — claim a reward from the catalogue
-  app.post('/points/redeem', {
-    config: { rateLimit: getRateLimitConfig('pointRedemption') },
-    schema: {
-      body: {
-        type: 'object',
-        required: ['reward_id'],
-        properties: { reward_id: { type: 'string', format: 'uuid' } },
-        additionalProperties: false,
-      },
-    },
-  }, async (req, reply) => {
-    const result = await withTransaction(async (client) => {
-      const { rows: rewardRows } = await client.query(
-        `SELECT id, label, pts_cost, worth FROM point_rewards
-         WHERE id = $1 AND is_active = true
-         FOR UPDATE`,
-        [req.body.reward_id]
-      )
-      if (!rewardRows.length) throw { code: 'NOT_FOUND', message: 'Reward not found.' }
-      const reward = rewardRows[0]
-
-      const { rows: redRows } = await client.query(
-        `INSERT INTO point_redemptions (user_id, reward_id, reward_label, pts_cost, worth)
-         VALUES ($1, $2, $3, $4, $5)
-         RETURNING id, reward_label, pts_cost, worth, status, created_at`,
-        [req.user.sub, reward.id, reward.label, reward.pts_cost, reward.worth]
-      )
-      const redemption = redRows[0]
-      const balance = await spendPoints(
-        client, req.user.sub, reward.pts_cost, `Redeemed: ${reward.label}`, redemption.id
-      )
-      return { balance, redemption }
-    })
-    return reply.code(201).send({ ok: true, data: result })
-  })
-
   // ── Midnight Crew ───────────────────────────────────────────────────────
 
   app.get('/crew', async (req) => {
@@ -291,7 +212,8 @@ module.exports = async function userRoutes(app) {
       },
     },
   }, async (req, reply) => {
-    const settings = (await query(`SELECT allow_reapply_after_rejection FROM crew_settings WHERE id = 1`)).rows[0]
+    const settings = (await query(`SELECT allow_reapply_after_rejection, applications_enabled FROM crew_settings WHERE id = 1`)).rows[0]
+    if (settings?.applications_enabled === false) throw { code: 'APPLICATIONS_CLOSED', message: 'Crew applications are not open right now.' }
     const latest = (await query(`SELECT status FROM crew_applications WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`, [req.user.sub])).rows[0]
     if (latest?.status === 'pending') throw { code: 'DUPLICATE_APPLICATION', message: 'Your crew application is already pending.' }
     if (latest?.status === 'approved') throw { code: 'DUPLICATE_APPLICATION', message: 'You are already a Midnight Crew member.' }
@@ -383,10 +305,10 @@ module.exports = async function userRoutes(app) {
     try {
       ({ rows } = await query(
         `INSERT INTO coupons
-           (code, type, source, created_by_user_id, crew_profile_id, discount_type,
+           (code, type, created_by_user_id, crew_profile_id, discount_type,
             discount_value, min_order, max_uses, max_usage_per_phone, expires_at,
             status, is_active, internal_note)
-         VALUES ($1, 'crew', 'crew', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         VALUES ($1, 'crew', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          RETURNING *`,
         [code, req.user.sub, profile.id, req.body.discount_type, Math.round(value),
          Math.round(req.body.min_order ?? profile.min_order), req.body.max_uses,

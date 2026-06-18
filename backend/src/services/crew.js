@@ -37,10 +37,26 @@ async function validateCoupon(client, { code, subtotal, customerPhone = null, us
   if (c.expires_at && new Date(c.expires_at) < new Date()) throw { code: 'INVALID_COUPON', message: 'Coupon has expired.' }
   if (c.max_uses !== null && Number(c.used_count) >= Number(c.max_uses)) throw { code: 'COUPON_EXHAUSTED', message: 'This code has reached its usage limit.' }
   if (subtotal < Number(c.min_order || 0)) throw { code: 'COUPON_MIN_ORDER', message: `Minimum order for this code is ৳${c.min_order}.` }
-  const couponType = c.source || c.type || 'unknown'
+  const couponType = c.type || 'unknown'
   if (couponType === 'crew') {
     if (c.crew_status !== 'active') throw { code: 'INVALID_COUPON', message: 'This code is no longer active.' }
   }
+
+  // Specific coupons require the customer to be logged in — we check by user_id.
+  // Phone-only guests can never use these coupons (by design).
+  if (c.target_type === 'specific_customers') {
+    if (!userId) {
+      throw { code: 'COUPON_LOGIN_REQUIRED', message: 'Please log in to use this coupon.' }
+    }
+    const { rows: eligibility } = await client.query(
+      `SELECT EXISTS(SELECT 1 FROM coupon_customer_targets WHERE coupon_id = $1 AND user_id = $2) AS is_eligible`,
+      [c.id, userId]
+    )
+    if (!eligibility[0].is_eligible) {
+      throw { code: 'COUPON_NOT_ELIGIBLE', message: 'This coupon is not available for your account.' }
+    }
+  }
+
   if (c.max_usage_per_phone && (customerPhone || userId)) {
     const params = [c.id]
     const conds  = []
@@ -72,12 +88,12 @@ async function recordCouponUsage(client, { coupon, orderId, userId = null, custo
     throw { code: 'COUPON_MAXED', message: 'Coupon usage limit exceeded.' }
   }
   await client.query(
-    `INSERT INTO coupon_usages (coupon_id, coupon_code, order_id, user_id, customer_phone, discount_amount, order_total)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO coupon_usages (coupon_id, order_id, user_id, customer_phone, discount_amount, order_total)
+     VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT (coupon_id, order_id) DO NOTHING`,
-    [coupon.id, coupon.code, orderId, userId, customerPhone, discountAmount, orderTotal]
+    [coupon.id, orderId, userId, customerPhone, discountAmount, orderTotal]
   )
-  const couponType = coupon.source || coupon.type || 'unknown'
+  const couponType = coupon.type || 'unknown'
   if (couponType === 'crew' && coupon.crew_profile_id) {
     await client.query(`UPDATE orders SET coupon_id = $1, crew_profile_id = $2 WHERE id = $3`, [coupon.id, coupon.crew_profile_id, orderId])
   } else {
@@ -88,7 +104,7 @@ async function recordCouponUsage(client, { coupon, orderId, userId = null, custo
 async function syncCommissionForDeliveredOrder(client, orderId) {
   const { rows } = await client.query(
     `SELECT o.id, o.total, o.subtotal, o.discount_amount, o.status,
-            c.id AS coupon_id, c.source, c.type, c.crew_profile_id,
+            c.id AS coupon_id, c.type, c.crew_profile_id,
             cp.user_id, cp.default_commission_type, cp.default_commission_value,
             cp.custom_max_pct_discount,
             cs.commission_type, cs.commission_value, cs.commission_base,
@@ -98,7 +114,7 @@ async function syncCommissionForDeliveredOrder(client, orderId) {
                     OR (o.coupon_id IS NULL AND c.code = o.coupon_code)
      JOIN crew_profiles cp ON cp.id = c.crew_profile_id
      CROSS JOIN crew_settings cs
-     WHERE o.id = $1 AND (c.type = 'crew'::coupon_type OR c.source = 'crew')`,
+     WHERE o.id = $1 AND c.type = 'crew'::coupon_type`,
     [orderId]
   )
   if (!rows.length) return null

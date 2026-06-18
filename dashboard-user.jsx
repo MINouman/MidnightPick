@@ -128,14 +128,17 @@ function Sheet({ title, body, onConfirm, confirmLabel = "Confirm", onClose, chil
 
 // ── HOME TAB ──────────────────────────────────────────────────
 function HomeTab({ setTab }) {
-  const { user, orders, crew } = useContext(DashCtx);
+  const { user, orders, crew, tierInfo } = useContext(DashCtx);
   const pts       = user?.points_balance || 0;
   const lastOrder = orders[0];
   const state     = crewState(crew, user);
   const isCrew    = state === "approved";
-  const threshold = 1000;
-  const pct       = Math.min(100, Math.round((pts / threshold) * 100));
-  const toNext    = Math.max(0, threshold - pts);
+  const threshold = tierInfo?.nextTier?.min_lifetime_pts || 1000;
+  const progress  = tierInfo?.nextTier
+    ? (tierInfo.nextTier.min_lifetime_pts - (tierInfo?.ptsToNextTier || 0))
+    : pts;
+  const pct       = Math.min(100, Math.round((progress / threshold) * 100));
+  const toNext    = tierInfo ? (tierInfo.ptsToNextTier || 0) : Math.max(0, threshold - pts);
 
   return (
     <div>
@@ -209,7 +212,7 @@ function HomeTab({ setTab }) {
             </div>
             <div className="pts-mini-progress">
               <div className="pts-mini-progress-labels">
-                <span>{toNext.toLocaleString()} pts to first reward</span>
+                <span>{toNext.toLocaleString()} pts to {tierInfo?.nextTier?.name || "next tier"}</span>
                 <span>{pct}%</span>
               </div>
               <div className="pts-mini-track">
@@ -829,11 +832,22 @@ function SubscriptionTab() {
 
 // ── POINTS TAB ────────────────────────────────────────────────
 function PointsTab() {
-  const { user, pointsHistory, reload } = useContext(DashCtx);
+  const { user, pointsHistory, tierInfo, reload } = useContext(DashCtx);
   const [sheet, setSheet]         = useState(null);
   const [rewards, setRewards]     = useState(null);
   const [redeeming, setRedeeming] = useState(false);
-  const pts = user?.points_balance || 0;
+  const pts      = user?.points_balance || 0;
+  const lifetime = tierInfo?.lifetime || 0;
+
+  const currentTier  = tierInfo?.currentTier  || null;
+  const nextTier     = tierInfo?.nextTier      || null;
+  const ptsToNext    = tierInfo?.ptsToNextTier ?? null;
+  const pendingClaim = tierInfo?.pendingClaim  || null;
+
+  // Progress within the current tier band
+  const tierMin      = currentTier?.min_lifetime_pts ?? 0;
+  const tierMax      = nextTier?.min_lifetime_pts    ?? (tierMin + 1000);
+  const tierPct      = Math.min(100, Math.round(((lifetime - tierMin) / (tierMax - tierMin)) * 100));
 
   async function handleRedeem() {
     if (!sheet || redeeming) return;
@@ -845,47 +859,26 @@ function PointsTab() {
       });
       if (res?.ok) {
         setSheet(null);
-        await Swal.fire({
-          title: "Reward redeemed!",
-          text: `"${res.data.redemption.reward_label}" is on its way — our team will contact you to deliver it.`,
-          icon: "success",
-          confirmButtonColor: "#FF9100",
-          background: "#fff",
-        });
+        await Swal.fire({ title: "Reward redeemed!", text: `"${res.data.redemption.reward_label}" is on its way — our team will contact you.`, icon: "success", confirmButtonColor: "#FF9100", background: "#fff" });
         reload();
       } else {
-        Swal.fire({
-          title: "Could not redeem",
-          text: res?.error?.message || "Something went wrong. Please try again.",
-          icon: "error",
-          confirmButtonColor: "#FF9100",
-          background: "#fff",
-        });
+        Swal.fire({ title: "Could not redeem", text: res?.error?.message || "Something went wrong.", icon: "error", confirmButtonColor: "#FF9100", background: "#fff" });
       }
     } catch (e) {
       Swal.fire({ title: "Could not redeem", text: e?.message || "Network error.", icon: "error", confirmButtonColor: "#FF9100", background: "#fff" });
-    } finally {
-      setRedeeming(false);
-    }
+    } finally { setRedeeming(false); }
   }
 
   useEffect(() => {
-    mpApi.fetch("/me/point-rewards")
-      .then(res => setRewards(res?.data?.rewards || []))
-      .catch(() => setRewards([]));
+    mpApi.fetch("/me/point-rewards").then(res => setRewards(res?.data?.rewards || [])).catch(() => setRewards([]));
   }, []);
-
-  const nextReward = rewards ? rewards.find(r => r.pts_cost > pts) : null;
-  const threshold  = nextReward ? nextReward.pts_cost : (rewards?.[0]?.pts_cost || 1000);
-  const pct        = Math.min(100, Math.round((pts / threshold) * 100));
 
   return (
     <div>
       <div className="page-title mb20">Points</div>
 
       <div className="pts-layout">
-
-        {/* Left: balance + history */}
+        {/* Left: balance + tier + history */}
         <div>
           <div className="pts-balance-card">
             <div className="pts-eyebrow">Midnight Points</div>
@@ -893,39 +886,58 @@ function PointsTab() {
               <span className="pts-number">{pts.toLocaleString()}</span>
               <span className="pts-unit">pts</span>
             </div>
-            {rewards && rewards.length > 0 && (
+
+            {/* Tier badge */}
+            {currentTier && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, marginBottom: 4, position: "relative", zIndex: 1 }}>
+                <span style={{ width: 10, height: 10, borderRadius: "50%", background: currentTier.badge_color, flexShrink: 0 }} />
+                <span style={{ fontSize: 13, fontWeight: 700, color: currentTier.badge_color }}>{currentTier.name}</span>
+              </div>
+            )}
+
+            {/* Tier progress bar */}
+            {nextTier && (
               <div className="pts-progress-wrap">
                 <div className="pts-progress-labels">
-                  <span>
-                    {nextReward
-                      ? `${(nextReward.pts_cost - pts).toLocaleString()} pts to "${nextReward.label}"`
-                      : "All rewards unlocked!"}
-                  </span>
-                  <span>{pct}%</span>
+                  <span>{(ptsToNext ?? 0).toLocaleString()} pts to <strong>{nextTier.name}</strong></span>
+                  <span>{tierPct}%</span>
                 </div>
                 <div className="pts-track">
-                  <div className="pts-fill" style={{ width: `${pct}%` }} />
+                  <div className="pts-fill" style={{ width: `${tierPct}%` }} />
                 </div>
+              </div>
+            )}
+            {!nextTier && currentTier && (
+              <div className="pts-progress-wrap">
+                <div className="pts-progress-labels"><span style={{ color: currentTier.badge_color, fontWeight: 700 }}>Highest tier reached!</span></div>
               </div>
             )}
           </div>
 
+          {/* Pending tier reward banner */}
+          {pendingClaim && (
+            <div className="crew-banner mb16 mt16" style={{ borderColor: pendingClaim.badge_color || "var(--orange)" }}>
+              <div className="row mb8" style={{ gap: 10 }}>
+                <i className="fa fa-gift text-orange" style={{ fontSize: 16 }} />
+                <span style={{ fontWeight: 700, fontSize: 15 }}>You earned a free reward!</span>
+              </div>
+              <div className="text-sm text-muted">
+                You reached <strong style={{ color: pendingClaim.badge_color }}>{pendingClaim.tier_name}</strong> — <strong>{pendingClaim.product_name}</strong> will be added free to your next order automatically.
+              </div>
+            </div>
+          )}
+
           <div className="eyebrow mt20 mb10">History</div>
           <div className="card">
             {pointsHistory.length === 0 ? (
-              <div className="text-sm text-muted" style={{ padding: "16px 0", textAlign: "center" }}>
-                Points are added when your orders are delivered.
-              </div>
+              <div className="text-sm text-muted" style={{ padding: "16px 0", textAlign: "center" }}>Points are added when your orders are placed.</div>
             ) : pointsHistory.map((p, i) => (
               <div key={i} className="pts-history-row">
                 <div>
                   <div className="pts-history-desc">{p.description}</div>
                   <div className="pts-history-date">{fmtDate(p.created_at)}</div>
                 </div>
-                <span style={{
-                  fontWeight: 700, fontSize: 14,
-                  color: p.type === "earned" || p.type === "bonus" ? "var(--green)" : "var(--red)"
-                }}>
+                <span style={{ fontWeight: 700, fontSize: 14, color: p.type === "earned" || p.type === "bonus" ? "var(--green)" : "var(--red)" }}>
                   {p.type === "earned" || p.type === "bonus" ? "+" : "−"}{Math.abs(p.points)} pts
                 </span>
               </div>
@@ -933,19 +945,13 @@ function PointsTab() {
           </div>
         </div>
 
-        {/* Right: rewards */}
+        {/* Right: redeem catalogue */}
         <div>
           <div className="eyebrow mb10">Redeem Points</div>
           {rewards === null ? (
-            <div className="card" style={{ padding: "28px", textAlign: "center" }}>
-              <i className="fa fa-spinner fa-spin" style={{ color: "var(--orange)" }} />
-            </div>
+            <div className="card" style={{ padding: "28px", textAlign: "center" }}><i className="fa fa-spinner fa-spin" style={{ color: "var(--orange)" }} /></div>
           ) : rewards.length === 0 ? (
-            <div className="card">
-              <div className="text-sm text-muted" style={{ padding: "16px 0", textAlign: "center" }}>
-                No rewards available yet.
-              </div>
-            </div>
+            <div className="card"><div className="text-sm text-muted" style={{ padding: "16px 0", textAlign: "center" }}>No rewards available yet.</div></div>
           ) : rewards.map(r => {
             const canRedeem = pts >= r.pts_cost;
             return (
@@ -956,15 +962,11 @@ function PointsTab() {
                   {r.worth && <div className="reward-worth">Worth {r.worth}</div>}
                 </div>
                 {canRedeem ? (
-                  <button className="btn btn-primary btn-sm" onClick={() => setSheet(r)} style={{ flexShrink: 0 }}>
-                    Redeem
-                  </button>
+                  <button className="btn btn-primary btn-sm" onClick={() => setSheet(r)} style={{ flexShrink: 0 }}>Redeem</button>
                 ) : (
                   <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, flexShrink: 0 }}>
                     <i className="fa fa-lock" style={{ fontSize: 14, color: "var(--text-35)" }} />
-                    <span style={{ fontSize: 10, color: "var(--text-35)", fontWeight: 600 }}>
-                      {(r.pts_cost - pts).toLocaleString()} more
-                    </span>
+                    <span style={{ fontSize: 10, color: "var(--text-35)", fontWeight: 600 }}>{(r.pts_cost - pts).toLocaleString()} more</span>
                   </div>
                 )}
               </div>
@@ -1216,6 +1218,7 @@ function CrewTab() {
     const pending = state === "pending";
     const rejected = state === "rejected";
     const paused = state === "paused";
+    const appsClosed = settings.applications_enabled === false;
     return (
       <div style={{ maxWidth: 720 }}>
         <div className="page-title">Crew</div>
@@ -1223,14 +1226,14 @@ function CrewTab() {
         <div className="crew-banner mb16">
           <div className="row mb8" style={{ gap: 10 }}>
             <i className="fa fa-fire text-orange" style={{ fontSize: 18 }} />
-            <span style={{ fontWeight: 700, fontSize: 16 }}>{paused ? "Crew Access Paused" : pending ? "Application Pending" : rejected ? "Application Not Approved Yet" : "Join the Midnight Crew"}</span>
+            <span style={{ fontWeight: 700, fontSize: 16 }}>{paused ? "Crew Access Paused" : pending ? "Application Pending" : rejected ? "Application Not Approved Yet" : appsClosed ? "Applications Closed" : "Join the Midnight Crew"}</span>
           </div>
           <div className="text-sm text-muted mb14">
-            {paused ? "Your crew access is currently paused and your codes are inactive. Contact Midnight Pick support for details." : pending ? "We're reviewing your request." : rejected ? "You can contact support or reapply if available." : "Earn rewards when friends order with your code."}
+            {paused ? "Your crew access is currently paused and your codes are inactive. Contact Midnight Pick support for details." : pending ? "We're reviewing your request." : rejected ? "You can contact support or reapply if available." : appsClosed ? "Crew applications are not open right now. Check back later." : "Earn rewards when friends order with your code."}
           </div>
           {paused ? null : pending ? (
             <button className="btn btn-ghost btn-sm" onClick={() => setSheet("view")}>View Application</button>
-          ) : (
+          ) : appsClosed ? null : (
             <button className="btn btn-primary btn-sm" onClick={() => setSheet("apply")}>{rejected ? "Apply Again" : "Apply to Join"}</button>
           )}
         </div>
@@ -1466,11 +1469,17 @@ function AccountTab({ setTab }) {
 
   async function handleLogout() {
     // Call logout with credentials: include (sends httpOnly cookies automatically)
-    await fetch(window.mpApi.base + "/auth/logout", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-    }).catch(() => {});
+    try {
+      await fetch(window.mpApi.base + "/auth/logout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      });
+    } catch (err) {
+      console.error("Logout error:", err);
+    }
+    // Clear local user info
+    localStorage.removeItem("mp_user");
     window.location.href = "index.html";
   }
 
@@ -1805,11 +1814,17 @@ function Sidebar({ tab, setTab }) {
 
   async function handleLogout() {
     // Call logout with credentials: include (sends httpOnly cookies automatically)
-    await fetch(window.mpApi.base + "/auth/logout", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-    }).catch(() => {});
+    try {
+      await fetch(window.mpApi.base + "/auth/logout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      });
+    } catch (err) {
+      console.error("Logout error:", err);
+    }
+    // Clear local user info
+    localStorage.removeItem("mp_user");
     window.location.href = "index.html";
   }
 
@@ -1902,7 +1917,7 @@ function BottomNav({ tab, setTab, isCrew }) {
 function UserDashboard() {
   const [tab, setTab] = useState("home");
   const [data, setData] = useState({
-    user: null, orders: [], addresses: [], paymentMethods: [], pointsHistory: [], loading: true,
+    user: null, orders: [], addresses: [], paymentMethods: [], pointsHistory: [], tierInfo: null, loading: true,
   });
 
   async function loadData() {
@@ -1921,6 +1936,7 @@ function UserDashboard() {
         addresses:      addrsRes?.data || [],
         paymentMethods: pmsRes?.data  || [],
         pointsHistory:  ptsRes?.data?.transactions || [],
+        tierInfo:       ptsRes?.data?.tier_info    || null,
         crew:           crewRes?.data || null,
         loading: false,
       });

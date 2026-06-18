@@ -1,13 +1,11 @@
 'use strict'
 
-const crypto = require('crypto')
 const { sendOtp, verifyOtp }              = require('../services/otp')
 const { registerUser, loginUser, findOrCreateGoogleUser, findOrCreateUser } = require('../services/users')
 const { createTokenPair, rotateRefreshToken, revokeTokens } = require('../services/tokens')
 const { adminLogin, bootstrapAdmin }      = require('../services/admin')
 const { verifyGoogleCredential }          = require('../services/google')
 const { normalizeBdMobile }               = require('../services/phone')
-const { redis }                            = require('../config/redis')
 
 module.exports = async function authRoutes(app) {
 
@@ -322,30 +320,5 @@ module.exports = async function authRoutes(app) {
       path: '/'
     })
     return reply.send({ ok: true })
-  })
-
-  // GET /auth/csrf-token — CSRF protection
-  app.get('/csrf-token', {}, async (req, reply) => {
-    try {
-      const token = crypto.randomBytes(32).toString('hex')
-      const sessionId = crypto.randomBytes(16).toString('hex')
-
-      // Store CSRF token in Redis with 1-hour expiration
-      // Key format: csrf:sessionId:hash to allow verification
-      const tokenHash = crypto.createHash('sha256').update(token).digest('hex')
-      await redis.setex(`csrf:${sessionId}:${tokenHash}`, 3600, '1')
-
-      // Return both session ID and token to client
-      return reply.send({
-        ok: true,
-        data: {
-          csrf_token: token,
-          session_id: sessionId
-        }
-      })
-    } catch (err) {
-      app.log.error({ err }, 'CSRF token generation failed')
-      throw { code: 'INTERNAL_ERROR', message: 'Failed to generate CSRF token' }
-    }
   })
 }

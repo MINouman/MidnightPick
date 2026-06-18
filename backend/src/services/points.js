@@ -1,18 +1,28 @@
 'use strict'
 
-const POINTS_PER_TAKA = 0.5  // ৳2 spent = 1 point
+const { query } = require('../config/db')
 
-function calculatePointsForOrder(total) {
-  return Math.floor(total * POINTS_PER_TAKA)
+async function getPointsSettings(client) {
+  const q = client ? client : { query: (sql, p) => query(sql, p) }
+  const { rows } = await q.query(
+    `SELECT points_per_100_taka, min_order_amount FROM points_settings WHERE id = 1`
+  )
+  return rows[0] || { points_per_100_taka: 10, min_order_amount: 0 }
 }
 
-// Must be called inside an open DB transaction (pass the `client`)
+function calculatePointsForOrder(total, pointsPer100 = 10) {
+  return Math.floor(total / 100 * pointsPer100)
+}
+
+// Must be called inside an open DB transaction (pass the `client`).
+// Increments both spendable balance and cumulative lifetime total.
 async function awardPoints(client, userId, points, description, referenceId) {
   if (points <= 0) return 0
 
   const { rows } = await client.query(
     `UPDATE users
-     SET    points_balance = points_balance + $2
+     SET    points_balance  = points_balance  + $2,
+            points_lifetime = points_lifetime + $2
      WHERE  id = $1
      RETURNING points_balance`,
     [userId, points]
@@ -28,7 +38,8 @@ async function awardPoints(client, userId, points, description, referenceId) {
   return balanceAfter
 }
 
-// Must be called inside an open DB transaction (pass the `client`)
+// Must be called inside an open DB transaction (pass the `client`).
+// Only decrements spendable balance — lifetime is intentionally unchanged.
 async function reversePoints(client, userId, points, description, referenceId) {
   if (points <= 0) return
 
@@ -50,8 +61,7 @@ async function reversePoints(client, userId, points, description, referenceId) {
 }
 
 // Must be called inside an open DB transaction (pass the `client`).
-// The guarded UPDATE makes the balance check atomic — concurrent redemptions
-// cannot both succeed on the same points.
+// Atomic check-and-deduct — concurrent redemptions cannot race.
 async function spendPoints(client, userId, points, description, referenceId, referenceType = 'redemption') {
   const { rows } = await client.query(
     `UPDATE users
@@ -72,4 +82,4 @@ async function spendPoints(client, userId, points, description, referenceId, ref
   return balanceAfter
 }
 
-module.exports = { calculatePointsForOrder, awardPoints, reversePoints, spendPoints }
+module.exports = { getPointsSettings, calculatePointsForOrder, awardPoints, reversePoints, spendPoints }

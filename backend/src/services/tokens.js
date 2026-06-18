@@ -103,6 +103,18 @@ async function revokeTokens(fastify, rawAccessToken, rawRefreshToken) {
 
 async function isBlacklisted(rawAccessToken) {
   if (!rawAccessToken) return false
+
+  // If Redis is not ready, allow the token through in development
+  // (In production with proper Redis setup, this won't happen)
+  if (redis.status !== 'ready') {
+    if (process.env.NODE_ENV === 'production') {
+      logCritical('Redis not ready in production - rejecting token for safety', new Error('Redis status: ' + redis.status))
+      return true
+    }
+    // In development, allow the token if Redis isn't ready yet
+    return false
+  }
+
   try {
     const hit = await redis.get(`token:blacklist:${rawAccessToken}`)
     return hit !== null
@@ -113,7 +125,7 @@ async function isBlacklisted(rawAccessToken) {
     // - Admin can't revoke user access if Redis is down
     // Better to temporarily block valid users than leak access to revoked ones.
     logCritical('Redis blacklist check failed - rejecting token for safety', err)
-    return true
+    return process.env.NODE_ENV === 'production'
   }
 }
 

@@ -1,9 +1,12 @@
 'use strict'
 
+const crypto = require('crypto')
+const { redis } = require('../config/redis')
 const { query, withTransaction } = require('../config/db')
 const { sendOrderConfirmation, sendOrderShipped }  = require('../services/sms')
 const { getRateLimitConfig } = require('../config/rate-limits')
-const { calculatePointsForOrder, awardPoints, reversePoints } = require('../services/points')
+const { getPointsSettings, calculatePointsForOrder, awardPoints, reversePoints } = require('../services/points')
+const { checkAndUpdateTier } = require('../services/tiers')
 const { syncCommissionForDeliveredOrder, reverseCommissionForOrder, validateCoupon, recordCouponUsage, restoreCouponUsageForOrder } = require('../services/crew')
 const { toEndOfDayDhaka } = require('../services/dates')
 const { normalizeBdMobile } = require('../services/phone')
@@ -105,13 +108,12 @@ module.exports = async function adminRoutes(app) {
 
       // Award points when order first moves to delivered and is linked to a user
       if (newStatus === 'delivered' && order.status !== 'delivered' && order.user_id && order.total > 0 && order.points_earned === 0) {
-        const pts = calculatePointsForOrder(order.total)
+        const ptSettings = await getPointsSettings(client)
+        const pts = calculatePointsForOrder(order.total, ptSettings.points_per_100_taka)
         if (pts > 0) {
           await awardPoints(client, order.user_id, pts, `Order #${order.order_ref} delivered`, order.id)
-          await client.query(
-            `UPDATE orders SET points_earned = $2 WHERE id = $1`,
-            [order.id, pts]
-          )
+          await client.query(`UPDATE orders SET points_earned = $2 WHERE id = $1`, [order.id, pts])
+          await checkAndUpdateTier(client, order.user_id)
           updated[0].points_earned = pts
         }
       }
@@ -171,17 +173,16 @@ module.exports = async function adminRoutes(app) {
     try {
       const { sendSms } = require('../services/sms')
       const { getTemplate, renderTemplate } = require('../services/sms-templates')
-      const otp = String(Math.floor(1000 + Math.random() * 9000))
+      const otp = String(crypto.randomInt(1000, 10000))
 
-      // Store OTP temporarily in Redis or session (for verification)
-      // For now, just send it and expect verification to use this
       const template = await getTemplate('order_otp')
       const msg = renderTemplate(template, { OTP_CODE: otp })
       await sendSms(phone, msg, 'order_otp')
 
-      // Store OTP in memory cache for verification (expires in 5 min)
-      if (!global.otpCache) global.otpCache = {}
-      global.otpCache[phone] = { otp, createdAt: Date.now() }
+      // Store OTP in Redis — cluster-safe (PM2) and auto-expiring, unlike the
+      // previous in-memory global cache. 30-minute validity; reset attempts.
+      await redis.setex(`admin:order-otp:${phone}`, 30 * 60, otp)
+      await redis.del(`admin:order-otp:attempts:${phone}`)
 
       return {
         ok: true,
@@ -191,6 +192,7 @@ module.exports = async function adminRoutes(app) {
         },
       }
     } catch (err) {
+      if (err.code) throw err
       throw { code: 'OTP_FAILED', message: err?.message || 'Failed to send OTP' }
     }
   })
@@ -211,25 +213,32 @@ module.exports = async function adminRoutes(app) {
   }, async (req) => {
     const { phone, otp } = req.body
 
-    if (!global.otpCache || !global.otpCache[phone]) {
+    const stored = await redis.get(`admin:order-otp:${phone}`)
+    if (!stored) {
+      // Either never sent or already expired (Redis TTL).
       throw { code: 'NO_OTP_SENT', message: 'No OTP found for this phone number. Request a new OTP.' }
     }
 
-    const cached = global.otpCache[phone]
-    const ageMs = Date.now() - cached.createdAt
-
-    // OTP valid for 30 minutes
-    if (ageMs > 30 * 60 * 1000) {
-      delete global.otpCache[phone]
-      throw { code: 'OTP_EXPIRED', message: 'OTP has expired. Request a new OTP.' }
+    // Cap attempts to stop brute-forcing the 4-digit code.
+    const attemptsKey = `admin:order-otp:attempts:${phone}`
+    const attempts = await redis.incr(attemptsKey)
+    if (attempts === 1) await redis.expire(attemptsKey, 30 * 60)
+    if (attempts > 5) {
+      await redis.del(`admin:order-otp:${phone}`)
+      await redis.del(attemptsKey)
+      throw { code: 'OTP_MAX_ATTEMPTS', message: 'Too many failed attempts. Request a new OTP.' }
     }
 
-    if (String(otp) !== cached.otp) {
+    // Constant-time compare so the code can't be discovered via timing.
+    const got      = Buffer.from(String(otp))
+    const expected = Buffer.from(String(stored))
+    if (got.length !== expected.length || !crypto.timingSafeEqual(got, expected)) {
       throw { code: 'INVALID_OTP', message: 'Invalid OTP code.' }
     }
 
-    // OTP is valid - clear it from cache
-    delete global.otpCache[phone]
+    // Success — consume the OTP and reset attempts.
+    await redis.del(`admin:order-otp:${phone}`)
+    await redis.del(attemptsKey)
 
     return {
       ok: true,
@@ -1032,13 +1041,14 @@ module.exports = async function adminRoutes(app) {
     // Usages and commissions aggregated separately — joining both raw tables
     // fans out and multiplies the sums.
     const { rows } = await query(
-      `SELECT c.id, c.code, c.type, COALESCE(c.source, c.type::text) AS source,
+      `SELECT c.id, c.code, c.type, c.type::text AS source,
               c.discount_type, c.discount_value, c.min_order, c.max_uses,
               c.max_usage_per_phone, c.used_count, c.is_active, c.status,
-              c.disabled_by, c.expires_at, c.created_at,
+              c.disabled_by, c.target_type, c.expires_at, c.created_at,
               u.name AS crew_name,
               COALESCE(cu.total_sales, 0)::int AS total_sales,
-              COALESCE(cc.commission_generated, 0)::numeric AS commission_generated
+              COALESCE(cc.commission_generated, 0)::numeric AS commission_generated,
+              COALESCE(ct.target_count, 0)::int AS target_customer_count
        FROM coupons c
        LEFT JOIN crew_profiles cp ON cp.id = c.crew_profile_id
        LEFT JOIN users u ON u.id = cp.user_id
@@ -1046,6 +1056,8 @@ module.exports = async function adminRoutes(app) {
                   FROM coupon_usages GROUP BY coupon_id) cu ON cu.coupon_id = c.id
        LEFT JOIN (SELECT coupon_id, SUM(commission_amount) AS commission_generated
                   FROM crew_commissions WHERE status != 'reversed' GROUP BY coupon_id) cc ON cc.coupon_id = c.id
+       LEFT JOIN (SELECT coupon_id, COUNT(*)::int AS target_count
+                  FROM coupon_customer_targets GROUP BY coupon_id) ct ON ct.coupon_id = c.id
        WHERE c.type = $1
        ORDER BY c.created_at DESC`,
       [type]
@@ -1060,32 +1072,51 @@ module.exports = async function adminRoutes(app) {
         type: 'object',
         required: ['code', 'discount_type', 'discount_value'],
         properties: {
-          code:           { type: 'string', minLength: 2, maxLength: 20 },
-          type:           { type: 'string', maxLength: 20, default: 'festival' },
-          discount_type:  { type: 'string', enum: ['pct', 'flat'] },
-          discount_value: { type: 'number', minimum: 0 },
-          min_order:      { type: 'number', minimum: 0, default: 0 },
-          max_uses:       { type: 'integer', minimum: 1 },
-          expires_at:     { type: 'string', maxLength: 30 },
+          code:            { type: 'string', minLength: 2, maxLength: 20 },
+          type:            { type: 'string', maxLength: 20, default: 'festival' },
+          discount_type:   { type: 'string', enum: ['pct', 'flat'] },
+          discount_value:  { type: 'number', minimum: 0 },
+          min_order:       { type: 'number', minimum: 0, default: 0 },
+          max_uses:        { type: 'integer', minimum: 1 },
+          expires_at:      { type: 'string', maxLength: 30 },
+          target_type: { type: 'string', enum: ['all', 'specific_customers'], default: 'all' },
+          user_ids:    { type: 'array', items: { type: 'string', format: 'uuid' } },
         },
         additionalProperties: false,
       },
     },
   }, async (req, reply) => {
-    const { code, type = 'festival', discount_type, discount_value, min_order = 0, max_uses, expires_at } = req.body
+    const { code, type = 'festival', discount_type, discount_value, min_order = 0, max_uses, expires_at, target_type = 'all', user_ids = [] } = req.body
     if (discount_type === 'pct' && Number(discount_value) > 100) {
       throw { code: 'VALIDATION_ERROR', message: 'Percentage discounts cannot exceed 100%.' }
     }
     if (discount_type === 'flat' && Number(discount_value) > 10000) {
       throw { code: 'VALIDATION_ERROR', message: 'Flat discounts cannot exceed ৳10,000 to prevent giving away orders.' }
     }
-    const { rows } = await query(
-      `INSERT INTO coupons (code, type, discount_type, discount_value, min_order, max_uses, expires_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, code, type, discount_type, discount_value, min_order, max_uses, used_count, is_active, expires_at, created_at`,
-      [code.toUpperCase(), type, discount_type, Math.round(discount_value), Math.round(min_order), max_uses || null, toEndOfDayDhaka(expires_at)]
-    )
-    return reply.code(201).send({ ok: true, data: rows[0] })
+
+    const result = await withTransaction(async (client) => {
+      const { rows } = await client.query(
+        `INSERT INTO coupons (code, type, discount_type, discount_value, min_order, max_uses, expires_at, target_type)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING id, code, type, discount_type, discount_value, min_order, max_uses, used_count, is_active, target_type, expires_at, created_at`,
+        [code.toUpperCase(), type, discount_type, Math.round(discount_value), Math.round(min_order), max_uses || null, toEndOfDayDhaka(expires_at), target_type]
+      )
+      if (!rows.length) throw { code: 'CREATION_ERROR', message: 'Failed to create coupon.' }
+
+      if (target_type === 'specific_customers' && user_ids.length > 0) {
+        const couponId = rows[0].id
+        const values = user_ids.map((_, i) => `($1, $${i + 2})`).join(',')
+        await client.query(
+          `INSERT INTO coupon_customer_targets (coupon_id, user_id) VALUES ${values}
+           ON CONFLICT (coupon_id, user_id) DO NOTHING`,
+          [couponId, ...user_ids]
+        )
+      }
+
+      return rows[0]
+    })
+
+    return reply.code(201).send({ ok: true, data: result })
   })
 
   // PATCH /admin/coupons/:code — edit coupon fields
@@ -1132,10 +1163,17 @@ module.exports = async function adminRoutes(app) {
     } else if (req.body.is_active === true || req.body.status === 'active') {
       sets.push(`disabled_by = NULL`)
     }
+    // Keep is_active and status in sync (they encode the same state; the DB
+    // now enforces their consistency via a CHECK constraint)
+    if ('status' in req.body && !('is_active' in req.body)) {
+      sets.push(`is_active = ${req.body.status === 'active' ? 'true' : 'false'}`)
+    } else if ('is_active' in req.body && !('status' in req.body)) {
+      sets.push(`status = '${req.body.is_active ? 'active' : 'disabled'}'`)
+    }
     const { rows } = await query(
       `UPDATE coupons SET ${sets.join(', ')}, updated_at = NOW() WHERE code = $1
-       RETURNING id, code, type, COALESCE(source, type::text) AS source, discount_type, discount_value,
-                 min_order, max_uses, max_usage_per_phone, used_count, is_active, status, disabled_by, expires_at, created_at`,
+       RETURNING id, code, type, type::text AS source, discount_type, discount_value,
+                 min_order, max_uses, max_usage_per_phone, used_count, is_active, status, disabled_by, target_type, expires_at, created_at`,
       [code, ...vals]
     )
     if (!rows.length) throw { code: 'NOT_FOUND', message: 'Coupon not found.' }
@@ -1152,6 +1190,138 @@ module.exports = async function adminRoutes(app) {
     const { rows } = await query(`DELETE FROM coupons WHERE code = $1 RETURNING code`, [code])
     if (!rows.length) throw { code: 'NOT_FOUND', message: 'Coupon not found.' }
     return reply.code(200).send({ ok: true, data: { code: rows[0].code } })
+  })
+
+  // ── Coupon Customer Targeting ─────────────────────────────────────────────
+  // Specific coupons are tied to user_id (not phone). Customers must be logged
+  // in to use them, and must have placed at least one order to be targetable.
+
+  // GET /admin/customers/search?q=... — Search registered users with ≥1 order for coupon targeting
+  app.get('/customers/search', {
+    schema: {
+      querystring: {
+        type: 'object',
+        required: ['q'],
+        properties: { q: { type: 'string', minLength: 1, maxLength: 50 } },
+      },
+    },
+  }, async (req) => {
+    const q = `%${req.query.q}%`
+    const { rows } = await query(
+      `SELECT u.id, u.name, u.email, u.phone,
+              COUNT(o.id)::int AS order_count,
+              MAX(o.created_at) AS last_order_at
+       FROM users u
+       JOIN orders o ON o.user_id = u.id
+       WHERE u.is_active = true
+         AND u.role IN ('user', 'crew', 'influencer')
+         AND (u.name ILIKE $1 OR u.email ILIKE $1 OR u.phone ILIKE $1)
+       GROUP BY u.id, u.name, u.email, u.phone
+       ORDER BY order_count DESC, last_order_at DESC
+       LIMIT 20`,
+      [q]
+    )
+    return { ok: true, data: { customers: rows } }
+  })
+
+  // GET /admin/coupons/:code/targeting — Get which users are targeted
+  app.get('/coupons/:code/targeting', {
+    schema: {
+      params: { type: 'object', required: ['code'], properties: { code: { type: 'string', maxLength: 20 } } },
+    },
+  }, async (req) => {
+    const code = req.params.code.toUpperCase()
+    const { rows: coupons } = await query(`SELECT id, target_type FROM coupons WHERE code = $1`, [code])
+    if (!coupons.length) throw { code: 'NOT_FOUND', message: 'Coupon not found.' }
+
+    const couponId = coupons[0].id
+    const targetType = coupons[0].target_type
+
+    if (targetType === 'all') {
+      return { ok: true, data: { target_type: 'all', users: [] } }
+    }
+
+    const { rows: targets } = await query(
+      `SELECT u.id, u.name, u.email, u.phone
+       FROM coupon_customer_targets cct
+       JOIN users u ON u.id = cct.user_id
+       WHERE cct.coupon_id = $1
+       ORDER BY u.name`,
+      [couponId]
+    )
+    return { ok: true, data: { target_type: targetType, users: targets } }
+  })
+
+  // POST /admin/coupons/:code/customers — Add registered users to a specific coupon
+  app.post('/coupons/:code/customers', {
+    schema: {
+      params: { type: 'object', required: ['code'], properties: { code: { type: 'string', maxLength: 20 } } },
+      body: {
+        type: 'object',
+        required: ['user_ids'],
+        properties: {
+          user_ids: { type: 'array', items: { type: 'string', format: 'uuid' }, minItems: 1 },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req, reply) => {
+    const code = req.params.code.toUpperCase()
+    const { user_ids } = req.body
+
+    const { rows: coupons } = await query(`SELECT id FROM coupons WHERE code = $1`, [code])
+    if (!coupons.length) throw { code: 'NOT_FOUND', message: 'Coupon not found.' }
+    const couponId = coupons[0].id
+
+    // Verify all supplied user_ids exist and have placed at least one order
+    const { rows: valid } = await query(
+      `SELECT u.id FROM users u
+       WHERE u.id = ANY($1::uuid[]) AND u.is_active = true
+         AND EXISTS (SELECT 1 FROM orders o WHERE o.user_id = u.id)`,
+      [user_ids]
+    )
+    if (valid.length !== user_ids.length) {
+      throw { code: 'VALIDATION_ERROR', message: 'One or more users not found or have no orders. Only customers with at least one order can receive specific coupons.' }
+    }
+
+    // Switch coupon to specific_customers targeting
+    await query(`UPDATE coupons SET target_type = 'specific_customers', updated_at = NOW() WHERE id = $1`, [couponId])
+
+    const values = user_ids.map((_, i) => `($1, $${i + 2})`).join(',')
+    const { rowCount } = await query(
+      `INSERT INTO coupon_customer_targets (coupon_id, user_id) VALUES ${values}
+       ON CONFLICT (coupon_id, user_id) DO NOTHING`,
+      [couponId, ...user_ids]
+    )
+    return reply.code(201).send({ ok: true, data: { added: rowCount } })
+  })
+
+  // DELETE /admin/coupons/:code/customers — Remove users from a coupon
+  app.delete('/coupons/:code/customers', {
+    schema: {
+      params: { type: 'object', required: ['code'], properties: { code: { type: 'string', maxLength: 20 } } },
+      body: {
+        type: 'object',
+        required: ['user_ids'],
+        properties: {
+          user_ids: { type: 'array', items: { type: 'string', format: 'uuid' }, minItems: 1 },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req) => {
+    const code = req.params.code.toUpperCase()
+    const { user_ids } = req.body
+
+    const { rows: coupons } = await query(`SELECT id FROM coupons WHERE code = $1`, [code])
+    if (!coupons.length) throw { code: 'NOT_FOUND', message: 'Coupon not found.' }
+    const couponId = coupons[0].id
+
+    const { rowCount } = await query(
+      `DELETE FROM coupon_customer_targets WHERE coupon_id = $1 AND user_id = ANY($2::uuid[])`,
+      [couponId, user_ids]
+    )
+    return { ok: true, data: { removed: rowCount } }
   })
 
   // ── Midnight Crew Management ──────────────────────────────────────────────
@@ -1283,7 +1453,7 @@ module.exports = async function adminRoutes(app) {
   app.get('/crew/coupons', async () => {
     // Same fan-out guard as GET /coupons: one aggregate pass per table.
     const { rows } = await query(
-      `SELECT c.id, c.code, COALESCE(c.source, c.type::text) AS source, c.discount_type,
+      `SELECT c.id, c.code, c.type::text AS source, c.discount_type,
               c.discount_value, c.min_order, c.max_uses, c.max_usage_per_phone,
               c.used_count, c.status, c.is_active, c.expires_at, c.created_at,
               u.name AS crew_member,
@@ -1313,7 +1483,7 @@ module.exports = async function adminRoutes(app) {
       'max_pct_discount','max_flat_discount','min_order','max_uses_per_coupon',
       'max_usage_per_phone','max_active_coupons_per_crew','require_coupon_approval',
       'allow_crew_edit_active_coupon','allow_crew_deactivate_coupon','allow_coupon_expiry',
-      'allow_reapply_after_rejection','commission_type','commission_value','commission_base',
+      'allow_reapply_after_rejection','applications_enabled','commission_type','commission_value','commission_base',
       'commission_mode','commission_min_value','payout_threshold',
     ]
     const entries = Object.entries(req.body || {}).filter(([k]) => allowed.includes(k))
@@ -1444,71 +1614,6 @@ module.exports = async function adminRoutes(app) {
     )
     if (!rows.length) throw { code: 'NOT_FOUND', message: 'Reward not found.' }
     return reply.code(200).send({ ok: true, data: { id: rows[0].id } })
-  })
-
-  // GET /admin/redemptions — reward claims, pending first
-  app.get('/redemptions', {
-    schema: {
-      querystring: {
-        type: 'object',
-        properties: { status: { type: 'string', enum: ['pending', 'fulfilled', 'cancelled'] } },
-      },
-    },
-  }, async (req) => {
-    const where  = req.query.status ? `WHERE r.status = $1` : ''
-    const params = req.query.status ? [req.query.status] : []
-    const { rows } = await query(
-      `SELECT r.id, r.reward_label, r.pts_cost, r.worth, r.status, r.created_at,
-              u.name AS user_name, u.phone AS user_phone
-       FROM point_redemptions r
-       JOIN users u ON u.id = r.user_id
-       ${where}
-       ORDER BY (r.status = 'pending') DESC, r.created_at DESC
-       LIMIT 200`,
-      params
-    )
-    return { ok: true, data: { redemptions: rows } }
-  })
-
-  // PATCH /admin/redemptions/:id — fulfil or cancel a pending claim
-  app.patch('/redemptions/:id', {
-    schema: {
-      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
-      body: {
-        type: 'object',
-        required: ['status'],
-        properties: { status: { type: 'string', enum: ['fulfilled', 'cancelled'] } },
-        additionalProperties: false,
-      },
-    },
-  }, async (req) => {
-    const data = await withTransaction(async (client) => {
-      const { rows } = await client.query(
-        `UPDATE point_redemptions SET status = $2, updated_at = NOW()
-         WHERE id = $1 AND status = 'pending'
-         RETURNING id, user_id, reward_label, pts_cost, status`,
-        [req.params.id, req.body.status]
-      )
-      if (!rows.length) throw { code: 'NOT_FOUND', message: 'Pending redemption not found — it may already be resolved.' }
-      const r = rows[0]
-
-      if (req.body.status === 'cancelled') {
-        // Refund as 'bonus' (the only credit-side tx type besides 'earned'),
-        // so the customer's history shows it as a plus
-        const { rows: balRows } = await client.query(
-          `UPDATE users SET points_balance = points_balance + $2 WHERE id = $1 RETURNING points_balance`,
-          [r.user_id, r.pts_cost]
-        )
-        await client.query(
-          `INSERT INTO points_transactions
-             (user_id, type, points, balance_after, description, reference_id, reference_type)
-           VALUES ($1, 'bonus', $2, $3, $4, $5, 'redemption')`,
-          [r.user_id, r.pts_cost, balRows[0].points_balance, `Refund: ${r.reward_label} (redemption cancelled)`, r.id]
-        )
-      }
-      return { id: r.id, status: r.status, reward_label: r.reward_label, pts_cost: r.pts_cost }
-    })
-    return { ok: true, data }
   })
 
   // ── Customer Feedback (private ordering-experience insights) ────────────
@@ -1767,5 +1872,314 @@ module.exports = async function adminRoutes(app) {
     )
 
     return { ok: true, data: { logs: rows, total, page, limit } }
+  })
+
+  // ── User Account Management ──────────────────────────────────────────────
+
+  // GET /admin/users — List all users with status
+  app.get('/users', {
+    schema: {
+      querystring: {
+        type: 'object',
+        properties: {
+          page:   { type: 'integer', minimum: 1, default: 1 },
+          limit:  { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+          search: { type: 'string', maxLength: 100 },
+          status: { type: 'string', enum: ['active', 'inactive', 'all'] },
+        },
+      },
+    },
+  }, async (req) => {
+    const { page = 1, limit = 20, search, status = 'all' } = req.query
+    const offset = (page - 1) * limit
+    const params = []
+    const conditions = []
+
+    if (status !== 'all') {
+      const isActive = status === 'active'
+      params.push(isActive)
+      conditions.push(`is_active = $${params.length}`)
+    }
+
+    if (search) {
+      params.push(`%${search}%`)
+      conditions.push(`(email ILIKE $${params.length} OR phone ILIKE $${params.length} OR name ILIKE $${params.length})`)
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+
+    const { rows: countRows } = await query(
+      `SELECT COUNT(*) FROM users ${where}`,
+      params
+    )
+    const total = parseInt(countRows[0].count, 10)
+
+    const dataParams = [...params, limit, offset]
+    const { rows } = await query(
+      `SELECT id, email, phone, name, role, is_active, points_balance, created_at, updated_at
+       FROM users
+       ${where}
+       ORDER BY created_at DESC
+       LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+      dataParams
+    )
+
+    return { ok: true, data: { users: rows, total, page, limit } }
+  })
+
+  // GET /admin/users/:userId — Get user details
+  app.get('/users/:userId', {
+    schema: {
+      params: { type: 'object', properties: { userId: { type: 'string', format: 'uuid' } }, required: ['userId'] },
+    },
+  }, async (req) => {
+    const { rows } = await query(
+      `SELECT id, email, phone, name, role, is_active, points_balance, created_at, updated_at
+       FROM users WHERE id = $1`,
+      [req.params.userId]
+    )
+    if (!rows.length) throw { code: 'NOT_FOUND', message: 'User not found.' }
+    return { ok: true, data: { user: rows[0] } }
+  })
+
+  // PATCH /admin/users/:userId/activate — Activate a user account
+  app.patch('/users/:userId/activate', {
+    schema: {
+      params: { type: 'object', properties: { userId: { type: 'string', format: 'uuid' } }, required: ['userId'] },
+    },
+  }, async (req) => {
+    const { rows } = await query(
+      `SELECT id, email, is_active FROM users WHERE id = $1`,
+      [req.params.userId]
+    )
+    if (!rows.length) throw { code: 'NOT_FOUND', message: 'User not found.' }
+
+    const user = rows[0]
+    if (user.is_active) {
+      return { ok: true, data: { message: 'User account is already active.' } }
+    }
+
+    await query(
+      `UPDATE users SET is_active = true, updated_at = NOW() WHERE id = $1`,
+      [req.params.userId]
+    )
+
+    return {
+      ok: true,
+      data: {
+        message: `User ${user.email} has been activated.`,
+        user_id: user.id,
+        email: user.email,
+      },
+    }
+  })
+
+  // PATCH /admin/users/:userId/deactivate — Deactivate a user account
+  app.patch('/users/:userId/deactivate', {
+    schema: {
+      params: { type: 'object', properties: { userId: { type: 'string', format: 'uuid' } }, required: ['userId'] },
+      body: {
+        type: 'object',
+        properties: { reason: { type: 'string', maxLength: 255 } },
+        additionalProperties: false,
+      },
+    },
+  }, async (req) => {
+    const { reason = 'No reason provided' } = req.body
+
+    const { rows } = await query(
+      `SELECT id, email, role, is_active FROM users WHERE id = $1`,
+      [req.params.userId]
+    )
+    if (!rows.length) throw { code: 'NOT_FOUND', message: 'User not found.' }
+
+    const user = rows[0]
+
+    // Prevent self-deactivation (admin locking themselves out)
+    if (user.id === req.user.id) {
+      throw { code: 'VALIDATION_ERROR', message: 'You cannot deactivate your own account.' }
+    }
+
+    // Warn if deactivating another admin
+    if (user.role === 'admin') {
+      app.log.warn({ userId: user.id, email: user.email, reason }, 'Admin deactivated another admin account')
+    }
+
+    if (!user.is_active) {
+      return { ok: true, data: { message: 'User account is already inactive.' } }
+    }
+
+    await query(
+      `UPDATE users SET is_active = false, updated_at = NOW() WHERE id = $1`,
+      [req.params.userId]
+    )
+
+    return {
+      ok: true,
+      data: {
+        message: `User ${user.email} has been deactivated.`,
+        user_id: user.id,
+        email: user.email,
+        reason,
+      },
+    }
+  })
+
+  // ── Points Settings ────────────────────────────────────────────────────────
+
+  app.get('/points-settings', async () => {
+    const { rows } = await query(`SELECT * FROM points_settings WHERE id = 1`)
+    return { ok: true, data: rows[0] || { id: 1, points_per_100_taka: 10, min_order_amount: 0 } }
+  })
+
+  app.patch('/points-settings', {
+    schema: {
+      body: {
+        type: 'object',
+        properties: {
+          points_per_100_taka: { type: 'integer', minimum: 0 },
+          min_order_amount:    { type: 'integer', minimum: 0 },
+        },
+        additionalProperties: false,
+        minProperties: 1,
+      },
+    },
+  }, async (req) => {
+    const allowed = ['points_per_100_taka', 'min_order_amount']
+    const entries = Object.entries(req.body || {}).filter(([k]) => allowed.includes(k))
+    if (!entries.length) throw { code: 'VALIDATION_ERROR', message: 'Nothing to update.' }
+    const sets = entries.map(([k], i) => `${k} = $${i + 1}`)
+    const vals = entries.map(([, v]) => v)
+    const { rows } = await query(
+      `UPDATE points_settings SET ${sets.join(', ')}, updated_at = NOW() WHERE id = 1 RETURNING *`,
+      vals
+    )
+    return { ok: true, data: rows[0] }
+  })
+
+  // ── Loyalty Tiers ──────────────────────────────────────────────────────────
+
+  app.get('/loyalty-tiers', async () => {
+    const { rows } = await query(
+      `SELECT lt.*,
+              p.name  AS product_name,
+              pv.label AS variant_label
+       FROM   loyalty_tiers lt
+       LEFT JOIN products p        ON p.id  = lt.reward_product_id
+       LEFT JOIN product_variants pv ON pv.id = lt.reward_variant_id
+       ORDER  BY lt.sort_order ASC, lt.min_lifetime_pts ASC`
+    )
+    return { ok: true, data: { tiers: rows } }
+  })
+
+  app.post('/loyalty-tiers', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['name', 'min_lifetime_pts'],
+        properties: {
+          name:              { type: 'string', minLength: 1, maxLength: 50 },
+          min_lifetime_pts:  { type: 'integer', minimum: 0 },
+          badge_color:       { type: 'string', maxLength: 20 },
+          reward_product_id: { type: 'string', format: 'uuid' },
+          reward_variant_id: { type: 'string', format: 'uuid' },
+          sort_order:        { type: 'integer', minimum: 0 },
+          is_active:         { type: 'boolean' },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req, reply) => {
+    const { name, min_lifetime_pts, badge_color = '#CD7F32', reward_product_id, reward_variant_id, sort_order = 0, is_active = true } = req.body
+    const { rows } = await query(
+      `INSERT INTO loyalty_tiers (name, min_lifetime_pts, badge_color, reward_product_id, reward_variant_id, sort_order, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [name, min_lifetime_pts, badge_color, reward_product_id || null, reward_variant_id || null, sort_order, is_active]
+    )
+    reply.code(201)
+    return { ok: true, data: rows[0] }
+  })
+
+  app.patch('/loyalty-tiers/:id', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+      body: {
+        type: 'object',
+        properties: {
+          name:              { type: 'string', minLength: 1, maxLength: 50 },
+          min_lifetime_pts:  { type: 'integer', minimum: 0 },
+          badge_color:       { type: 'string', maxLength: 20 },
+          reward_product_id: { type: ['string', 'null'] },
+          reward_variant_id: { type: ['string', 'null'] },
+          sort_order:        { type: 'integer', minimum: 0 },
+          is_active:         { type: 'boolean' },
+        },
+        additionalProperties: false,
+        minProperties: 1,
+      },
+    },
+  }, async (req) => {
+    const allowed = ['name', 'min_lifetime_pts', 'badge_color', 'reward_product_id', 'reward_variant_id', 'sort_order', 'is_active']
+    const entries = Object.entries(req.body || {}).filter(([k]) => allowed.includes(k))
+    if (!entries.length) throw { code: 'VALIDATION_ERROR', message: 'Nothing to update.' }
+    const sets = entries.map(([k], i) => `${k} = $${i + 1}`)
+    const vals = entries.map(([, v]) => v)
+    vals.push(req.params.id)
+    const { rows } = await query(
+      `UPDATE loyalty_tiers SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $${vals.length} RETURNING *`,
+      vals
+    )
+    if (!rows.length) throw { code: 'NOT_FOUND', message: 'Tier not found.' }
+    return { ok: true, data: rows[0] }
+  })
+
+  app.delete('/loyalty-tiers/:id', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+    },
+  }, async (req) => {
+    const { rows } = await query(
+      `UPDATE loyalty_tiers SET is_active = false, updated_at = NOW() WHERE id = $1 RETURNING id`,
+      [req.params.id]
+    )
+    if (!rows.length) throw { code: 'NOT_FOUND', message: 'Tier not found.' }
+    return { ok: true, data: { message: 'Tier deactivated.' } }
+  })
+
+  // ── Tier Reward Claims ─────────────────────────────────────────────────────
+
+  app.get('/tier-reward-claims', async (req) => {
+    const status = req.query.status || 'pending'
+    const { rows } = await query(
+      `SELECT trc.*, u.name AS user_name, u.phone AS user_phone,
+              lt.name AS tier_name, lt.badge_color
+       FROM   tier_reward_claims trc
+       JOIN   users u           ON u.id   = trc.user_id
+       JOIN   loyalty_tiers lt  ON lt.id  = trc.tier_id
+       WHERE  trc.status = $1
+       ORDER  BY trc.created_at DESC
+       LIMIT  200`,
+      [status]
+    )
+    return { ok: true, data: { claims: rows } }
+  })
+
+  app.patch('/tier-reward-claims/:id', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+      body: {
+        type: 'object',
+        required: ['status'],
+        properties: { status: { type: 'string', enum: ['expired', 'cancelled'] } },
+        additionalProperties: false,
+      },
+    },
+  }, async (req) => {
+    const { rows } = await query(
+      `UPDATE tier_reward_claims SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
+      [req.body.status, req.params.id]
+    )
+    if (!rows.length) throw { code: 'NOT_FOUND', message: 'Claim not found.' }
+    return { ok: true, data: rows[0] }
   })
 }

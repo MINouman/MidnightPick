@@ -3,10 +3,11 @@
 const { query, withTransaction } = require('../config/db')
 const { validateCoupon, recordCouponUsage, restoreCouponUsageForOrder, reverseCommissionForOrder } = require('./crew')
 const { normalizeBdMobile } = require('./phone')
-const { calculatePointsForOrder, awardPoints, reversePoints } = require('./points')
+const { reversePoints } = require('./points')
+const { applyPendingClaim } = require('./tiers')
 
 const crypto = require('crypto')
-const { calculateDeliveryFee } = require('./delivery')
+const { calculateDeliveryFee, getFallbackDeliveryFee } = require('./delivery')
 
 // ── Internal helpers ────────────────────────────────────────────────────────
 
@@ -100,10 +101,18 @@ async function placeOrder(userId, body) {
       subtotal += variantMap[item.variant_id].price * item.qty
     }
 
-    // 4. Coupon — per-customer caps key on normalized phone numbers only.
-    // Only extract phone for phone-based payment methods; for card/cod, skip per-phone limits.
+    // 4. Coupon — per-customer caps key on normalized phone numbers.
+    // Default to the account's registered phone so the per-phone cap is enforced
+    // even on card/cod, and so a user can't dodge it by reusing the same coupon
+    // as a phone-only guest. For phone payments, prefer the payment number.
     const PHONE_PAYMENT_TYPES = ['bkash', 'nagad', 'rocket']
     let couponPhone = null
+    if (coupon_code) {
+      const { rows: uRows } = await client.query(`SELECT phone FROM users WHERE id = $1`, [userId])
+      if (uRows[0]?.phone) {
+        try { couponPhone = normalizeBdMobile(uRows[0].phone) } catch { /* registered phone not normalizable — skip */ }
+      }
+    }
     if (PHONE_PAYMENT_TYPES.includes(payment_type) && payment_number) {
       try {
         couponPhone = normalizeBdMobile(payment_number)
@@ -139,9 +148,9 @@ async function placeOrder(userId, body) {
         deliveryZoneId = zoneQuery.rows[0].id
       }
     } catch (err) {
-      // If zone lookup fails, default to base fee (won't block order)
+      // Zone lookup failed — charge the fallback fee rather than shipping free.
       console.warn('[orders] Zone lookup failed for district:', district, err.message)
-      deliveryFee = 0
+      deliveryFee = await getFallbackDeliveryFee()
     }
 
     const total = subtotal - discountAmount + deliveryFee
@@ -194,20 +203,17 @@ async function placeOrder(userId, body) {
       })
     }
 
-    // 10. Award points for order
-    const pointsEarned = calculatePointsForOrder(total)
-    if (pointsEarned > 0) {
-      await awardPoints(client, userId, pointsEarned,
-        `Earned on order ${orderRef}`, order.id)
+    // 10. Apply pending tier reward claim (from a previously crossed tier)
+    await applyPendingClaim(client, userId, order.id)
 
-      // Update order record with points earned
-      await client.query(
-        `UPDATE orders SET points_earned = $1 WHERE id = $2`,
-        [pointsEarned, order.id]
-      )
-    }
+    // 11. Points are NOT awarded at placement. They accrue only when the order
+    // reaches `delivered` (admin status update / Steadfast webhook) — same as
+    // guest and quick orders. Awarding here let a user place a COD order, redeem
+    // the points immediately, then refuse delivery to keep them. points_earned
+    // stays 0 until delivery.
+    const pointsEarned = 0
 
-    // 11. First tracking event: confirmed
+    // 12. First tracking event: confirmed
     await client.query(
       `INSERT INTO order_tracking (order_id, step, detail)
        VALUES ($1, 'confirmed', 'Order received and confirmed.')`,
@@ -445,7 +451,20 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
       coupon         = c.coupon
     }
 
-    const total     = subtotal - discountAmount + DELIVERY_FEE
+    // Calculate delivery fee — default to 0 if zone lookup fails
+    let deliveryFee = 0
+    try {
+      // Try to extract district from address (format: "street, area, city")
+      const addressParts = address.split(',').map(p => p.trim())
+      const district = addressParts.length >= 2 ? addressParts[addressParts.length - 2] : 'Dhaka'
+      const feeInfo = await calculateDeliveryFee(district)
+      deliveryFee = feeInfo.total_fee
+    } catch (err) {
+      console.warn('[orders] Zone lookup failed for guest order, using fallback fee:', err.message)
+      deliveryFee = await getFallbackDeliveryFee()
+    }
+
+    const total     = subtotal - discountAmount + deliveryFee
     const orderRef  = await generateOrderRef(client)
     const addrSnap  = { label: 'Delivery', line1: address }
 
@@ -459,7 +478,7 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
       [orderRef, name.trim(), normalizedPhone,
        JSON.stringify(addrSnap),
        coupon ? coupon.code : null,
-       discountAmount, subtotal, DELIVERY_FEE, total,
+       discountAmount, subtotal, deliveryFee, total,
        notes ?? null]
     )
     const order = orderRows[0]
@@ -575,7 +594,20 @@ async function placeQuickOrder(userId, { product_id, qty, address, coupon_code, 
       coupon         = c.coupon
     }
 
-    const total    = subtotal - discountAmount + DELIVERY_FEE
+    // Calculate delivery fee — default to 0 if zone lookup fails
+    let deliveryFee = 0
+    try {
+      // Try to extract district from address (format: "street, area, city")
+      const addressParts = address.split(',').map(p => p.trim())
+      const district = addressParts.length >= 2 ? addressParts[addressParts.length - 2] : 'Dhaka'
+      const feeInfo = await calculateDeliveryFee(district)
+      deliveryFee = feeInfo.total_fee
+    } catch (err) {
+      console.warn('[orders] Zone lookup failed for quick order, using fallback fee:', err.message)
+      deliveryFee = await getFallbackDeliveryFee()
+    }
+
+    const total    = subtotal - discountAmount + deliveryFee
     const orderRef = await generateOrderRef(client)
     const addrSnap = { label: 'Delivery', line1: address }
 
@@ -589,7 +621,7 @@ async function placeQuickOrder(userId, { product_id, qty, address, coupon_code, 
       [orderRef, userId, name, phone,
        JSON.stringify(addrSnap),
        coupon ? coupon.code : null,
-       discountAmount, subtotal, DELIVERY_FEE, total,
+       discountAmount, subtotal, deliveryFee, total,
        notes ?? null]
     )
     const order = orderRows[0]

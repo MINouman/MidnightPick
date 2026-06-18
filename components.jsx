@@ -886,6 +886,11 @@ function _initGsi() {
     auto_select:           false,
     cancel_on_tap_outside: false,
   });
+  // Set up error reporter for automatic prompts if modal is open
+  // This will be overridden when user manually clicks the Google button
+  if (!_gsiErrorReporter && window._authModalSetError) {
+    _gsiErrorReporter = window._authModalSetError;
+  }
 }
 
 // Register as the GSI library's own ready hook so the timing is guaranteed
@@ -925,9 +930,10 @@ const EyeIcon = ({ size = 16, open = true }) => (
 function getMidnightApiBase() {
   if (window.MIDNIGHT_API_BASE) return window.MIDNIGHT_API_BASE.replace(/\/$/, "");
 
-  const hostname = window.location.hostname || "localhost";
-  const protocol = window.location.protocol === "https:" ? "https:" : "http:";
-  const base = `${protocol}//${hostname}:3000/api/v1`;
+  const { protocol, hostname, port } = window.location;
+  const base = (!port || port === "80" || port === "443")
+    ? `${protocol}//${hostname}/api/v1`
+    : `${protocol}//${hostname}:3000/api/v1`;
   window.MIDNIGHT_API_BASE = base;
   return base;
 }
@@ -980,6 +986,15 @@ function AuthModal({ open, onClose, title = "Join the Midnight Circle", subtitle
     document.body.style.overflow = open ? "hidden" : "";
     if (!open) { _gsiErrorReporter = null; window.google?.accounts?.id?.cancel(); }
     return () => { document.body.style.overflow = ""; };
+  }, [open]);
+
+  // Set up error reporter for Google Auth when modal is open
+  React.useEffect(() => {
+    if (open) {
+      _gsiErrorReporter = setServerError;
+    } else {
+      _gsiErrorReporter = null;
+    }
   }, [open]);
 
   React.useEffect(() => {

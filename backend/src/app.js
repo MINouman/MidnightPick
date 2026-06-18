@@ -12,7 +12,9 @@ async function build() {
         ? { target: 'pino-pretty', options: { translateTime: 'HH:MM:ss', ignore: 'pid,hostname' } }
         : undefined,
     },
-    trustProxy: true,
+    // Trust only the known number of proxy hops (nginx) in production. Trusting
+    // every proxy lets clients forge X-Forwarded-For and bypass per-IP limits.
+    trustProxy: env.NODE_ENV === 'production' ? Number(env.TRUST_PROXY) : true,
     bodyLimit: 15 * 1024 * 1024, // 15 MB — allows up to 5 compressed product images
     ajv: { customOptions: { allErrors: true } },
   })
@@ -75,20 +77,12 @@ async function build() {
 
   app.decorate('authenticate', async (req, reply) => {
     try {
-      // Get token from Authorization header or Cookie header
+      // Get token from Authorization header or Cookie
       let token = req.headers.authorization?.replace('Bearer ', '');
 
       if (!token) {
-        // Parse the Cookie header manually
-        const cookieHeader = req.headers.cookie || '';
-        const cookies = cookieHeader.split(';').reduce((acc, cookie) => {
-          const [key, value] = cookie.trim().split('=');
-          if (key === 'mp_access_token') {
-            acc = value;
-          }
-          return acc;
-        }, '');
-        token = cookies || undefined;
+        // Use Fastify's built-in cookie parsing via @fastify/cookie plugin
+        token = req.cookies?.mp_access_token;
       }
 
       if (!token) {
@@ -127,9 +121,19 @@ async function build() {
     RATE_LIMITED:                 429,
     OTP_MAX_ATTEMPTS:             400,
     INVALID_OTP:                  400,
+    NO_OTP_SENT:                  400,
+    NO_OTP:                       400,
+    NO_PHONE:                     400,
+    OTP_EXPIRED:                  400,
+    TOO_MANY_ATTEMPTS:            429,
+    OTP_SENT_RECENTLY:            429,
+    ALREADY_VERIFIED:             409,
+    OTP_FAILED:                   502,
     INVALID_COUPON:               400,
     COUPON_MIN_ORDER:             400,
     COUPON_EXHAUSTED:             400,
+    COUPON_LOGIN_REQUIRED:        401,
+    COUPON_NOT_ELIGIBLE:          403,
     INVALID_ITEM:                 400,
     INVALID_ADDRESS:              400,
     ADDRESS_REQUIRED:             400,
@@ -202,7 +206,6 @@ async function build() {
     api.addHook('onRequest', app.authenticate)
     await api.register(require('./routes/users'),         { prefix: '/me' })
     await api.register(require('./routes/orders'),        { prefix: '/orders' })
-    await api.register(require('./routes/reviews-user'),  { prefix: '/reviews' })
     await api.register(require('./routes/subscriptions'), { prefix: '/subscriptions' })
     await api.register(require('./routes/points'),        { prefix: '/me' })
     await api.register(require('./routes/admin'),         { prefix: '/admin' })

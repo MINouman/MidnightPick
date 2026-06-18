@@ -6,7 +6,11 @@
   "scripts": {
     "start": "node src/app.js",
     "dev": "node --watch src/app.js",
-    "migrate": "node src/db/migrate.js"
+    "migrate": "node src/db/migrate.js",
+    "steadfast:verify": "node scripts/steadfast-verify.js",
+    "steadfast:migrate": "node scripts/steadfast-migrate.js",
+    "steadfast:test-webhook": "node scripts/steadfast-test-webhook.js",
+    "steadfast:monitor": "node scripts/steadfast-monitor.js"
   },
   "dependencies": {
     "@fastify/cookie": "^9.3.1",
@@ -20,6 +24,7 @@
     "fastify": "^4.28.0",
     "google-auth-library": "^10.6.2",
     "ioredis": "^5.3.2",
+    "node-cron": "^4.3.0",
     "pg": "^8.11.5",
     "pino-pretty": "^11.2.1"
   }
