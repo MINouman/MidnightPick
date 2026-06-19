@@ -2307,4 +2307,43 @@ module.exports = async function adminRoutes(app) {
     await resetDailyCount(normalized)
     return { ok: true, data: { message: "Today's OTP count reset to 0." } }
   })
+
+  // GET /admin/promo-banner
+  app.get('/promo-banner', async () => {
+    const { rows } = await query(
+      'SELECT text, visible, updated_at FROM promo_banner WHERE singleton_guard = TRUE LIMIT 1'
+    )
+    const row = rows[0] || { text: 'Get 10% off your first order.', visible: true, updated_at: null }
+    return { ok: true, data: row }
+  })
+
+  // PATCH /admin/promo-banner
+  app.patch('/promo-banner', {
+    schema: {
+      body: {
+        type: 'object',
+        properties: {
+          text:    { type: 'string', minLength: 1, maxLength: 300 },
+          visible: { type: 'boolean' },
+        },
+      },
+    },
+  }, async (req) => {
+    const { text, visible } = req.body
+    const { rows: cur } = await query(
+      'SELECT text, visible FROM promo_banner WHERE singleton_guard = TRUE LIMIT 1'
+    )
+    const existing = cur[0] || { text: 'Get 10% off your first order.', visible: true }
+    const newText    = text    !== undefined ? text    : existing.text
+    const newVisible = visible !== undefined ? visible : existing.visible
+    const { rows } = await query(
+      `INSERT INTO promo_banner (singleton_guard, text, visible)
+       VALUES (TRUE, $1, $2)
+       ON CONFLICT (singleton_guard) DO UPDATE
+         SET text = $1, visible = $2, updated_at = NOW()
+       RETURNING text, visible, updated_at`,
+      [newText, newVisible]
+    )
+    return { ok: true, data: rows[0] }
+  })
 }
