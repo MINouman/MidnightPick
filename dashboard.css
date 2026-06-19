@@ -347,8 +347,20 @@ body {
 .sub-benefits {
   list-style: none; text-align: left;
   background: var(--card); border-radius: var(--radius-lg);
-  padding: 4px 20px; margin: 20px 0 24px;
+  padding: 22px 26px; margin: 20px 0 24px;
   box-shadow: var(--shadow);
+}
+.sub-benefit-headline {
+  font-size: 15px;
+  line-height: 1.45;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 22px;
+}
+.sub-benefit-intro {
+  font-size: 13px;
+  color: var(--text);
+  margin-bottom: 14px;
 }
 .sub-benefit {
   display: flex; align-items: center; gap: 12px;

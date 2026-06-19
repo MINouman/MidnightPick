@@ -5,6 +5,7 @@ const { query } = require('../config/db')
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 const SUBSCRIPTION_CHANGE_CUTOFF_DAYS = 3
+const SUBSCRIPTION_DISCOUNT_PCT = 5
 
 function nextDeliveryDate(billingDay) {
   const today = new Date()
@@ -31,6 +32,10 @@ function ordinalSuffix(n) {
   const s = ['th', 'st', 'nd', 'rd']
   const v = n % 100
   return s[(v - 20) % 10] || s[v] || s[0]
+}
+
+function subscriptionUnitPrice(price) {
+  return Math.round(Number(price || 0) * (100 - SUBSCRIPTION_DISCOUNT_PCT) / 100)
 }
 
 function daysUntilDate(dateStr) {
@@ -101,7 +106,7 @@ module.exports = async function subscriptionRoutes(app) {
 
     // Resolve product details
     let productName = 'Midnight Blend — 95g Pouch'
-    let unitPrice   = 699
+    let unitPrice   = subscriptionUnitPrice(699)
     if (product_id) {
       const { rows: pRows } = await query(
         `SELECT name, price FROM products WHERE id = $1 AND LOWER(status) = 'active'`,
@@ -109,7 +114,7 @@ module.exports = async function subscriptionRoutes(app) {
       )
       if (pRows.length) {
         productName = pRows[0].name
-        unitPrice   = parseInt(pRows[0].price, 10)
+        unitPrice   = subscriptionUnitPrice(pRows[0].price)
       }
     }
 
@@ -170,7 +175,7 @@ module.exports = async function subscriptionRoutes(app) {
       )
       if (pRows.length) {
         productName = pRows[0].name
-        unitPrice   = parseInt(pRows[0].price, 10)
+        unitPrice   = subscriptionUnitPrice(pRows[0].price)
       }
     }
 

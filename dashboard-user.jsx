@@ -231,7 +231,7 @@ function HomeTab({ setTab }) {
               <div>
                 <div className="eyebrow">Monthly Plan</div>
                 <div style={{ fontSize: 14, fontWeight: 600 }}>Coffee on autopilot</div>
-                <div className="text-xs text-muted mt4">Skip or pause anytime →</div>
+                <div className="text-xs text-muted mt4">Manage until 3 days before delivery →</div>
               </div>
               <i className="fa fa-calendar-check" style={{ fontSize: 28, color: "var(--orange)", opacity: .5 }} />
             </div>
@@ -559,6 +559,7 @@ function OrdersTab() {
 // ── SUBSCRIPTION TAB ──────────────────────────────────────────
 const PLAN_BLANK = { product_id: "", qty: 1, address: "", billing_day: 1 };
 const SUBSCRIPTION_CHANGE_CUTOFF_DAYS = 3;
+const SUBSCRIPTION_DISCOUNT_PCT = 5;
 
 function SubscriptionTab() {
   const { addresses, paymentMethods } = useContext(DashCtx);
@@ -580,6 +581,7 @@ function SubscriptionTab() {
   }, []);
 
   const sfx = n => ["st","nd","rd"][n-1] || "th";
+  const subUnitPrice = price => Math.round(Number(price || 0) * (100 - SUBSCRIPTION_DISCOUNT_PCT) / 100);
 
   function apiError(res) {
     Swal.fire({
@@ -765,7 +767,7 @@ function SubscriptionTab() {
   // Plan setup / edit sheet (shared)
   const editing      = !!sub;
   const selectedProd = products.find(p => p.id === form.product_id);
-  const unitPrice    = selectedProd ? parseInt(selectedProd.price, 10) : (editing ? sub.unit_price : 699);
+  const unitPrice    = selectedProd ? subUnitPrice(selectedProd.price) : (editing ? sub.unit_price : subUnitPrice(699));
   const formTotal    = unitPrice * form.qty;
   const setupSteps = ["Choose coffee", "Choose quantity", "Confirm monthly delivery", "Delivery address", "Confirm plan"];
   const canContinue = planStep === 0 ? (!!form.product_id || products.length === 0 || editing)
@@ -796,13 +798,13 @@ function SubscriptionTab() {
               onChange={e => setForm(f => ({ ...f, product_id: e.target.value }))}
             >
               {(products.length === 0 || (editing && !sub.product_id)) && (
-                <option value="">{editing ? `${sub.product_name} (৳${Number(sub.unit_price).toLocaleString()})` : "Midnight Blend — 95g Pouch (৳699)"}</option>
+                <option value="">{editing ? `${sub.product_name} (৳${Number(sub.unit_price).toLocaleString()})` : `Midnight Blend — 95g Pouch (৳${subUnitPrice(699)})`}</option>
               )}
               {editing && sub.product_id && !products.some(p => p.id === sub.product_id) && (
                 <option value={sub.product_id}>{sub.product_name} (৳{Number(sub.unit_price).toLocaleString()})</option>
               )}
               {products.map(p => (
-                <option key={p.id} value={p.id}>{p.name} (৳{parseInt(p.price, 10).toLocaleString()})</option>
+                <option key={p.id} value={p.id}>{p.name} (৳{subUnitPrice(p.price).toLocaleString()}/mo)</option>
               ))}
             </select>
             <i className="fa fa-chevron-down" style={{ position: "absolute", right: 13, top: "50%", transform: "translateY(-50%)", fontSize: 11, color: "var(--cream-65)", pointerEvents: "none" }} />
@@ -868,6 +870,7 @@ function SubscriptionTab() {
           <div className="row-between text-sm"><span>Product</span><strong>{selectedProd?.name || (editing ? sub.product_name : "Midnight Blend")} × {form.qty}</strong></div>
           <div className="row-between text-sm"><span>Delivery</span><strong>Delivered monthly</strong></div>
           <div className="row-between text-sm"><span>Monthly price</span><strong>৳{formTotal.toLocaleString()}/month</strong></div>
+          <div className="row-between text-sm"><span>Subscription saving</span><strong className="text-green">{SUBSCRIPTION_DISCOUNT_PCT}% off subscribed refill</strong></div>
           <div className="row-between text-sm"><span>Delivery fee</span><strong className="text-green">Free delivery included</strong></div>
           <div className="row-between text-sm"><span>Payment method</span><strong>{defaultPaymentLabel()}</strong></div>
           <div className="text-sm" style={{ marginTop: 8 }}><span className="text-muted">Delivery address</span><br /><strong>{form.address || "Add address"}</strong></div>
@@ -894,7 +897,7 @@ function SubscriptionTab() {
   if (!sub) {
     const featuredProduct = products[0] || null;
     const previewName = featuredProduct?.name || "Midnight Blend — 95g Pouch";
-    const previewPrice = parseInt(featuredProduct?.price || 699, 10);
+    const previewPrice = subUnitPrice(featuredProduct?.price || 699);
     const defaultAddress = defaultAddressString();
     const defaultPayment = defaultPaymentLabel();
     return (
@@ -944,19 +947,21 @@ function SubscriptionTab() {
             </button>
             <div className="input-note" style={{ marginTop: 10 }}>No commitment. Manage everything from your Midnight account.</div>
           </div>
-          <ul className="sub-benefits">
+          <div className="sub-benefits">
+            <div className="sub-benefit-headline">Save {SUBSCRIPTION_DISCOUNT_PCT}% on your subscribed product only.</div>
+            <div className="sub-benefit-intro">Benefit list:</div>
             {[
-              "Free delivery on every monthly order",
-              "Locked-in pricing - no surprise increases",
+              `${SUBSCRIPTION_DISCOUNT_PCT}% off your subscribed refill`,
+              "Monthly coffee reserved for you",
               `Skip, pause, or cancel until ${SUBSCRIPTION_CHANGE_CUTOFF_DAYS} days before delivery`,
-              "Priority dispatch before public stock",
+              "Early access to special offers",
             ].map((b, i) => (
-              <li key={i} className="sub-benefit">
+              <div key={i} className="sub-benefit">
                 <span className="sub-benefit-check"><i className="fa fa-check" style={{ fontSize: 10 }} /></span>
                 {b}
-              </li>
+              </div>
             ))}
-          </ul>
+          </div>
         </div>
 
         {planSheet}
