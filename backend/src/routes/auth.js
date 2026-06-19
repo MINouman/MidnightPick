@@ -54,7 +54,7 @@ module.exports = async function authRoutes(app) {
   app.post('/phone/login', {
     schema: {
       body: {
-        type: 'object', required: ['phone', 'password'],
+        type: 'object', required: ['phone'],
         properties: {
           phone:    { type: 'string', minLength: 10, maxLength: 20 },
           password: { type: 'string', minLength: 6, maxLength: 100 },

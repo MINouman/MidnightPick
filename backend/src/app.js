@@ -116,6 +116,8 @@ async function build() {
     TOKEN_EXPIRED:                401,
     INVALID_TOKEN:                401,
     INVALID_PHONE:                400,
+    PASSWORD_REQUIRED:            400,
+    PHONE_OTP_REQUIRED:           409,
     OTP_RATE_LIMIT:               429,
     SMS_RATE_LIMIT:               429,
     RATE_LIMITED:                 429,

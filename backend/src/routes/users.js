@@ -34,7 +34,7 @@ module.exports = async function userRoutes(app) {
     return { ok: true, data: updated }
   })
 
-  // POST /me/password — set or reset phone-login password/PIN after authenticated OTP/session
+  // POST /me/password — set or reset phone-login password after authenticated OTP/session
   app.post('/password', {
     schema: {
       body: {

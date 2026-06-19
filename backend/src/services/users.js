@@ -44,11 +44,14 @@ async function loginPhoneUser(phone, password) {
     [phone]
   )
   const user = rows[0]
-  if (!user || !user.password_hash) throw { code: 'UNAUTHORIZED', message: 'Invalid phone number or password.' }
+  if (!user || !user.password_hash) {
+    throw { code: 'PHONE_OTP_REQUIRED', message: 'Verify this phone number with OTP to continue.' }
+  }
   if (!user.is_active) throw { code: 'ACCOUNT_INACTIVE', message: 'This account has been deactivated.' }
   if (user.role === 'admin') {
     throw { code: 'UNAUTHORIZED', message: 'Admin accounts must use the admin login.' }
   }
+  if (!password) throw { code: 'PASSWORD_REQUIRED', message: 'Enter your password.' }
 
   const match = await bcrypt.compare(password, user.password_hash)
   if (!match) throw { code: 'UNAUTHORIZED', message: 'Invalid phone number or password.' }

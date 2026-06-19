@@ -1094,18 +1094,40 @@ function AuthModal({ open, onClose, title = "Join the Midnight Circle", subtitle
     const p = normalizeBdMobile(phone);
     const errs = {};
     if (!isValidBdMobile(p)) errs.phone = "Enter a valid Bangladesh mobile number, e.g. 017XXXXXXXX or +88017XXXXXXXX.";
-    if (password.length < 6) errs.password = "Enter your password or PIN.";
+    if (password && password.length < 6) errs.password = "Password must be at least 6 characters.";
     if (Object.keys(errs).length) { setErrors(errs); return; }
     setPhone(p);
     setSubmitting(true); clearFeedback();
     try {
       const res = await fetch(`${API_BASE}/auth/phone/login`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: p, password }),
+        body: JSON.stringify(password ? { phone: p, password } : { phone: p }),
         credentials: "include",
       });
       const data = await res.json();
-      if (!data.ok) throw new Error(data.error?.message || "We couldn't sign you in.");
+      if (!data.ok) {
+        if (data.error?.code === "PHONE_OTP_REQUIRED") {
+          setOtpPurpose("register");
+          const otpRes = await fetch(`${API_BASE}/auth/otp/send`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ phone: p }),
+            credentials: "include",
+          });
+          const otpData = await otpRes.json();
+          if (!otpData.ok) throw new Error(otpData.error?.message || "Failed to send OTP.");
+          setStepDir("fwd");
+          setOtpStage("code");
+          setOtpTimer(otpData.data.expires_in || 120);
+          setSubmitting(false);
+          return;
+        }
+        if (data.error?.code === "PASSWORD_REQUIRED") {
+          setErrors({ password: "Enter your password." });
+          setSubmitting(false);
+          return;
+        }
+        throw new Error(data.error?.message || "We couldn't sign you in.");
+      }
       persistAndGo(data.data);
     } catch (err) { setServerError(err.message); setSubmitting(false); }
   };
@@ -1149,7 +1171,7 @@ function AuthModal({ open, onClose, title = "Join the Midnight Circle", subtitle
       const data = await res.json();
       if (!data.ok) throw new Error(data.error?.message || "Invalid OTP.");
       if (data.data.user.is_new || !data.data.user.has_password || otpPurpose === "reset") {
-        // New member / PIN reset → finish profile and set password/PIN
+        // New member / password reset → finish profile and set password
         setPending(data.data);
         setNewVia("phone");
         if (data.data.user.name) setFullName(data.data.user.name);
@@ -1218,7 +1240,7 @@ function AuthModal({ open, onClose, title = "Join the Midnight Circle", subtitle
       errs.optEmail = "Enter a valid email address.";
     }
     if (newVia === "phone" && password.length < 6) {
-      errs.password = "Set a password or PIN of at least 6 characters.";
+      errs.password = "Set a password of at least 6 characters.";
     }
     if (Object.keys(errs).length) { setErrors(errs); return; }
     setSubmitting(true); clearFeedback();
@@ -1241,7 +1263,7 @@ function AuthModal({ open, onClose, title = "Join the Midnight Circle", subtitle
           credentials: "include",
         });
         const passData = await passRes.json();
-        if (!passData.ok) throw new Error(passData.error?.message || "Couldn't save your password/PIN.");
+        if (!passData.ok) throw new Error(passData.error?.message || "Couldn't save your password.");
         persistAndGo({ ...pending, user: { ...pending.user, ...data.data } });
       } else {
         const res  = await fetch(`${API_BASE}/auth/register`, {
@@ -1331,14 +1353,14 @@ function AuthModal({ open, onClose, title = "Join the Midnight Circle", subtitle
                 )}
               </div>
               <div className="auth-field">
-                <label className="auth-label" htmlFor="mp-auth-phone-pass">Password / PIN</label>
+                <label className="auth-label" htmlFor="mp-auth-phone-pass">Password</label>
                 <div className="auth-input-wrap">
                   <i className="fa-solid fa-lock auth-input-icon" aria-hidden="true" />
                   <input
                     id="mp-auth-phone-pass"
                     className={`auth-input auth-input--pass${errors.password ? " error" : ""}`}
                     type={showPass ? "text" : "password"}
-                    placeholder="Enter your password or PIN"
+                    placeholder="Enter your password"
                     value={password}
                     onChange={e => { setPassword(e.target.value); if (errors.password) setErrors(p => ({ ...p, password: undefined })); }}
                     onKeyDown={e => e.key === "Enter" && handlePhoneLogin()}
@@ -1355,12 +1377,9 @@ function AuthModal({ open, onClose, title = "Join the Midnight Circle", subtitle
                 {submitting ? <span className="sub-spinner" aria-hidden="true" /> : <>Sign In <i className="fa-solid fa-arrow-right-long" aria-hidden="true" /></>}
               </button>
               <div className="auth-new-here">
-                <span>New or forgot your PIN?</span>
-                <button type="button" onClick={() => handleSendOtp("register")}>
-                  Create account with OTP
-                </button>
+                <span>New here? Enter your phone and continue.</span>
                 <button type="button" onClick={() => handleSendOtp("reset")}>
-                  Forgot PIN?
+                  Forgot password?
                 </button>
               </div>
             </div>
@@ -1512,7 +1531,7 @@ function AuthModal({ open, onClose, title = "Join the Midnight Circle", subtitle
   const completeStep = (
     <div key="complete" className={`auth-step auth-step--${stepDir}`}>
       <div className="midnight-member-badge">Almost There</div>
-      <h2 className="auth-title">{otpPurpose === "reset" ? "Set a new PIN" : "Complete your account"}</h2>
+      <h2 className="auth-title">{otpPurpose === "reset" ? "Set a new password" : "Complete your account"}</h2>
       <div className="auth-verified-chip">
         <i className="fa-solid fa-circle-check" aria-hidden="true" />
         {newVia === "phone"
@@ -1562,7 +1581,7 @@ function AuthModal({ open, onClose, title = "Join the Midnight Circle", subtitle
 
         {newVia === "phone" && (
           <div className="auth-field">
-            <label className="auth-label" htmlFor="mp-auth-new-pass">Password / PIN</label>
+            <label className="auth-label" htmlFor="mp-auth-new-pass">Password</label>
             <div className="auth-input-wrap">
               <i className="fa-solid fa-lock auth-input-icon" aria-hidden="true" />
               <input
@@ -1586,10 +1605,10 @@ function AuthModal({ open, onClose, title = "Join the Midnight Circle", subtitle
         {serverError && <p className="auth-server-err">{serverError}</p>}
 
         <button type="button" className={`auth-submit-btn${submitting ? " loading" : ""}`} disabled={submitting} onClick={handleComplete}>
-          {submitting ? <span className="sub-spinner" aria-hidden="true" /> : (otpPurpose === "reset" ? "Save New PIN" : "Create My Account")}
+          {submitting ? <span className="sub-spinner" aria-hidden="true" /> : (otpPurpose === "reset" ? "Save New Password" : "Create My Account")}
         </button>
 
-        <p className="auth-footnote">{otpPurpose === "reset" ? "Use this PIN for your next phone login." : "You can update these details anytime from your dashboard."}</p>
+        <p className="auth-footnote">{otpPurpose === "reset" ? "Use this password for your next phone login." : "You can update these details anytime from your dashboard."}</p>
       </div>
     </div>
   );
