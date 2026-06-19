@@ -376,6 +376,73 @@ body {
   max-width: none;
   margin: 0;
 }
+.sub-empty-plan { text-align: left; }
+.sub-empty-top {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 18px;
+  align-items: center;
+  margin-bottom: 22px;
+}
+.sub-empty-plan .sub-empty-icon { margin: 0; }
+.sub-plan-kicker {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--orange);
+  margin-bottom: 5px;
+}
+.sub-plan-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.25;
+  margin-bottom: 6px;
+}
+.sub-plan-price {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--orange);
+  margin-bottom: 18px;
+}
+.sub-plan-price span {
+  font-size: 34px;
+  line-height: 1;
+  font-weight: 700;
+}
+.sub-plan-price small {
+  color: var(--text-65);
+  font-size: 13px;
+}
+.sub-plan-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.sub-plan-details div {
+  border: 1px solid var(--text-08);
+  border-radius: var(--radius);
+  padding: 12px;
+  background: rgba(30,14,8,.02);
+}
+.sub-plan-details span {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text-65);
+  margin-bottom: 5px;
+}
+.sub-plan-details strong {
+  display: block;
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.35;
+  word-break: break-word;
+}
 .monthly-plan-layout .sub-benefits {
   margin: 0;
   height: 100%;
@@ -699,6 +766,9 @@ body {
   .desktop-only { display: none; }
   .pts-layout { grid-template-columns: 1fr; }
   .monthly-plan-layout { grid-template-columns: 1fr; }
+  .sub-empty-top { grid-template-columns: 1fr; text-align: center; }
+  .sub-empty-plan .sub-empty-icon { margin: 0 auto; }
+  .sub-plan-price { justify-content: center; }
   .monthly-plan-active { max-width: none; }
   .plan-action-grid { grid-template-columns: 1fr; }
 
@@ -722,5 +792,6 @@ body {
   .stat-label { letter-spacing: 0.04em; }
   .stat-value { font-size: 20px; }
   .grid-2 { grid-template-columns: 1fr; }
+  .sub-plan-details { grid-template-columns: 1fr; }
   .page-title { font-size: 21px; }
 }

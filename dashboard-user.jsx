@@ -843,20 +843,53 @@ function SubscriptionTab() {
 
   // No active subscription — start a plan
   if (!sub) {
+    const featuredProduct = products[0] || null;
+    const previewName = featuredProduct?.name || "Midnight Blend — 95g Pouch";
+    const previewPrice = parseInt(featuredProduct?.price || 699, 10);
+    const defaultAddress = defaultAddressString();
+    const defaultPayment = defaultPaymentLabel();
     return (
       <div>
         <div className="page-title mb4">Start Your Monthly Plan</div>
         <div className="page-sub">Set it once and never run out of your favourite blend again.</div>
 
         <div className="monthly-plan-layout">
-          <div className="sub-empty">
-            <div className="sub-empty-icon">
-              <i className="fa fa-calendar-check" style={{ color: "var(--orange)" }} />
+          <div className="sub-empty sub-empty-plan">
+            <div className="sub-empty-top">
+              <div className="sub-empty-icon">
+                <i className="fa fa-calendar-check" style={{ color: "var(--orange)" }} />
+              </div>
+              <div>
+                <div className="sub-plan-kicker">Monthly delivery</div>
+                <div className="sub-plan-title">{previewName}</div>
+                <div className="text-sm text-muted">One pouch delivered every month, managed from your account.</div>
+              </div>
             </div>
-            <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>Start Your Monthly Plan</div>
-            <div className="text-sm text-muted" style={{ lineHeight: 1.7, marginBottom: 0 }}>
-              Set it once and never run out of your favourite blend again.
+
+            <div className="sub-plan-price">
+              <span>৳{previewPrice.toLocaleString()}</span>
+              <small>/ month</small>
             </div>
+
+            <div className="sub-plan-details">
+              <div>
+                <span>Quantity</span>
+                <strong>1 pack / month</strong>
+              </div>
+              <div>
+                <span>First delivery date</span>
+                <strong>Choose during setup</strong>
+              </div>
+              <div>
+                <span>Payment</span>
+                <strong>{defaultPayment}</strong>
+              </div>
+              <div>
+                <span>Delivery address</span>
+                <strong>{defaultAddress || "Add during setup"}</strong>
+              </div>
+            </div>
+
             <button className="btn btn-primary btn-full mt20" onClick={openCreate}>
               <i className="fa fa-calendar-check" /> Start Monthly Plan
             </button>

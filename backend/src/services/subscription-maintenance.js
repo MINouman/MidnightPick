@@ -21,9 +21,9 @@ async function updateNextDeliveryDates() {
   const { rows } = await query(
     `UPDATE subscriptions
      SET next_delivery_date = CASE
-       WHEN DATE_TRUNC('month', CURRENT_DATE)::date + (billing_day || ' days')::interval > CURRENT_DATE
-       THEN DATE_TRUNC('month', CURRENT_DATE)::date + (billing_day || ' days')::interval
-       ELSE DATE_TRUNC('month', CURRENT_DATE)::date + INTERVAL '1 month' + (billing_day || ' days')::interval
+       WHEN DATE_TRUNC('month', CURRENT_DATE)::date + ((billing_day - 1) || ' days')::interval > CURRENT_DATE
+       THEN DATE_TRUNC('month', CURRENT_DATE)::date + ((billing_day - 1) || ' days')::interval
+       ELSE DATE_TRUNC('month', CURRENT_DATE)::date + INTERVAL '1 month' + ((billing_day - 1) || ' days')::interval
      END,
          updated_at = NOW()
      WHERE status = 'active'
