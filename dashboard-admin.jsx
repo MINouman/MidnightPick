@@ -3708,6 +3708,143 @@ function Products() {
   );
 }
 
+// ── Section: Promo Banner ──────────────────────────────
+function PromoBannerAdmin() {
+  const [banner, setBanner] = useState(null);
+  const [text, setText] = useState('');
+  const [visible, setVisible] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState(null); // { type: 'ok'|'err', text }
+
+  useEffect(() => {
+    window.mpApi.fetch('/admin/promo-banner').then(res => {
+      if (res?.ok && res.data) {
+        setBanner(res.data);
+        setText(res.data.text);
+        setVisible(res.data.visible);
+      }
+    }).catch(() => {});
+  }, []);
+
+  async function handleSave() {
+    setSaving(true);
+    setMsg(null);
+    try {
+      const res = await window.mpApi.fetch('/admin/promo-banner', {
+        method: 'PATCH',
+        body: JSON.stringify({ text, visible }),
+      });
+      if (res?.ok) {
+        setBanner(res.data);
+        setText(res.data.text);
+        setVisible(res.data.visible);
+        setMsg({ type: 'ok', text: 'Banner updated.' });
+      } else {
+        setMsg({ type: 'err', text: res?.error?.message || 'Failed to save.' });
+      }
+    } catch {
+      setMsg({ type: 'err', text: 'Network error.' });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="dash-inner">
+      <div className="page-title">Promo Banner</div>
+      <p style={{ color: 'var(--text-65)', fontSize: 13, marginBottom: 20 }}>
+        Controls the full-width orange banner on the homepage. Changes take effect immediately on next page load.
+      </p>
+
+      {msg && (
+        <div style={{
+          padding: 12, marginBottom: 16, borderRadius: 6, fontSize: 13,
+          background: msg.type === 'ok' ? 'rgba(40,167,69,.1)' : 'rgba(220,53,69,.1)',
+          border: `1px solid ${msg.type === 'ok' ? 'rgba(40,167,69,.3)' : 'rgba(220,53,69,.3)'}`,
+          color: msg.type === 'ok' ? 'var(--green)' : 'var(--red)',
+        }}>{msg.text}</div>
+      )}
+
+      <div className="card mb20">
+        <div className="eyebrow mb16">Banner Preview</div>
+        <div style={{
+          background: '#FF9100', borderRadius: 8, padding: '18px 24px',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          gap: 16, opacity: visible ? 1 : 0.4,
+        }}>
+          <span style={{ fontWeight: 700, fontSize: 18, color: '#1E0C04' }}>
+            {text || 'Get 10% off your first order.'}
+          </span>
+          <span style={{
+            background: '#fff', color: '#1E0C04', borderRadius: 20,
+            padding: '6px 16px', fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap',
+          }}>Shop Now →</span>
+        </div>
+        {!visible && (
+          <p style={{ marginTop: 8, fontSize: 12, color: 'var(--text-65)' }}>
+            Banner is hidden — visitors will not see it.
+          </p>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="eyebrow mb16">Settings</div>
+
+        <div className="input-group">
+          <label className="input-label">Banner Text</label>
+          <input
+            className="input"
+            value={text}
+            onChange={e => setText(e.target.value)}
+            maxLength={300}
+            placeholder="e.g. Get 10% off your first order."
+          />
+          <div style={{ fontSize: 11, color: 'var(--text-45)', marginTop: 4 }}>
+            {text.length}/300 characters
+          </div>
+        </div>
+
+        <div className="row-between" style={{ marginTop: 16, marginBottom: 20 }}>
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>Show Banner</div>
+            <div style={{ fontSize: 12, color: 'var(--text-65)', marginTop: 2 }}>
+              Toggle off to hide the banner from the homepage entirely.
+            </div>
+          </div>
+          <button
+            onClick={() => setVisible(v => !v)}
+            style={{
+              width: 44, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer',
+              background: visible ? 'var(--orange)' : 'rgba(247,227,201,.2)',
+              position: 'relative', flexShrink: 0, transition: 'background .2s',
+            }}
+          >
+            <span style={{
+              position: 'absolute', top: 2, left: visible ? 22 : 2,
+              width: 20, height: 20, borderRadius: '50%', background: '#fff',
+              transition: 'left .2s', display: 'block',
+            }} />
+          </button>
+        </div>
+
+        {banner?.updated_at && (
+          <div style={{ fontSize: 12, color: 'var(--text-45)', marginBottom: 16 }}>
+            Last updated: {new Date(banner.updated_at).toLocaleString()}
+          </div>
+        )}
+
+        <button
+          className="btn btn-primary"
+          onClick={handleSave}
+          disabled={saving || !text.trim()}
+        >
+          {saving ? 'Saving…' : 'Save Banner'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Sidebar ────────────────────────────────────────────
 function Sidebar({ section, setSection, onLogout }) {
   const { user, stats } = useContext(DashCtx);
@@ -3727,6 +3864,7 @@ function Sidebar({ section, setSection, onLogout }) {
     { id: "influencer", icon: "fa-bolt",            label: "Influencers" },
     { id: "points",     icon: "fa-star",            label: "Points" },
     { id: "sms",        icon: "fa-envelope",        label: "SMS" },
+    { id: "banner",     icon: "fa-bullhorn",         label: "Promo Banner" },
     { id: "financials", icon: "fa-chart-line",      label: "Financials" },
     { id: "settings",   icon: "fa-cog",             label: "Settings" },
   ];
@@ -3780,6 +3918,7 @@ function AdminTabbar({ section, setSection, onLogout }) {
     { id: "influencer", icon: "fa-bolt",           label: "Influencers" },
     { id: "points",     icon: "fa-star",           label: "Points" },
     { id: "sms",        icon: "fa-envelope",       label: "SMS" },
+    { id: "banner",     icon: "fa-bullhorn",        label: "Promo Banner" },
     { id: "financials", icon: "fa-chart-line",     label: "Financials" },
     { id: "settings",   icon: "fa-cog",            label: "Settings" },
   ];
@@ -3917,6 +4056,7 @@ function AdminDashboard() {
       case "influencer": return <InfluencersSection />;
       case "points":     return <PointsAdmin />;
       case "sms":        return <SmsManagement />;
+      case "banner":     return <PromoBannerAdmin />;
       case "financials": return <Financials />;
       case "settings":   return <Settings />;
       default:           return null;

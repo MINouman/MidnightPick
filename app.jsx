@@ -424,7 +424,8 @@ const SteamSvg = () => (
   </svg>
 );
 
-function Promo({ onShop }) {
+function Promo({ onShop, text, visible }) {
+  if (!visible) return null;
   return (
     <section className="promo" data-screen-label="04 Promo">
       {PROMO_BEANS.map((b, i) => (
@@ -443,10 +444,9 @@ function Promo({ onShop }) {
           '--dur': st.dur, '--delay': st.delay,
         }}><SteamSvg /></span>
       ))}
-      <h3>Get 10% off your first order.</h3>
+      <h3>{text || 'Get 10% off your first order.'}</h3>
       <button className="shop-btn" onClick={onShop}>Shop Now <ArrowRight size={14} /></button>
     </section>);
-
 }
 
 // ----------------- the journal (blog) -----------------
@@ -1119,6 +1119,7 @@ function App() {
   const [policyOpen, setPolicyOpen] = useState(null);
   const [policy, setPolicy] = useState(null);
   const [auth, setAuth] = useState(getAuthState());
+  const [promoBanner, setPromoBanner] = useState({ text: 'Get 10% off your first order.', visible: true });
 
   const handleLogout = async () => {
     // Clear user data; tokens are in httpOnly cookies (cleared by backend on logout)
@@ -1137,6 +1138,13 @@ function App() {
 
   useEffect(() => {applyPalette(t.palette);}, [t.palette]);
   useEffect(() => { sessionStorage.setItem("mp_cart", JSON.stringify(cart)); }, [cart]);
+
+  useEffect(() => {
+    fetch(getMidnightApiBase() + '/promo-banner')
+      .then(r => r.json())
+      .then(d => { if (d.ok && d.data) setPromoBanner(d.data); })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!policyOpen) return;
@@ -1184,7 +1192,7 @@ function App() {
       <Story />
       <MemberAccessCard onJoin={() => setAuthOpen(true)} />
       <Collection onAdd={addToCart} />
-      <Promo onShop={onShop} />
+      <Promo onShop={onShop} text={promoBanner.text} visible={promoBanner.visible} />
       <TheJournal />
       <Why />
       <Howto />
