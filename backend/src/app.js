@@ -143,6 +143,7 @@ async function build() {
     INSUFFICIENT_POINTS:          409,
     EMAIL_EXISTS:                 409,
     SUBSCRIPTION_EXISTS:          409,
+    SUBSCRIPTION_CHANGE_LOCKED:   409,
     ALREADY_REVIEWED:             409,
     ADMIN_EXISTS:                 409,
     NOT_ELIGIBLE:                 403,

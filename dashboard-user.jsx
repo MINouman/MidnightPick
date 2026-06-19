@@ -558,6 +558,7 @@ function OrdersTab() {
 
 // ── SUBSCRIPTION TAB ──────────────────────────────────────────
 const PLAN_BLANK = { product_id: "", qty: 1, address: "", billing_day: 1 };
+const SUBSCRIPTION_CHANGE_CUTOFF_DAYS = 3;
 
 function SubscriptionTab() {
   const { addresses, paymentMethods } = useContext(DashCtx);
@@ -606,14 +607,46 @@ function SubscriptionTab() {
     setSheet("plan");
   }
   function openEdit() {
+    if (sub && !canChangeUpcomingDelivery(sub)) {
+      showSubscriptionLockNotice();
+      return;
+    }
     setForm({ product_id: sub.product_id || "", qty: sub.qty, address: sub.address, billing_day: sub.billing_day });
     setPlanStep(0);
     setSheet("plan");
   }
 
+  function daysUntilDelivery(s) {
+    if (!s?.next_delivery_date) return null;
+    const next = new Date(s.next_delivery_date);
+    next.setHours(0, 0, 0, 0);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return Math.ceil((next - today) / 86400000);
+  }
+
+  function canChangeUpcomingDelivery(s) {
+    if (!s || s.status !== "active") return true;
+    const days = daysUntilDelivery(s);
+    return days == null || days > SUBSCRIPTION_CHANGE_CUTOFF_DAYS;
+  }
+
+  function showSubscriptionLockNotice() {
+    Swal.fire({
+      title: "Upcoming delivery is locked",
+      text: `Pause, cancel, skip, and plan changes must be made more than ${SUBSCRIPTION_CHANGE_CUTOFF_DAYS} days before delivery.`,
+      icon: "info",
+      confirmButtonColor: "#FF9100",
+    });
+  }
+
   async function savePlan() {
     const address = form.address.trim();
     if (address.length < 5) return;
+    if (sub && !canChangeUpcomingDelivery(sub)) {
+      showSubscriptionLockNotice();
+      return;
+    }
     setBusy(true);
     try {
       let res;
@@ -636,6 +669,10 @@ function SubscriptionTab() {
   }
 
   async function handlePause() {
+    if (!canChangeUpcomingDelivery(sub)) {
+      showSubscriptionLockNotice();
+      return;
+    }
     setBusy(true);
     try {
       const res = await mpApi.fetch("/subscriptions/pause", { method: "POST", body: JSON.stringify({ months: pauseMonths }) });
@@ -644,6 +681,10 @@ function SubscriptionTab() {
     } finally { setBusy(false); }
   }
   async function handleSkipNext() {
+    if (!canChangeUpcomingDelivery(sub)) {
+      showSubscriptionLockNotice();
+      return;
+    }
     const result = await Swal.fire({
       title: "Skip next delivery?",
       text: "Your next delivery will move one month ahead. The plan stays active.",
@@ -668,6 +709,10 @@ function SubscriptionTab() {
     } finally { setBusy(false); }
   }
   async function handleAddPouch() {
+    if (!canChangeUpcomingDelivery(sub)) {
+      showSubscriptionLockNotice();
+      return;
+    }
     setBusy(true);
     try {
       const res = await mpApi.fetch("/subscriptions", { method: "PATCH", body: JSON.stringify({ qty: Math.min(20, sub.qty + 1) }) });
@@ -684,6 +729,10 @@ function SubscriptionTab() {
     } finally { setBusy(false); }
   }
   async function handleCancel() {
+    if (!canChangeUpcomingDelivery(sub)) {
+      showSubscriptionLockNotice();
+      return;
+    }
     const result = await Swal.fire({
       title: "Cancel subscription?",
       text: "This cannot be undone. Your plan will end immediately.",
@@ -899,7 +948,7 @@ function SubscriptionTab() {
             {[
               "Free delivery on every monthly order",
               "Locked-in pricing - no surprise increases",
-              "Skip, pause, or cancel anytime",
+              `Skip, pause, or cancel until ${SUBSCRIPTION_CHANGE_CUTOFF_DAYS} days before delivery`,
               "Priority dispatch before public stock",
             ].map((b, i) => (
               <li key={i} className="sub-benefit">
@@ -921,6 +970,8 @@ function SubscriptionTab() {
   const nextDate   = new Date(sub.next_delivery_date);
   const today      = new Date(); today.setHours(0, 0, 0, 0);
   const countdown  = Math.ceil((nextDate - today) / 86400000);
+  const changeLocked = !canChangeUpcomingDelivery(sub);
+  const lockText = `This delivery is already being prepared. Plan changes, pause, skip, and cancellation are locked during the final ${SUBSCRIPTION_CHANGE_CUTOFF_DAYS} days before delivery.`;
 
   return (
     <div className="monthly-plan-active">
@@ -953,12 +1004,18 @@ function SubscriptionTab() {
           ? <div className="text-sm text-orange">Paused — resumes {nextDate.toLocaleDateString("en-BD", { month: "short", year: "numeric" })}</div>
           : <div className="text-sm text-muted">In {countdown > 0 ? countdown : "< 1"} day{countdown !== 1 ? "s" : ""}</div>
         }
+        {changeLocked && (
+          <div className="sub-lock-note mt12">
+            <i className="fa fa-lock" style={{ fontSize: 12 }} />
+            <span>{lockText}</span>
+          </div>
+        )}
         <div className="text-sm text-muted mt8">
           <i className="fa fa-map-marker-alt" style={{ fontSize: 11, marginRight: 5 }} />{sub.address}
         </div>
 
         <div className="plan-action-grid">
-          {!isPaused && <button className="btn btn-ghost btn-full" onClick={handleSkipNext} disabled={busy}>
+          {!isPaused && <button className="btn btn-ghost btn-full" onClick={handleSkipNext} disabled={busy || changeLocked}>
             <i className="fa fa-forward" style={{ fontSize: 12 }} /> Skip Next Delivery
           </button>}
           {isPaused ? (
@@ -966,17 +1023,17 @@ function SubscriptionTab() {
               {busy ? <><i className="fa fa-spinner fa-spin" /> Resuming…</> : "Resume Plan"}
             </button>
           ) : (
-            <button className="btn btn-ghost btn-full" onClick={() => { setPauseMonths(1); setSheet("pause"); }} disabled={busy}>
+            <button className="btn btn-ghost btn-full" onClick={() => { setPauseMonths(1); setSheet("pause"); }} disabled={busy || changeLocked}>
               <i className="fa fa-pause" style={{ fontSize: 12 }} /> Pause Plan
             </button>
           )}
-        <button className="btn btn-ghost btn-full" onClick={openEdit} disabled={busy}>
+        <button className="btn btn-ghost btn-full" onClick={openEdit} disabled={busy || changeLocked}>
             <i className="fa fa-sliders" style={{ fontSize: 12 }} /> Change Quantity
         </button>
-          <button className="btn btn-ghost btn-full" onClick={handleAddPouch} disabled={busy || sub.qty >= 20}>
+          <button className="btn btn-ghost btn-full" onClick={handleAddPouch} disabled={busy || changeLocked || sub.qty >= 20}>
             <i className="fa fa-plus" style={{ fontSize: 12 }} /> Add Another Pouch
           </button>
-          <button className="btn btn-ghost-danger btn-full" onClick={handleCancel} disabled={busy}>
+          <button className="btn btn-ghost-danger btn-full" onClick={handleCancel} disabled={busy || changeLocked}>
             Cancel Plan
           </button>
         </div>

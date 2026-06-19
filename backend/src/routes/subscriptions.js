@@ -4,6 +4,8 @@ const { query } = require('../config/db')
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+const SUBSCRIPTION_CHANGE_CUTOFF_DAYS = 3
+
 function nextDeliveryDate(billingDay) {
   const today = new Date()
   today.setHours(0, 0, 0, 0)
@@ -29,6 +31,25 @@ function ordinalSuffix(n) {
   const s = ['th', 'st', 'nd', 'rd']
   const v = n % 100
   return s[(v - 20) % 10] || s[v] || s[0]
+}
+
+function daysUntilDate(dateStr) {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const target = new Date(dateStr)
+  target.setHours(0, 0, 0, 0)
+  return Math.ceil((target - today) / 86400000)
+}
+
+function assertCanChangeUpcomingDelivery(sub, action) {
+  if (sub.status !== 'active') return
+  const daysUntilDelivery = daysUntilDate(sub.next_delivery_date)
+  if (daysUntilDelivery <= SUBSCRIPTION_CHANGE_CUTOFF_DAYS) {
+    throw {
+      code: 'SUBSCRIPTION_CHANGE_LOCKED',
+      message: `This subscription can no longer be ${action} for the upcoming delivery. Please make changes at least ${SUBSCRIPTION_CHANGE_CUTOFF_DAYS} days before delivery.`,
+    }
+  }
 }
 
 // ── Routes ──────────────────────────────────────────────────────────────────
@@ -138,6 +159,7 @@ module.exports = async function subscriptionRoutes(app) {
     )
     if (!cur.length) throw { code: 'NOT_FOUND', message: 'No active subscription found.' }
     const sub = cur[0]
+    assertCanChangeUpcomingDelivery(sub, 'updated')
 
     let productName = sub.product_name
     let unitPrice   = sub.unit_price
@@ -197,6 +219,7 @@ module.exports = async function subscriptionRoutes(app) {
       [userId]
     )
     if (!cur.length) throw { code: 'NOT_FOUND', message: 'No active subscription to pause.' }
+    assertCanChangeUpcomingDelivery(cur[0], 'paused')
 
     const newDelivery = addMonthsToDate(cur[0].next_delivery_date, months)
 
@@ -241,6 +264,13 @@ module.exports = async function subscriptionRoutes(app) {
   // DELETE /subscriptions — cancel the subscription
   app.delete('/', async (req) => {
     const userId = req.user.sub
+    const { rows: cur } = await query(
+      `SELECT * FROM subscriptions WHERE user_id = $1 AND status != 'cancelled' LIMIT 1`,
+      [userId]
+    )
+    if (!cur.length) throw { code: 'NOT_FOUND', message: 'No active subscription found.' }
+    assertCanChangeUpcomingDelivery(cur[0], 'cancelled')
+
     const { rows } = await query(
       `UPDATE subscriptions
        SET status     = 'cancelled',
