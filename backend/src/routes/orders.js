@@ -75,6 +75,26 @@ module.exports = async function orderRoutes(app) {
     return { ok: true, data: order }
   })
 
+  // PATCH /orders/:id — update editable details before courier handoff
+  app.patch('/:id', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+      body: {
+        type: 'object',
+        properties: {
+          address:        addressSchema,
+          payment_type:   { type: 'string', enum: ['bkash', 'nagad', 'rocket', 'card', 'cod'] },
+          payment_number: { type: 'string', minLength: 1, maxLength: 25 },
+          notes:          { type: 'string', maxLength: 500 },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req) => {
+    const result = await ordersSvc.updateOrder(req.user.sub, req.params.id, req.body)
+    return { ok: true, data: result }
+  })
+
   // POST /orders/:id/cancel
   app.post('/:id/cancel', {
     schema: {

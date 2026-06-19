@@ -260,7 +260,7 @@ async function listOrders(userId, { status, page = 1, limit = 10 }) {
   const { rows } = await query(
     `SELECT o.id, o.order_ref, o.status,
             o.subtotal, o.discount_amount, o.delivery_fee, o.total,
-            o.points_earned, o.coupon_code, o.payment_type,
+            o.points_earned, o.coupon_code, o.payment_type, o.payment_number,
             o.address_snapshot, o.notes, o.created_at,
             (SELECT json_agg(json_build_object(
                'id', oi.id, 'name', oi.name_snapshot,
@@ -305,6 +305,86 @@ async function getOrder(userId, orderId) {
   return rows[0]
 }
 
+function assertCustomerCanChangeOrder(order, action = 'edited') {
+  if (!['processing', 'confirmed', 'packed'].includes(order.status)) {
+    throw {
+      code: 'ORDER_LOCKED',
+      message: `Orders with status "${order.status}" can no longer be ${action}.`,
+    }
+  }
+}
+
+// ── Update Order ────────────────────────────────────────────────────────────
+
+async function updateOrder(userId, orderId, body) {
+  return withTransaction(async (client) => {
+    const { rows } = await client.query(
+      `SELECT id, status, address_snapshot, payment_type, payment_number, notes
+       FROM   orders
+       WHERE  id = $1 AND user_id = $2
+       FOR UPDATE`,
+      [orderId, userId]
+    )
+
+    if (!rows.length) throw { code: 'NOT_FOUND', message: 'Order not found.' }
+
+    const order = rows[0]
+    assertCustomerCanChangeOrder(order, 'edited')
+
+    const sets = []
+    const params = []
+    const nextParam = (value) => {
+      params.push(value)
+      return `$${params.length}`
+    }
+
+    if (body.address) {
+      sets.push(`address_snapshot = ${nextParam(JSON.stringify(body.address))}`)
+    }
+    if (body.payment_type) {
+      sets.push(`payment_type = ${nextParam(body.payment_type)}`)
+    }
+    if (body.payment_number) {
+      sets.push(`payment_number = ${nextParam(body.payment_number)}`)
+    }
+    if (Object.prototype.hasOwnProperty.call(body, 'notes')) {
+      sets.push(`notes = ${nextParam(body.notes || null)}`)
+    }
+
+    const loadUpdatedOrder = async () => {
+      const { rows: updatedRows } = await client.query(
+        `SELECT o.id, o.order_ref, o.status,
+                o.subtotal, o.discount_amount, o.delivery_fee, o.total,
+                o.points_earned, o.coupon_code,
+                o.payment_type, o.payment_number,
+                o.address_snapshot, o.notes,
+                o.created_at, o.updated_at,
+                (SELECT json_agg(json_build_object(
+                   'id', oi.id, 'name', oi.name_snapshot,
+                   'qty', oi.qty, 'unit_price', oi.unit_price, 'subtotal', oi.subtotal
+                 ) ORDER BY oi.id)
+                 FROM order_items oi WHERE oi.order_id = o.id) AS items
+         FROM orders o
+         WHERE o.id = $1 AND o.user_id = $2`,
+        [orderId, userId]
+      )
+      return updatedRows[0]
+    }
+
+    if (!sets.length) return loadUpdatedOrder()
+
+    params.push(order.id)
+    await client.query(
+      `UPDATE orders
+       SET ${sets.join(', ')}, updated_at = NOW()
+       WHERE id = $${params.length}`,
+      params
+    )
+
+    return loadUpdatedOrder()
+  })
+}
+
 // ── Cancel Order ────────────────────────────────────────────────────────────
 
 async function cancelOrder(userId, orderId) {
@@ -320,12 +400,7 @@ async function cancelOrder(userId, orderId) {
     if (!rows.length) throw { code: 'NOT_FOUND', message: 'Order not found.' }
 
     const order = rows[0]
-    if (!['processing', 'packed'].includes(order.status)) {
-      throw {
-        code:    'CANNOT_CANCEL',
-        message: `Orders with status "${order.status}" cannot be cancelled.`,
-      }
-    }
+    assertCustomerCanChangeOrder(order, 'cancelled')
 
     await client.query(
       `UPDATE orders SET status = 'cancelled', updated_at = NOW() WHERE id = $1`,
@@ -364,7 +439,7 @@ async function cancelOrder(userId, orderId) {
         `Reversed: order ${order.order_ref} cancelled`, order.id)
     }
 
-    return { order_ref: order.order_ref, status: 'cancelled' }
+    return { id: order.id, order_ref: order.order_ref, status: 'cancelled' }
   })
 }
 
@@ -647,4 +722,4 @@ async function placeQuickOrder(userId, { product_id, qty, address, coupon_code, 
   })
 }
 
-module.exports = { placeOrder, placeQuickOrder, placeGuestOrder, listOrders, getOrder, cancelOrder, trackOrder, generateOrderRef }
+module.exports = { placeOrder, placeQuickOrder, placeGuestOrder, listOrders, getOrder, updateOrder, cancelOrder, trackOrder, generateOrderRef }

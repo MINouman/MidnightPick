@@ -138,6 +138,7 @@ async function build() {
     INVALID_ADDRESS:              400,
     ADDRESS_REQUIRED:             400,
     CANNOT_CANCEL:                409,
+    ORDER_LOCKED:                 409,
     INSUFFICIENT_STOCK:           409,
     INSUFFICIENT_POINTS:          409,
     EMAIL_EXISTS:                 409,

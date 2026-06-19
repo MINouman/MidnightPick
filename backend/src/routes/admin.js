@@ -388,7 +388,7 @@ module.exports = async function adminRoutes(app) {
       const address = order.address_snapshot
         ? (typeof order.address_snapshot === 'string' ? JSON.parse(order.address_snapshot) : order.address_snapshot)
         : {}
-      const addressLine = address.line1 || ''
+      const addressLine = [address.line1, address.line2, address.city, address.district].filter(Boolean).join(', ')
 
       if (!order.customer_phone || !addressLine) {
         throw {
@@ -398,9 +398,7 @@ module.exports = async function adminRoutes(app) {
       }
 
       // Calculate delivery fee: weight-based (inside vs outside Dhaka)
-      // Address format: "street, area, city" — city is last part
-      const addressParts = addressLine.split(',').map(p => p.trim())
-      const district = addressParts[addressParts.length - 1] || 'Dhaka'
+      const district = address.district || address.city || 'Dhaka'
 
       // Total weight in grams from order items × product weight (p.qty in grams)
       const { rows: weightRows } = await client.query(

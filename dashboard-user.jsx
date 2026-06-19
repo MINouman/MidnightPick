@@ -301,17 +301,96 @@ function CrewHomeCard({ state, crew, setTab, compact = false }) {
 
 // ── ORDERS TAB ────────────────────────────────────────────────
 function OrdersTab() {
-  const { orders } = useContext(DashCtx);
+  const { orders, reload } = useContext(DashCtx);
   const [filter, setFilter]     = useState("All");
   const [expanded, setExpanded] = useState(null);
   const [reviewTrigger, setReviewTrigger] = useState(0);
   const [reviewOrderId, setReviewOrderId] = useState(null);
+  const [editingOrder, setEditingOrder] = useState(null);
+  const [editForm, setEditForm] = useState({ label: "Delivery", line1: "", line2: "", city: "", district: "", payment_type: "cod", payment_number: "cod", notes: "" });
+  const [actionBusy, setActionBusy] = useState(false);
 
   const filters = ["All", "Confirmed", "Processing", "Packed", "Shipped", "Delivered", "Cancelled"];
   const visible  = filter === "All" ? orders : orders.filter(o => fmtStatus(o.status) === filter);
 
   function waLink(ref) {
     return `https://wa.me/8801XXXXXXXXX?text=${encodeURIComponent(`Hi Midnight Pick! I need help with order ${ref}.`)}`;
+  }
+
+  function canChangeOrder(order) {
+    return ["processing", "confirmed", "packed"].includes(String(order.status || "").toLowerCase());
+  }
+
+  function openEdit(order) {
+    const a = order.address_snapshot || {};
+    setEditingOrder(order);
+    setEditForm({
+      label: a.label || "Delivery",
+      line1: a.line1 || "",
+      line2: a.line2 || "",
+      city: a.city || "",
+      district: a.district || "",
+      payment_type: order.payment_type || "cod",
+      payment_number: order.payment_number || (order.payment_type === "cod" ? "cod" : ""),
+      notes: order.notes || "",
+    });
+  }
+
+  async function saveOrderEdit() {
+    if (!editingOrder || !editForm.line1.trim()) return;
+    setActionBusy(true);
+    try {
+      const body = {
+        address: {
+          label: editForm.label.trim() || "Delivery",
+          line1: editForm.line1.trim(),
+          line2: editForm.line2.trim() || undefined,
+          city: editForm.city.trim() || undefined,
+          district: editForm.district.trim() || undefined,
+        },
+        payment_type: editForm.payment_type,
+        payment_number: editForm.payment_number.trim() || "cod",
+        notes: editForm.notes.trim(),
+      };
+      const res = await mpApi.fetch(`/orders/${editingOrder.id}`, { method: "PATCH", body: JSON.stringify(body) });
+      if (res?.ok) {
+        setEditingOrder(null);
+        await reload();
+        Swal.fire({ title: "Order updated", icon: "success", timer: 1400, showConfirmButton: false });
+      } else {
+        Swal.fire({ title: "Could not update order", text: res?.error?.message || "Please try again.", icon: "error", confirmButtonColor: "#FF9100" });
+      }
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function cancelOrder(order) {
+    const result = await Swal.fire({
+      title: "Cancel this order?",
+      text: "You can cancel before the order is shipped to the courier.",
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonText: "Yes, Cancel Order",
+      cancelButtonText: "Keep Order",
+      confirmButtonColor: "#C93030",
+      cancelButtonColor: "transparent",
+      customClass: { cancelButton: "swal-cancel-dark" },
+      reverseButtons: true,
+    });
+    if (!result.isConfirmed) return;
+    setActionBusy(true);
+    try {
+      const res = await mpApi.fetch(`/orders/${order.id}/cancel`, { method: "POST" });
+      if (res?.ok) {
+        await reload();
+        Swal.fire({ title: "Order cancelled", icon: "success", timer: 1400, showConfirmButton: false });
+      } else {
+        Swal.fire({ title: "Could not cancel order", text: res?.error?.message || "Please try again.", icon: "error", confirmButtonColor: "#FF9100" });
+      }
+    } finally {
+      setActionBusy(false);
+    }
   }
 
   return (
@@ -386,6 +465,16 @@ function OrdersTab() {
               </div>
 
               <div className="row mt12" style={{ gap: 8 }}>
+                {canChangeOrder(order) && (
+                  <>
+                    <button type="button" className="btn btn-primary btn-sm" disabled={actionBusy} onClick={() => openEdit(order)}>
+                      <i className="fa fa-pen" /> Edit Order
+                    </button>
+                    <button type="button" className="btn btn-ghost btn-sm" disabled={actionBusy} onClick={() => cancelOrder(order)} style={{ color: "var(--red)" }}>
+                      <i className="fa fa-times" /> Cancel Order
+                    </button>
+                  </>
+                )}
                 {order.status === "delivered" && (
                   <button type="button" className="btn btn-primary btn-sm" onClick={() => { setReviewOrderId(order.id); setReviewTrigger(Date.now()); }}>
                     <i className="fa fa-star" /> Write Review
@@ -399,6 +488,69 @@ function OrdersTab() {
           )}
         </div>
       ))}
+      {editingOrder && (
+        <div className="overlay" onClick={() => setEditingOrder(null)}>
+          <div className="sheet" onClick={e => e.stopPropagation()}>
+            <div className="sheet-handle" />
+            <div className="sheet-title">Edit Order</div>
+            <div className="sheet-body" style={{ textAlign: "left", marginBottom: 14 }}>
+              {editingOrder.order_ref} can be updated until it is shipped to the courier.
+            </div>
+
+            <div className="input-group">
+              <label className="input-label">Address Label</label>
+              <input className="input" value={editForm.label} onChange={e => setEditForm(f => ({ ...f, label: e.target.value }))} placeholder="Home" />
+            </div>
+            <div className="input-group">
+              <label className="input-label">Address Line 1</label>
+              <input className="input" value={editForm.line1} onChange={e => setEditForm(f => ({ ...f, line1: e.target.value }))} placeholder="House / Flat / Road" />
+            </div>
+            <div className="input-group">
+              <label className="input-label">Address Line 2</label>
+              <input className="input" value={editForm.line2} onChange={e => setEditForm(f => ({ ...f, line2: e.target.value }))} placeholder="Area / Block" />
+            </div>
+            <div className="grid-2">
+              <div className="input-group">
+                <label className="input-label">City</label>
+                <input className="input" value={editForm.city} onChange={e => setEditForm(f => ({ ...f, city: e.target.value }))} placeholder="Dhaka" />
+              </div>
+              <div className="input-group">
+                <label className="input-label">District</label>
+                <input className="input" value={editForm.district} onChange={e => setEditForm(f => ({ ...f, district: e.target.value }))} placeholder="Dhaka" />
+              </div>
+            </div>
+
+            <div className="grid-2">
+              <div className="input-group">
+                <label className="input-label">Payment Method</label>
+                <select className="select" value={editForm.payment_type} onChange={e => setEditForm(f => ({ ...f, payment_type: e.target.value, payment_number: e.target.value === "cod" ? "cod" : f.payment_number }))}>
+                  <option value="cod">Cash on Delivery</option>
+                  <option value="bkash">bKash</option>
+                  <option value="nagad">Nagad</option>
+                  <option value="rocket">Rocket</option>
+                  <option value="card">Card</option>
+                </select>
+              </div>
+              <div className="input-group">
+                <label className="input-label">Payment Number / Ref</label>
+                <input className="input" value={editForm.payment_number} onChange={e => setEditForm(f => ({ ...f, payment_number: e.target.value }))} placeholder="01XXXXXXXXX" />
+              </div>
+            </div>
+
+            <div className="input-group">
+              <label className="input-label">Order Notes</label>
+              <textarea className="input" rows="3" value={editForm.notes} onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))} maxLength={500} placeholder="Delivery instruction or note" />
+            </div>
+
+            <div className="col-gap">
+              <button className="btn btn-primary btn-full" disabled={actionBusy || !editForm.line1.trim()} onClick={saveOrderEdit}>
+                {actionBusy ? "Saving…" : "Save Changes"}
+              </button>
+              <button className="btn btn-ghost btn-full" disabled={actionBusy} onClick={() => setEditingOrder(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
       <MPReviewPrompt source="dashboard_order" manual triggerKey={reviewTrigger} orderId={reviewOrderId} />
     </div>
   );
