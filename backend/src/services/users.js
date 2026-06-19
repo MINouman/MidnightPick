@@ -37,6 +37,25 @@ async function loginUser(email, password) {
   return user
 }
 
+async function loginPhoneUser(phone, password) {
+  const { rows } = await query(
+    `SELECT id, phone, email, name, role, password_hash, is_active
+     FROM   users WHERE phone = $1`,
+    [phone]
+  )
+  const user = rows[0]
+  if (!user || !user.password_hash) throw { code: 'UNAUTHORIZED', message: 'Invalid phone number or password.' }
+  if (!user.is_active) throw { code: 'ACCOUNT_INACTIVE', message: 'This account has been deactivated.' }
+  if (user.role === 'admin') {
+    throw { code: 'UNAUTHORIZED', message: 'Admin accounts must use the admin login.' }
+  }
+
+  const match = await bcrypt.compare(password, user.password_hash)
+  if (!match) throw { code: 'UNAUTHORIZED', message: 'Invalid phone number or password.' }
+
+  return user
+}
+
 // ── Google OAuth helper ──────────────────────────────────────────────────────
 
 async function findOrCreateGoogleUser(googleId, email, name) {
@@ -86,7 +105,8 @@ async function findOrCreateGoogleUser(googleId, email, name) {
 async function findOrCreateUser(phone) {
   return withTransaction(async (client) => {
     const { rows } = await client.query(
-      `SELECT id, phone, email, name, role, points_balance, is_active
+      `SELECT id, phone, email, name, role, points_balance, is_active,
+              password_hash IS NOT NULL AS has_password
        FROM   users WHERE phone = $1`,
       [phone]
     )
@@ -109,7 +129,8 @@ async function findOrCreateUser(phone) {
       const { rows: inserted } = await client.query(
         `INSERT INTO users (phone, name)
          VALUES ($1, $2)
-         RETURNING id, phone, email, name, role, points_balance, is_active`,
+         RETURNING id, phone, email, name, role, points_balance, is_active,
+                   password_hash IS NOT NULL AS has_password`,
         [phone, prefillName]
       )
       user = inserted[0]
@@ -146,6 +167,20 @@ async function updateUser(id, { name, email }) {
      WHERE id = $1
      RETURNING id, phone, email, name, role, points_balance`,
     [id, name ?? null, email ?? null]
+  )
+  if (!rows[0]) throw { code: 'NOT_FOUND', message: 'User not found.' }
+  return rows[0]
+}
+
+async function setUserPassword(id, password) {
+  const passwordHash = await bcrypt.hash(password, 12)
+  const { rows } = await query(
+    `UPDATE users
+     SET   password_hash = $2,
+           updated_at    = NOW()
+     WHERE id = $1
+     RETURNING id, phone, email, name, role, points_balance, is_active`,
+    [id, passwordHash]
   )
   if (!rows[0]) throw { code: 'NOT_FOUND', message: 'User not found.' }
   return rows[0]
@@ -292,10 +327,10 @@ async function setDefaultPaymentMethod(userId, pmId) {
 }
 
 module.exports = {
-  registerUser, loginUser,
+  registerUser, loginUser, loginPhoneUser,
   findOrCreateGoogleUser,
   findOrCreateUser,
-  getUserById, updateUser, deactivateUser,
+  getUserById, updateUser, setUserPassword, deactivateUser,
   getAddresses, createAddress, updateAddress, deleteAddress, setDefaultAddress,
   getPaymentMethods, createPaymentMethod, deletePaymentMethod, setDefaultPaymentMethod,
 }

@@ -1,7 +1,7 @@
 'use strict'
 
 const { sendOtp, verifyOtp }              = require('../services/otp')
-const { registerUser, loginUser, findOrCreateGoogleUser, findOrCreateUser } = require('../services/users')
+const { registerUser, loginUser, loginPhoneUser, findOrCreateGoogleUser, findOrCreateUser } = require('../services/users')
 const { createTokenPair, rotateRefreshToken, revokeTokens } = require('../services/tokens')
 const { adminLogin, bootstrapAdmin }      = require('../services/admin')
 const { verifyGoogleCredential }          = require('../services/google')
@@ -46,6 +46,45 @@ module.exports = async function authRoutes(app) {
       ok: true,
       data: {
         user: { id: user.id, email: user.email, name: user.name, role: user.role },
+      },
+    })
+  })
+
+  // POST /auth/phone/login
+  app.post('/phone/login', {
+    schema: {
+      body: {
+        type: 'object', required: ['phone', 'password'],
+        properties: {
+          phone:    { type: 'string', minLength: 10, maxLength: 20 },
+          password: { type: 'string', minLength: 6, maxLength: 100 },
+        },
+        additionalProperties: false,
+      },
+    },
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const phone = normalizeBdMobile(req.body.phone)
+    const user = await loginPhoneUser(phone, req.body.password)
+    const tokens = await createTokenPair(app, user)
+    reply.setCookie('mp_access_token', tokens.access_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'Lax',
+      path: '/',
+      maxAge: 15 * 60 * 1000
+    })
+    reply.setCookie('mp_refresh_token', tokens.refresh_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'Lax',
+      path: '/',
+      maxAge: 30 * 24 * 60 * 60 * 1000
+    })
+    return reply.send({
+      ok: true,
+      data: {
+        user: { id: user.id, phone: user.phone, email: user.email, name: user.name, role: user.role },
       },
     })
   })
@@ -187,7 +226,7 @@ module.exports = async function authRoutes(app) {
     return reply.send({
       ok: true,
       data: {
-        user: { id: user.id, phone: user.phone, name: user.name, role: user.role, is_new: isNew },
+        user: { id: user.id, phone: user.phone, name: user.name, role: user.role, is_new: isNew, has_password: !!user.has_password },
       },
     })
   })

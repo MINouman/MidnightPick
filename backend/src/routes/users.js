@@ -34,6 +34,24 @@ module.exports = async function userRoutes(app) {
     return { ok: true, data: updated }
   })
 
+  // POST /me/password — set or reset phone-login password/PIN after authenticated OTP/session
+  app.post('/password', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['password'],
+        properties: {
+          password: { type: 'string', minLength: 6, maxLength: 100 },
+        },
+        additionalProperties: false,
+      },
+    },
+    config: { rateLimit: { max: 5, timeWindow: '10 minutes' } },
+  }, async (req) => {
+    const updated = await usersSvc.setUserPassword(req.user.sub, req.body.password)
+    return { ok: true, data: updated }
+  })
+
   // DELETE /me  (soft-delete)
   app.delete('/', async (req, reply) => {
     await usersSvc.deactivateUser(req.user.sub)
