@@ -15,8 +15,13 @@
   }
 
   const BASE = resolveApiBase();
+  const INACTIVITY_LIMIT_MS = 5 * 60 * 1000;
+  const ACTIVITY_EVENTS = ['click', 'keydown', 'mousemove', 'mousedown', 'scroll', 'touchstart', 'wheel'];
   window.MIDNIGHT_API_BASE = BASE;
   let refreshPromise = null;
+  let inactivityStarted = false;
+  let inactivityTimer = null;
+  let lastActivity = Date.now();
 
   async function refreshAuth() {
     if (!refreshPromise) {
@@ -64,11 +69,54 @@
     return res.json();
   }
 
-  function _signOut() {
-    // Tokens are in httpOnly cookies (backend will clear them)
-    // Only clear user info from localStorage
+  function notifyLogout() {
+    return fetch(BASE + '/auth/logout', {
+      method: 'POST',
+      credentials: 'include',
+      keepalive: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    }).catch(() => null);
+  }
+
+  function _signOut(redirectTo) {
+    notifyLogout();
     localStorage.removeItem('mp_user');
-    window.location.replace('index.html');
+    window.location.replace(redirectTo || 'index.html');
+  }
+
+  function markActivity() {
+    lastActivity = Date.now();
+  }
+
+  function startInactivityTimer() {
+    if (inactivityStarted || !localStorage.getItem('mp_user')) return;
+    inactivityStarted = true;
+    markActivity();
+
+    ACTIVITY_EVENTS.forEach(eventName => {
+      window.addEventListener(eventName, markActivity, { passive: true });
+    });
+
+    inactivityTimer = window.setInterval(() => {
+      if (!localStorage.getItem('mp_user')) {
+        stopInactivityTimer();
+        return;
+      }
+      if (Date.now() - lastActivity >= INACTIVITY_LIMIT_MS) {
+        _signOut('index.html?session=inactive');
+      }
+    }, 1000);
+  }
+
+  function stopInactivityTimer() {
+    if (!inactivityStarted) return;
+    inactivityStarted = false;
+    if (inactivityTimer) window.clearInterval(inactivityTimer);
+    inactivityTimer = null;
+    ACTIVITY_EVENTS.forEach(eventName => {
+      window.removeEventListener(eventName, markActivity);
+    });
   }
 
   // Call at the top of each dashboard. Redirects to index.html if not authenticated or wrong role.
@@ -86,11 +134,14 @@
       _signOut();
       return null;
     }
+    startInactivityTimer();
     return user;
   }
 
   function mpSignOut() { _signOut(); }
 
+  startInactivityTimer();
+
   // Expose globally
-  window.mpApi = { fetch: mpFetch, guard: mpGuard, signOut: mpSignOut, base: BASE };
+  window.mpApi = { fetch: mpFetch, guard: mpGuard, signOut: mpSignOut, startInactivityTimer, base: BASE };
 })(window);

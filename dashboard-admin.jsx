@@ -4025,6 +4025,8 @@ function AdminDashboard() {
           setLoading(false);
           return;
         }
+        localStorage.setItem('mp_user', JSON.stringify(data.data));
+        window.mpApi.startInactivityTimer();
         setAuthed(true);
         loadDashboard();
       })
@@ -4035,6 +4037,7 @@ function AdminDashboard() {
   }, []);
 
   function onLoginSuccess() {
+    window.mpApi.startInactivityTimer();
     setAuthed(true);
     setLoading(true);
     loadDashboard();

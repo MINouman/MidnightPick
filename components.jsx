@@ -939,6 +939,7 @@ function getMidnightApiBase() {
 }
 
 const API_BASE = getMidnightApiBase();
+const AUTH_INACTIVITY_LIMIT_MS = 5 * 60 * 1000;
 
 const ROLE_ROUTES = {
   user:       "dashboard-user.html",
@@ -946,6 +947,60 @@ const ROLE_ROUTES = {
   influencer: "dashboard-influencer.html",
   admin:      "dashboard-admin.html",
 };
+
+(function setupAuthInactivityLogout() {
+  if (window.mpAuthInactivity) return;
+
+  const events = ["click", "keydown", "mousemove", "mousedown", "scroll", "touchstart", "wheel"];
+  let started = false;
+  let timer = null;
+  let lastActivity = Date.now();
+
+  function hasUser() {
+    return !!localStorage.getItem("mp_user");
+  }
+
+  function markActivity() {
+    lastActivity = Date.now();
+  }
+
+  function stop() {
+    if (!started) return;
+    started = false;
+    if (timer) window.clearInterval(timer);
+    timer = null;
+    events.forEach(eventName => window.removeEventListener(eventName, markActivity));
+  }
+
+  function signOut() {
+    fetch(`${API_BASE}/auth/logout`, {
+      method: "POST",
+      credentials: "include",
+      keepalive: true,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    }).catch(() => {});
+    localStorage.removeItem("mp_user");
+    window.location.replace("index.html?session=inactive");
+  }
+
+  function start() {
+    if (started || !hasUser()) return;
+    started = true;
+    markActivity();
+    events.forEach(eventName => window.addEventListener(eventName, markActivity, { passive: true }));
+    timer = window.setInterval(() => {
+      if (!hasUser()) {
+        stop();
+        return;
+      }
+      if (Date.now() - lastActivity >= AUTH_INACTIVITY_LIMIT_MS) signOut();
+    }, 1000);
+  }
+
+  window.mpAuthInactivity = { start, stop };
+  start();
+})();
 
 function AuthModal({ open, onClose, title = "Join the Midnight Circle", subtitle = "Track orders, collect Midnight Points, reorder faster, and manage your monthly coffee plan.", postAuthRedirect = null }) {
   const [step,      setStep]      = React.useState("access");      // access | complete
