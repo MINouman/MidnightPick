@@ -1417,12 +1417,16 @@ function AuthModal({ open, onClose, title = "Join the Midnight Circle", subtitle
             </form>
           )}
 
-          <div className="auth-divider"><span>or</span></div>
+          {method === "email" && (
+            <>
+              <div className="auth-divider"><span>or</span></div>
 
-          <button className="auth-google-btn" type="button" onClick={handleGoogleClick}>
-            <GoogleIcon size={18} />
-            <span>Continue with Google</span>
-          </button>
+              <button className="auth-google-btn" type="button" onClick={handleGoogleClick}>
+                <GoogleIcon size={18} />
+                <span>Continue with Google</span>
+              </button>
+            </>
+          )}
 
           {reassurance}
         </>
