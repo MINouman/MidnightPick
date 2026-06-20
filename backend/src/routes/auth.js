@@ -1,7 +1,7 @@
 'use strict'
 
 const { sendOtp, verifyOtp }              = require('../services/otp')
-const { registerUser, loginUser, loginPhoneUser, findOrCreateGoogleUser, findOrCreateUser } = require('../services/users')
+const { registerUser, loginUser, loginPhoneUser, getPhoneAuthStatus, findOrCreateGoogleUser, findOrCreateUser } = require('../services/users')
 const { createTokenPair, rotateRefreshToken, revokeTokens } = require('../services/tokens')
 const { adminLogin, bootstrapAdmin }      = require('../services/admin')
 const { verifyGoogleCredential }          = require('../services/google')
@@ -48,6 +48,24 @@ module.exports = async function authRoutes(app) {
         user: { id: user.id, email: user.email, name: user.name, role: user.role },
       },
     })
+  })
+
+  // POST /auth/phone/status
+  app.post('/phone/status', {
+    schema: {
+      body: {
+        type: 'object', required: ['phone'],
+        properties: {
+          phone: { type: 'string', minLength: 10, maxLength: 20 },
+        },
+        additionalProperties: false,
+      },
+    },
+    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const phone = normalizeBdMobile(req.body.phone)
+    const status = await getPhoneAuthStatus(phone)
+    return reply.send({ ok: true, data: status })
   })
 
   // POST /auth/phone/login

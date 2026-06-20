@@ -59,6 +59,42 @@ async function loginPhoneUser(phone, password) {
   return user
 }
 
+async function getPhoneAuthStatus(phone) {
+  const { rows: userRows } = await query(
+    `SELECT id, role, is_active, password_hash IS NOT NULL AS has_password
+     FROM   users
+     WHERE  phone = $1`,
+    [phone]
+  )
+  const user = userRows[0]
+  if (user) {
+    return {
+      exists: true,
+      source: 'user',
+      has_password: !!user.has_password,
+      is_active: !!user.is_active,
+      role: user.role,
+    }
+  }
+
+  const { rows: guestRows } = await query(
+    `SELECT EXISTS (
+       SELECT 1 FROM customers WHERE phone = $1
+       UNION
+       SELECT 1 FROM orders WHERE customer_phone = $1
+     ) AS has_guest_history`,
+    [phone]
+  )
+
+  return {
+    exists: !!guestRows[0]?.has_guest_history,
+    source: guestRows[0]?.has_guest_history ? 'guest' : 'new',
+    has_password: false,
+    is_active: true,
+    role: 'user',
+  }
+}
+
 // ── Google OAuth helper ──────────────────────────────────────────────────────
 
 async function findOrCreateGoogleUser(googleId, email, name) {
@@ -330,7 +366,7 @@ async function setDefaultPaymentMethod(userId, pmId) {
 }
 
 module.exports = {
-  registerUser, loginUser, loginPhoneUser,
+  registerUser, loginUser, loginPhoneUser, getPhoneAuthStatus,
   findOrCreateGoogleUser,
   findOrCreateUser,
   getUserById, updateUser, setUserPassword, deactivateUser,
