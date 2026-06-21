@@ -80,7 +80,11 @@ module.exports = async function webhookRoutes(app) {
       // Update order status if it changed
       if (changed) {
         await client.query(
-          `UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2`,
+          `UPDATE orders
+           SET status = $1,
+               delivered_at = CASE WHEN $1 = 'delivered' AND delivered_at IS NULL THEN NOW() ELSE delivered_at END,
+               updated_at = NOW()
+           WHERE id = $2`,
           [newStatus, o.id]
         )
       }

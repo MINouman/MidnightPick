@@ -14,6 +14,7 @@ const { createOrder, mapSteadfastStatusToOrderStatus } = require('../services/st
 const { getWeightBasedFee } = require('../services/delivery')
 const { sendOrderOtp, verifyOrderOtp, getOrderOtpStatus } = require('../services/order-otp')
 const { checkAndIncrementDailyLimit, getDailyCount, resetDailyCount, getPhoneOverride, DEFAULT_DAILY_LIMIT } = require('../services/otp-daily-limit')
+const { getFinancialSummary } = require('../services/financials')
 
 module.exports = async function adminRoutes(app) {
 
@@ -102,7 +103,11 @@ module.exports = async function adminRoutes(app) {
       }
 
       const { rows: updated } = await client.query(
-        `UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2
+        `UPDATE orders
+         SET status = $1,
+             delivered_at = CASE WHEN $1 = 'delivered' AND delivered_at IS NULL THEN NOW() ELSE delivered_at END,
+             updated_at = NOW()
+         WHERE id = $2
          RETURNING id, order_ref, status`,
         [newStatus, orderId]
       )
@@ -502,7 +507,11 @@ module.exports = async function adminRoutes(app) {
     // Update order status if it changed
     if (newOrderStatus !== order.status) {
       await query(
-        `UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2`,
+        `UPDATE orders
+         SET status = $1,
+             delivered_at = CASE WHEN $1 = 'delivered' AND delivered_at IS NULL THEN NOW() ELSE delivered_at END,
+             updated_at = NOW()
+         WHERE id = $2`,
         [newOrderStatus, orderId]
       )
 
@@ -563,17 +572,36 @@ module.exports = async function adminRoutes(app) {
 
   // GET /admin/stats  — dashboard KPIs
   app.get('/stats', async () => {
-    const [ordersRes, usersRes, revenueRes] = await Promise.all([
+    const [ordersRes, usersRes, revenueRes, dailyRevenueRes] = await Promise.all([
       query(`SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE status NOT IN ('delivered','cancelled')) AS active FROM orders`),
       query(`SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE role = 'crew') AS crew, COUNT(*) FILTER (WHERE role = 'influencer') AS influencer FROM users WHERE role != 'admin'`),
       query(`SELECT COALESCE(SUM(total),0) AS total FROM orders WHERE status = 'delivered'`),
+      query(
+        `SELECT d.day::date AS date,
+                COALESCE(SUM(o.total), 0)::int AS total,
+                0::int AS sub
+         FROM generate_series(CURRENT_DATE - INTERVAL '29 days', CURRENT_DATE, INTERVAL '1 day') AS d(day)
+         LEFT JOIN orders o
+           ON o.status = 'delivered'
+          AND o.delivered_at >= d.day
+          AND o.delivered_at < d.day + INTERVAL '1 day'
+         GROUP BY d.day
+         ORDER BY d.day ASC`
+      ),
     ])
     return {
       ok: true,
       data: {
         orders:   { total: parseInt(ordersRes.rows[0].total), active: parseInt(ordersRes.rows[0].active) },
         users:    { total: parseInt(usersRes.rows[0].total), crew: parseInt(usersRes.rows[0].crew), influencer: parseInt(usersRes.rows[0].influencer) },
-        revenue:  { total_delivered: parseFloat(revenueRes.rows[0].total) },
+        revenue:  {
+          total_delivered: parseFloat(revenueRes.rows[0].total),
+          last_30_days: dailyRevenueRes.rows.map(r => ({
+            date: r.date,
+            total: Number(r.total || 0),
+            sub: Number(r.sub || 0),
+          })),
+        },
       },
     }
   })
@@ -631,51 +659,9 @@ module.exports = async function adminRoutes(app) {
       },
     },
   }, async (req) => {
-    const month      = req.query.month || new Date().toISOString().slice(0, 7)
-    const monthStart = `${month}-01`
-
-    const [ordersRes, commRes, pointsRes] = await Promise.all([
-      query(
-        `SELECT COALESCE(SUM(total), 0)          AS revenue,
-                COALESCE(SUM(discount_amount), 0) AS discounts
-         FROM   orders
-         WHERE  status != 'cancelled'
-           AND  created_at >= $1::date
-           AND  created_at <  $1::date + INTERVAL '1 month'`,
-        [monthStart]
-      ),
-      query(
-        `SELECT COALESCE(SUM(ROUND(o.total * i.comm_rate / 100)), 0) AS influencer_commission,
-                COALESCE(SUM(cc.commission_amount), 0) AS crew_commission
-         FROM   orders o
-         LEFT JOIN coupons ic ON ic.code = o.coupon_code AND ic.type = 'influencer'
-         LEFT JOIN influencers i ON i.code = ic.code
-         LEFT JOIN crew_commissions cc ON cc.order_id = o.id AND cc.status != 'reversed'
-         WHERE  o.status = 'delivered'
-           AND  o.created_at >= $1::date
-           AND  o.created_at <  $1::date + INTERVAL '1 month'`,
-        [monthStart]
-      ),
-      query(
-        `SELECT COALESCE(SUM(pts_cost), 0) AS points_spent
-         FROM   point_redemptions
-         WHERE  status != 'cancelled'
-           AND  created_at >= $1::date
-           AND  created_at <  $1::date + INTERVAL '1 month'`,
-        [monthStart]
-      ),
-    ])
-
-    return {
-      ok:   true,
-      data: {
-        revenue:              parseInt(ordersRes.rows[0].revenue),
-        discounts:            parseInt(ordersRes.rows[0].discounts),
-        commission:           parseInt(commRes.rows[0].influencer_commission),
-        crew_commission:      parseFloat(commRes.rows[0].crew_commission || 0),
-        points_redeemed_taka: Math.round(parseInt(pointsRes.rows[0].points_spent) * 2),
-      },
-    }
+    const month = req.query.month || new Date().toISOString().slice(0, 7)
+    const data = await getFinancialSummary((sql, params) => query(sql, params), month)
+    return { ok: true, data }
   })
 
   // GET /admin/coupons/validate?code=XXX&subtotal=YYY&phone=01XXXXXXXXX
@@ -742,8 +728,12 @@ module.exports = async function adminRoutes(app) {
   // GET /admin/influencers
   app.get('/influencers', async () => {
     const { rows } = await query(
-      `SELECT id, name, email, phone, code, comm_rate, notes, total_owed, orders_mo, comm_mo, is_active, created_at
-       FROM influencers ORDER BY created_at DESC`
+      `SELECT i.id, i.name, i.email, i.phone, i.code, i.comm_rate, i.notes,
+              i.total_owed, i.orders_mo, i.comm_mo, i.is_active, i.created_at,
+              i.paid_at, i.paid_by_admin_id, u.name AS paid_by_admin_name, u.email AS paid_by_admin_email
+       FROM influencers i
+       LEFT JOIN users u ON u.id = i.paid_by_admin_id
+       ORDER BY i.created_at DESC`
     )
     return { ok: true, data: { influencers: rows } }
   })
@@ -879,8 +869,9 @@ module.exports = async function adminRoutes(app) {
         `INSERT INTO orders
            (order_ref, user_id, customer_name, customer_phone,
             address_snapshot, payment_type, payment_number,
-            coupon_code, discount_amount, subtotal, total, status, notes)
-         VALUES ($1, NULL, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11, $12)
+            coupon_code, discount_amount, subtotal, total, status, delivered_at, notes)
+         VALUES ($1, NULL, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11,
+                 CASE WHEN $11::order_status = 'delivered' THEN NOW() ELSE NULL END, $12)
          RETURNING id, order_ref, status, total, subtotal, discount_amount,
                    coupon_code, payment_type, points_earned, created_at,
                    customer_name, customer_phone`,
@@ -1059,8 +1050,14 @@ module.exports = async function adminRoutes(app) {
     },
   }, async (req) => {
     const { rows } = await query(
-      `UPDATE influencers SET total_owed = 0, updated_at = NOW() WHERE id = $1 RETURNING id, code, total_owed`,
-      [req.params.id]
+      `UPDATE influencers
+       SET total_owed = 0,
+           paid_by_admin_id = $2,
+           paid_at = NOW(),
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, code, total_owed, paid_by_admin_id, paid_at`,
+      [req.params.id, req.user?.sub || req.user?.id || null]
     )
     if (!rows.length) throw { code: 'NOT_FOUND', message: 'Influencer not found.' }
     return { ok: true, data: rows[0] }
@@ -1550,11 +1547,13 @@ module.exports = async function adminRoutes(app) {
 
   app.get('/crew/commissions', async () => {
     const { rows } = await query(
-      `SELECT cc.*, u.name AS crew_member, c.code AS coupon_code, o.order_ref
+      `SELECT cc.*, u.name AS crew_member, c.code AS coupon_code, o.order_ref,
+              admin.name AS paid_by_admin_name, admin.email AS paid_by_admin_email
        FROM crew_commissions cc
        JOIN users u ON u.id = cc.user_id
        JOIN coupons c ON c.id = cc.coupon_id
        JOIN orders o ON o.id = cc.order_id
+       LEFT JOIN users admin ON admin.id = cc.paid_by_admin_id
        ORDER BY cc.created_at DESC`
     )
     return { ok: true, data: { commissions: rows } }
@@ -1564,9 +1563,13 @@ module.exports = async function adminRoutes(app) {
     schema: { params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } } },
   }, async (req) => {
     const { rows } = await query(
-      `UPDATE crew_commissions SET status = 'paid', paid_at = NOW(), updated_at = NOW()
+      `UPDATE crew_commissions
+       SET status = 'paid',
+           paid_at = NOW(),
+           paid_by_admin_id = $2,
+           updated_at = NOW()
        WHERE id = $1 AND status IN ('pending', 'approved') RETURNING *`,
-      [req.params.id]
+      [req.params.id, req.user?.sub || req.user?.id || null]
     )
     if (!rows.length) throw { code: 'NOT_ELIGIBLE', message: 'Commission not found or not payable (already paid or reversed).' }
     return { ok: true, data: rows[0] }
@@ -2091,7 +2094,7 @@ module.exports = async function adminRoutes(app) {
 
   app.get('/points-settings', async () => {
     const { rows } = await query(`SELECT * FROM points_settings WHERE id = 1`)
-    return { ok: true, data: rows[0] || { id: 1, points_per_100_taka: 10, min_order_amount: 0 } }
+    return { ok: true, data: rows[0] || { id: 1, points_per_100_taka: 10, min_order_amount: 0, point_redemption_value: 0.5 } }
   })
 
   app.patch('/points-settings', {
@@ -2101,13 +2104,14 @@ module.exports = async function adminRoutes(app) {
         properties: {
           points_per_100_taka: { type: 'integer', minimum: 0 },
           min_order_amount:    { type: 'integer', minimum: 0 },
+          point_redemption_value: { type: 'number', minimum: 0 },
         },
         additionalProperties: false,
         minProperties: 1,
       },
     },
   }, async (req) => {
-    const allowed = ['points_per_100_taka', 'min_order_amount']
+    const allowed = ['points_per_100_taka', 'min_order_amount', 'point_redemption_value']
     const entries = Object.entries(req.body || {}).filter(([k]) => allowed.includes(k))
     if (!entries.length) throw { code: 'VALIDATION_ERROR', message: 'Nothing to update.' }
     const sets = entries.map(([k], i) => `${k} = $${i + 1}`)

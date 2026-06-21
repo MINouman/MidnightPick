@@ -6,9 +6,9 @@ const { checkAndUpdateTier } = require('./tiers')
 async function getPointsSettings(client) {
   const q = client ? client : { query: (sql, p) => query(sql, p) }
   const { rows } = await q.query(
-    `SELECT points_per_100_taka, min_order_amount FROM points_settings WHERE id = 1`
+    `SELECT points_per_100_taka, min_order_amount, point_redemption_value FROM points_settings WHERE id = 1`
   )
-  return rows[0] || { points_per_100_taka: 10, min_order_amount: 0 }
+  return rows[0] || { points_per_100_taka: 10, min_order_amount: 0, point_redemption_value: 0.5 }
 }
 
 function calculatePointsForOrder(total, pointsPer100 = 10) {

@@ -106,7 +106,7 @@ function Overview({ setSection }) {
     { label: "Total Users",        value: stats?.users?.total ?? '…',           icon: "fa-users" },
     { label: "Crew Members",       value: stats?.users?.crew ?? '…',            icon: "fa-fire" },
     { label: "Influencers",        value: stats?.users?.influencer ?? '…',      icon: "fa-bolt" },
-    { label: "Revenue Delivered",  value: `৳${Number(stats?.revenue?.total_delivered || 0).toLocaleString()}`, icon: "fa-chart-line" },
+    { label: "Revenue Delivered",  value: `৳${Number(stats?.revenue?.total_delivered || 0).toLocaleString()}`, help: "Delivered orders only; excludes pending, processing and in-transit orders.", icon: "fa-chart-line" },
   ];
 
   return (
@@ -121,13 +121,14 @@ function Overview({ setSection }) {
           <div key={i} className="stat-card">
             <div className="stat-label">{s.label}</div>
             <div className="stat-value">{s.value}</div>
+            {s.help && <div className="text-xs text-muted mt4">{s.help}</div>}
           </div>
         ))}
       </div>
 
       <SectionCard>
         <div className="eyebrow mb12">Revenue — Last 30 Days</div>
-        <RevenueChart />
+        <RevenueChart days={stats?.revenue?.last_30_days || []} />
         <div className="row mt12" style={{ gap: 16 }}>
           <div className="row" style={{ gap: 6 }}><div style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(44,24,16,.14)" }} /><span className="text-xs text-muted">Total revenue</span></div>
           <div className="row" style={{ gap: 6 }}><div style={{ width: 10, height: 10, borderRadius: 2, background: "var(--orange)", opacity: .85 }} /><span className="text-xs text-muted">Subscription revenue</span></div>
@@ -1890,7 +1891,7 @@ function CrewManagement() {
               <tbody>{commissions.length === 0 ? (
                 <tr><td colSpan={8} style={{ textAlign: "center", padding: 28, color: "var(--text-65)" }}>No crew commissions yet.</td></tr>
               ) : commissions.map(c => (
-                <tr key={c.id}><td>{fmtDate(c.created_at)}</td><td>{c.crew_member}</td><td>{c.order_ref}</td><td>{c.coupon_code}</td><td>৳{Number(c.commission_base_amount || 0).toLocaleString()}</td><td style={{ fontWeight: 700, color: "var(--orange)" }}>৳{Number(c.commission_amount || 0).toLocaleString()}</td><td><StatusBadge status={c.status} /></td><td>{(c.status === "pending" || c.status === "approved") && <button className="btn btn-sm btn-ghost" onClick={() => markPaid(c)}>Mark Paid</button>}</td></tr>
+                <tr key={c.id}><td>{fmtDate(c.created_at)}</td><td>{c.crew_member}</td><td>{c.order_ref}</td><td>{c.coupon_code}</td><td>৳{Number(c.commission_base_amount || 0).toLocaleString()}</td><td style={{ fontWeight: 700, color: "var(--orange)" }}>৳{Number(c.commission_amount || 0).toLocaleString()}</td><td><StatusBadge status={c.status} />{c.status === "paid" && c.paid_at && <div className="text-xs text-muted mt4">Paid by {c.paid_by_admin_name || c.paid_by_admin_email || c.paid_by_admin_id || "admin"} on {fmtDate(c.paid_at)}</div>}</td><td>{(c.status === "pending" || c.status === "approved") && <button className="btn btn-sm btn-ghost" onClick={() => markPaid(c)}>Mark Paid</button>}</td></tr>
               ))}</tbody>
             </table>
           </div>
@@ -2271,7 +2272,11 @@ function PointsSettingsTab() {
     setBusy(true);
     const res = await window.mpApi.fetch('/admin/points-settings', {
       method: 'PATCH',
-      body: JSON.stringify({ points_per_100_taka: Number(settings.points_per_100_taka), min_order_amount: Number(settings.min_order_amount) }),
+      body: JSON.stringify({
+        points_per_100_taka: Number(settings.points_per_100_taka),
+        min_order_amount: Number(settings.min_order_amount),
+        point_redemption_value: Number(settings.point_redemption_value),
+      }),
     }).catch(() => null);
     setBusy(false);
     if (res?.ok) Swal.fire({ title: "Saved", icon: "success", timer: 1200, showConfirmButton: false, background: "#fff" });
@@ -2291,6 +2296,10 @@ function PointsSettingsTab() {
         <div className="input-group">
           <label className="input-label">Minimum order amount to earn points (৳)</label>
           <input className="input" type="number" min="0" value={settings.min_order_amount} onChange={e => setSettings(s => ({ ...s, min_order_amount: e.target.value }))} />
+        </div>
+        <div className="input-group">
+          <label className="input-label">Redemption value per point (৳)</label>
+          <input className="input" type="number" min="0" step="0.01" value={settings.point_redemption_value ?? 0.5} onChange={e => setSettings(s => ({ ...s, point_redemption_value: e.target.value }))} />
         </div>
       </div>
       <div className="text-sm text-muted mb16" style={{ marginTop: -8 }}>
@@ -2651,6 +2660,36 @@ function Financials() {
     return `${year}-${String(MONTH_NAMES.indexOf(name) + 1).padStart(2, '0')}`;
   };
 
+  const csvEscape = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+  const exportCsv = () => {
+    if (!fin) return;
+    const monthKey = toYYYYMM(month);
+    const rows = [
+      ['Month', month],
+      ['Metric', 'Value'],
+      ['Revenue (All Non-Cancelled Orders)', Number(fin.revenue || 0)],
+      ['Revenue (Delivered Only)', Number(fin.revenue_delivered || 0)],
+      ['Total Discounts', Number(fin.discounts || 0)],
+      ['Influencer Commission', Number(fin.commission || 0)],
+      ['Crew Commission', Number(fin.crew_commission || 0)],
+      ['Points Redeemed (Taka Equivalent)', Number(fin.points_redeemed_taka || 0)],
+      ['Total Outstanding Liability (Current)', Number(fin.outstanding_liability?.total || 0)],
+      ['Unpaid Influencer Commission (Current)', Number(fin.outstanding_liability?.influencer_unpaid || 0)],
+      ['Unpaid Crew Commission (Current)', Number(fin.outstanding_liability?.crew_unpaid || 0)],
+      ['Pending Point Redemptions (Current Taka Equivalent)', Number(fin.outstanding_liability?.pending_redemptions_taka || 0)],
+    ];
+    const csv = rows.map(row => row.map(csvEscape).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `midnight-pick-financials-${monthKey}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
   useEffect(() => {
     setLoading(true);
     window.mpApi.fetch(`/admin/financials?month=${toYYYYMM(month)}`)
@@ -2669,14 +2708,20 @@ function Financials() {
           <select className="select" style={{ width: 140 }} value={month} onChange={e => setMonth(e.target.value)}>
             {months.map(m => <option key={m}>{m}</option>)}
           </select>
-          <button className="btn btn-ghost btn-sm"><i className="fa fa-download" style={{ fontSize: 12 }} /> Export CSV</button>
+          <button className="btn btn-ghost btn-sm" disabled={!fin || loading} onClick={exportCsv}><i className="fa fa-download" style={{ fontSize: 12 }} /> Export CSV</button>
         </div>
       </div>
 
       <div className="stat-row" style={{ marginBottom: 16 }}>
         <div className="stat-card" style={{ borderColor: "rgba(255,145,0,.35)", background: "var(--orange-faint)" }}>
-          <div className="stat-label">Revenue (All Orders)</div>
+          <div className="stat-label">Revenue (All Non-Cancelled Orders)</div>
           <div className="stat-value">{fmt(fin?.revenue)}</div>
+          <div className="text-xs text-muted mt4">Created this month; includes pending and in-transit orders that may not be paid yet.</div>
+        </div>
+        <div className="stat-card" style={{ borderColor: "rgba(46,168,107,.3)" }}>
+          <div className="stat-label">Revenue (Delivered Only)</div>
+          <div className="stat-value">{fmt(fin?.revenue_delivered)}</div>
+          <div className="text-xs text-muted mt4">Delivered this month by delivery date; comparable with commission figures.</div>
         </div>
         <div className="stat-card">
           <div className="stat-label">Total Discounts</div>
@@ -2687,10 +2732,38 @@ function Financials() {
           <div className="stat-value">{fmt(fin?.commission)}</div>
         </div>
         <div className="stat-card">
+          <div className="stat-label">Crew Commission</div>
+          <div className="stat-value">{fmt(fin?.crew_commission)}</div>
+        </div>
+        <div className="stat-card">
           <div className="stat-label">Points Redeemed (৳ eq.)</div>
           <div className="stat-value">{fmt(fin?.points_redeemed_taka)}</div>
+          <div className="text-xs text-muted mt4">Uses ৳{Number(fin?.point_redemption_value ?? 0).toLocaleString()} per point.</div>
         </div>
       </div>
+
+      <SectionCard>
+        <div className="eyebrow mb12">Current Outstanding Liability</div>
+        <div className="stat-row">
+          <div className="stat-card" style={{ borderColor: "rgba(217,64,64,.25)" }}>
+            <div className="stat-label">Total Outstanding Liability</div>
+            <div className="stat-value">{fmt(fin?.outstanding_liability?.total)}</div>
+            <div className="text-xs text-muted mt4">Current running total as of today, not limited to {month}.</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-label">Influencer Unpaid</div>
+            <div className="stat-value">{fmt(fin?.outstanding_liability?.influencer_unpaid)}</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-label">Crew Unpaid</div>
+            <div className="stat-value">{fmt(fin?.outstanding_liability?.crew_unpaid)}</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-label">Pending Point Redemptions</div>
+            <div className="stat-value">{fmt(fin?.outstanding_liability?.pending_redemptions_taka)}</div>
+          </div>
+        </div>
+      </SectionCard>
     </div>
   );
 }
@@ -4157,7 +4230,7 @@ function AdminDashboard() {
 
 // ── Influencers (defined after AdminDashboard to avoid forward-ref issues in Babel) ──
 function InfluencersSection() {
-  const { adminInfluencers: influencers, setAdminInfluencers: setInfluencers } = useContext(DashCtx);
+  const { user, adminInfluencers: influencers, setAdminInfluencers: setInfluencers } = useContext(DashCtx);
 
   useEffect(() => {
     if (influencers.length > 0) return;
@@ -4199,8 +4272,15 @@ function InfluencersSection() {
 
   async function markPaid(id) {
     try {
-      await window.mpApi.fetch(`/admin/influencers/${id}/paid`, { method: 'PATCH' });
-      setInfluencers(prev => prev.map(c => c.id === id ? { ...c, total_owed: 0 } : c));
+      const res = await window.mpApi.fetch(`/admin/influencers/${id}/paid`, { method: 'PATCH' });
+      const paid = res?.data || {};
+      setInfluencers(prev => prev.map(c => c.id === id ? {
+        ...c,
+        ...paid,
+        paid_by_admin_name: user?.name || paid.paid_by_admin_name,
+        paid_by_admin_email: user?.email || paid.paid_by_admin_email,
+        total_owed: 0,
+      } : c));
     } catch (_) {}
   }
 
@@ -4246,6 +4326,11 @@ function InfluencersSection() {
                   <td style={{ color: "var(--orange)", fontWeight: 600 }}>৳{c.comm_mo || 0}</td>
                   <td style={{ color: (c.total_owed || 0) > 0 ? "var(--orange)" : "var(--green)", fontWeight: 700 }}>
                     {(c.total_owed || 0) > 0 ? `৳${c.total_owed}` : "৳0 — Paid"}
+                    {!(c.total_owed || 0) && c.paid_at && (
+                      <div className="text-xs text-muted mt4">
+                        Paid by {c.paid_by_admin_name || c.paid_by_admin_email || c.paid_by_admin_id || "admin"} on {fmtDate(c.paid_at)}
+                      </div>
+                    )}
                   </td>
                   <td>
                     <div className="cell-action">
