@@ -102,15 +102,19 @@ module.exports = async function adminRoutes(app) {
         throw { code: 'VALIDATION_ERROR', message: 'Cancelled orders cannot be reopened. Create a new order instead.' }
       }
 
-      const { rows: updated } = await client.query(
-        `UPDATE orders
-         SET status = $1,
-             delivered_at = CASE WHEN $1 = 'delivered' AND delivered_at IS NULL THEN NOW() ELSE delivered_at END,
-             updated_at = NOW()
-         WHERE id = $2
-         RETURNING id, order_ref, status`,
-        [newStatus, orderId]
-      )
+      const statusUpdateSql = newStatus === 'delivered'
+        ? `UPDATE orders
+           SET status = $1,
+               delivered_at = COALESCE(delivered_at, NOW()),
+               updated_at = NOW()
+           WHERE id = $2
+           RETURNING id, order_ref, status`
+        : `UPDATE orders
+           SET status = $1,
+               updated_at = NOW()
+           WHERE id = $2
+           RETURNING id, order_ref, status`
+      const { rows: updated } = await client.query(statusUpdateSql, [newStatus, orderId])
 
       if (newStatus === 'delivered' && order.status !== 'delivered') {
         const pointsResult = await awardPointsForDeliveredOrder(client, order.id)
