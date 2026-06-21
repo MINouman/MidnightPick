@@ -5,8 +5,7 @@ const { redis } = require('../config/redis')
 const { query, withTransaction } = require('../config/db')
 const { sendOrderConfirmation, sendOrderShipped }  = require('../services/sms')
 const { getRateLimitConfig } = require('../config/rate-limits')
-const { getPointsSettings, calculatePointsForOrder, awardPoints, reversePoints } = require('../services/points')
-const { checkAndUpdateTier } = require('../services/tiers')
+const { awardPointsForDeliveredOrder, reversePoints, adjustPoints } = require('../services/points')
 const { syncCommissionForDeliveredOrder, reverseCommissionForOrder, validateCoupon, recordCouponUsage, restoreCouponUsageForOrder } = require('../services/crew')
 const { toEndOfDayDhaka } = require('../services/dates')
 const { normalizeBdMobile } = require('../services/phone')
@@ -108,16 +107,9 @@ module.exports = async function adminRoutes(app) {
         [newStatus, orderId]
       )
 
-      // Award points when order first moves to delivered and is linked to a user
-      if (newStatus === 'delivered' && order.status !== 'delivered' && order.user_id && order.total > 0 && order.points_earned === 0) {
-        const ptSettings = await getPointsSettings(client)
-        const pts = calculatePointsForOrder(order.total, ptSettings.points_per_100_taka || 10)
-        if (pts > 0) {
-          await awardPoints(client, order.user_id, pts, `Order #${order.order_ref} delivered`, order.id)
-          await client.query(`UPDATE orders SET points_earned = $2 WHERE id = $1`, [order.id, pts])
-          await checkAndUpdateTier(client, order.user_id)
-          updated[0].points_earned = pts
-        }
+      if (newStatus === 'delivered' && order.status !== 'delivered') {
+        const pointsResult = await awardPointsForDeliveredOrder(client, order.id)
+        if (pointsResult.awarded > 0) updated[0].points_earned = pointsResult.awarded
       }
       if (newStatus === 'delivered') {
         await syncCommissionForDeliveredOrder(client, orderId)
@@ -173,13 +165,9 @@ module.exports = async function adminRoutes(app) {
       if (!order.user_id) throw { code: 'VALIDATION_ERROR', message: 'Order is not linked to a user account.' }
       if (Number(order.points_earned) > 0) throw { code: 'VALIDATION_ERROR', message: `Points already awarded: ${order.points_earned} pts.` }
       if (Number(order.total) <= 0) throw { code: 'VALIDATION_ERROR', message: 'Order total is 0.' }
-      const ptSettings = await getPointsSettings(client)
-      const pts = calculatePointsForOrder(Number(order.total), ptSettings.points_per_100_taka || 10)
-      if (pts <= 0) throw { code: 'VALIDATION_ERROR', message: 'Calculated 0 points. Check the points rate in Settings → Points.' }
-      await awardPoints(client, order.user_id, pts, `Order #${order.order_ref} delivered`, order.id)
-      await client.query(`UPDATE orders SET points_earned = $2 WHERE id = $1`, [order.id, pts])
-      await checkAndUpdateTier(client, order.user_id)
-      return { ok: true, data: { pts_awarded: pts, order_ref: order.order_ref } }
+      const result = await awardPointsForDeliveredOrder(client, order.id)
+      if (result.awarded <= 0) throw { code: 'VALIDATION_ERROR', message: 'Calculated 0 points. Check the points rate and minimum order amount in Settings → Points.' }
+      return { ok: true, data: { pts_awarded: result.awarded, order_ref: order.order_ref } }
     })
   })
 
@@ -1968,7 +1956,7 @@ module.exports = async function adminRoutes(app) {
 
     const dataParams = [...params, limit, offset]
     const { rows } = await query(
-      `SELECT id, email, phone, name, role, is_active, points_balance, created_at, updated_at
+      `SELECT id, email, phone, name, role, is_active, points_balance, points_lifetime, created_at, updated_at
        FROM users
        ${where}
        ORDER BY created_at DESC
@@ -1986,12 +1974,34 @@ module.exports = async function adminRoutes(app) {
     },
   }, async (req) => {
     const { rows } = await query(
-      `SELECT id, email, phone, name, role, is_active, points_balance, created_at, updated_at
+      `SELECT id, email, phone, name, role, is_active, points_balance, points_lifetime, created_at, updated_at
        FROM users WHERE id = $1`,
       [req.params.userId]
     )
     if (!rows.length) throw { code: 'NOT_FOUND', message: 'User not found.' }
     return { ok: true, data: { user: rows[0] } }
+  })
+
+  // POST /admin/users/:userId/points/adjust — manual customer-service adjustment
+  app.post('/users/:userId/points/adjust', {
+    schema: {
+      params: { type: 'object', properties: { userId: { type: 'string', format: 'uuid' } }, required: ['userId'] },
+      body: {
+        type: 'object',
+        required: ['amount', 'reason'],
+        properties: {
+          amount: { type: 'integer' },
+          reason: { type: 'string', minLength: 3, maxLength: 255 },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req) => {
+    const result = await withTransaction(async (client) => {
+      return adjustPoints(client, req.params.userId, req.body.amount, req.body.reason.trim(), req.user?.sub || req.user?.id || null)
+    })
+
+    return { ok: true, data: result }
   })
 
   // PATCH /admin/users/:userId/activate — Activate a user account

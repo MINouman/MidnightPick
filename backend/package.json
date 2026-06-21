@@ -10,7 +10,8 @@
     "steadfast:verify": "node scripts/steadfast-verify.js",
     "steadfast:migrate": "node scripts/steadfast-migrate.js",
     "steadfast:test-webhook": "node scripts/steadfast-test-webhook.js",
-    "steadfast:monitor": "node scripts/steadfast-monitor.js"
+    "steadfast:monitor": "node scripts/steadfast-monitor.js",
+    "test": "node --test"
   },
   "dependencies": {
     "@fastify/cookie": "^9.3.1",

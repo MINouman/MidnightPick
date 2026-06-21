@@ -355,7 +355,7 @@ module.exports = async function adminRewardsRoutes(app) {
     return withTransaction(async (client) => {
       // Get redemption
       const { rows } = await client.query(
-        `SELECT id, user_id, status, pts_cost FROM point_redemptions WHERE id = $1`,
+        `SELECT id, user_id, status, pts_cost FROM point_redemptions WHERE id = $1 FOR UPDATE`,
         [id]
       )
 
@@ -374,22 +374,22 @@ module.exports = async function adminRewardsRoutes(app) {
       }
 
       if (status === 'cancelled') {
-        // Refund points if cancelled
         const { refundPoints } = require('../services/points')
-        const { awardPoints } = require('../services/points')
-
-        await awardPoints(client, redemption.user_id, redemption.pts_cost,
-          `Refund: Redemption ${id} cancelled`, id)
+        await refundPoints(client, redemption.user_id, redemption.id, redemption.pts_cost)
       }
 
-      // Update redemption
-      const { rows: updated } = await client.query(
-        `UPDATE point_redemptions
-         SET status = $1, updated_at = NOW()
-         WHERE id = $2
-         RETURNING id, status, updated_at`,
-        [status, id]
-      )
+      const { rows: updated } = status === 'cancelled'
+        ? await client.query(
+          `SELECT id, status, updated_at FROM point_redemptions WHERE id = $1`,
+          [id]
+        )
+        : await client.query(
+          `UPDATE point_redemptions
+           SET status = $1, updated_at = NOW()
+           WHERE id = $2
+           RETURNING id, status, updated_at`,
+          [status, id]
+        )
 
       return {
         ok: true,

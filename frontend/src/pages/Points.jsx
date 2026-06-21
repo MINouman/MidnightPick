@@ -7,6 +7,7 @@ export default function Points() {
   const [rewards, setRewards] = useState([])
   const [redemptions, setRedemptions] = useState([])
   const [transactions, setTransactions] = useState([])
+  const [pointsSettings, setPointsSettings] = useState({ points_per_100_taka: 10, min_order_amount: 0 })
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('rewards')
   const [page, setPage] = useState(1)
@@ -23,7 +24,8 @@ export default function Points() {
         credentials: 'include',
       })
       const { data: balanceData } = await balanceRes.json()
-      setPointsBalance(balanceData.points_balance)
+      setPointsBalance(balanceData.points_balance ?? balanceData.balance ?? 0)
+      if (balanceData.settings) setPointsSettings(balanceData.settings)
 
       // Load based on active tab
       if (activeTab === 'rewards') {
@@ -134,7 +136,7 @@ export default function Points() {
       <div className="points-info">
         <h3>How Points Work</h3>
         <ul>
-          <li><strong>Earn:</strong> Get 1 point for every ৳2 you spend</li>
+          <li><strong>Earn:</strong> Get {pointsSettings.points_per_100_taka} points for every ৳100 you spend{Number(pointsSettings.min_order_amount) > 0 ? ` on orders of ৳${pointsSettings.min_order_amount} or more` : ''}</li>
           <li><strong>Redeem:</strong> Use your points to claim rewards</li>
           <li><strong>Track:</strong> View all your points activity in history</li>
         </ul>

@@ -50,6 +50,14 @@ const API_BASE = getMidnightApiBase();
 const THUMB_LABELS = ["Front", "Back"];
 const BD_MOBILE_PATTERN = /^01[3-9]\d{8}$/;
 
+function checkoutApiErrorMessage(error, fallback) {
+  if (error?.retry_after_seconds) {
+    const minutes = Math.max(1, Math.ceil(error.retry_after_seconds / 60));
+    return `Too many attempts. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.`;
+  }
+  return error?.message || fallback;
+}
+
 function normalizeBdMobile(raw) {
   const digits = String(raw || "").replace(/\D/g, "");
   if (/^008801[3-9]\d{8}$/.test(digits)) return digits.slice(4);
@@ -211,9 +219,14 @@ function ShopToastStack({ toasts }) {
 
 // ── Order Modal ───────────────────────────────────────────────────────────────
 function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser, onCreateAccount }) {
-  const [step, setStep]           = useState("form"); // form | otp | loading | success | error
+  const [step, setStep]           = useState("form"); // form | otp | details | loading | success | error
   const [name, setName]           = useState("");
   const [phone, setPhone]         = useState("");
+  const [checkoutUser, setCheckoutUser] = useState(null);
+  const [trustedDeviceCheckout, setTrustedDeviceCheckout] = useState(false);
+  const [checkoutVerificationTicket, setCheckoutVerificationTicket] = useState("");
+  const [phoneStatus, setPhoneStatus] = useState(null);
+  const [phoneChecking, setPhoneChecking] = useState(false);
   const [city, setCity]           = useState("");
   const [area, setArea]           = useState("");
   const [street, setStreet]       = useState("");
@@ -221,6 +234,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
   const [orderRef, setOrderRef]   = useState("");
   const [isBusy, setIsBusy]       = useState(false);
   const [otpDigits, setOtpDigits] = useState(["","","","","",""]);
+  const [otpPurpose, setOtpPurpose] = useState("phone"); // phone | address
   const [otpError, setOtpError]   = useState("");
   const [timeLeft, setTimeLeft]   = useState(120);
   const [timerKey, setTimerKey]   = useState(0);
@@ -237,26 +251,42 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
 
   const finalPrice = product.price - discount;
   const totalPrice = finalPrice * qty;
+  const activeUser = checkoutUser;
 
   useEffect(() => {
     document.body.style.overflow = open ? "hidden" : "";
     return () => { document.body.style.overflow = ""; };
   }, [open]);
 
-  // Fetch saved addresses when modal opens and user is logged in
+  // Fetch saved addresses when modal opens and user is already logged in.
+  // Trusted-device checkout gets addresses from /orders/device-status instead.
   useEffect(() => {
     if (open && loggedUser?.id) {
-      setLoadingAddresses(true);
-      fetch(`${API_BASE}/me/addresses`, {
+      fetch(`${API_BASE}/me`, {
         credentials: "include",
-        headers: { "Content-Type": "application/json" },
       })
         .then(r => r.json())
         .then(json => {
-          if (json?.ok && Array.isArray(json.data)) {
-            setSavedAddresses(json.data);
-            const defaultAddr = json.data.find(a => a.is_default);
-            if (defaultAddr) setSelectedAddressId(defaultAddr.id);
+          if (json?.ok && json.data?.phone) {
+            setCheckoutUser(json.data);
+            setName(json.data.name || "");
+            setPhone(json.data.phone || "");
+            setStep("details");
+            setLoadingAddresses(true);
+            return fetch(`${API_BASE}/me/addresses`, { credentials: "include" })
+              .then(r => r.json())
+              .then(addrJson => {
+                if (addrJson?.ok && Array.isArray(addrJson.data)) {
+                  setSavedAddresses(addrJson.data);
+                  const defaultAddr = addrJson.data.find(a => a.is_default) || addrJson.data[0];
+                  if (defaultAddr) {
+                    setSelectedAddressId(defaultAddr.id);
+                    setStreet(defaultAddr.line1 || "");
+                    setCity(defaultAddr.city || "");
+                    setArea(defaultAddr.district || "");
+                  }
+                }
+              })
           }
         })
         .catch(() => {})
@@ -269,14 +299,103 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
     if (open) {
       setStep("form"); setErrorMsg(""); setOrderRef("");
       setOtpDigits(["","","","","",""]); setOtpError("");
+      setOtpPurpose("phone");
       setIsBusy(false); setTimerKey(0);
+      setCheckoutUser(null); setTrustedDeviceCheckout(false); setCheckoutVerificationTicket("");
+      setPhoneStatus(null); setPhoneChecking(false);
       setCity(""); setArea(""); setStreet("");
       setShowAddAddressForm(false);
       setNewAddressLabel(""); setNewAddressLine1(""); setNewAddressCity(""); setNewAddressDistrict("");
-      setName(loggedUser?.name || "");
-      setPhone(loggedUser?.phone || "");
+      setName("");
+      setPhone("");
     }
-  }, [open]);
+  }, [open, loggedUser?.phone]);
+
+  const fetchDeviceStatus = async (p, signal) => {
+    const res = await fetch(`${API_BASE}/orders/device-status`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phone: p }),
+      credentials: "include",
+      signal,
+    });
+    const json = await res.json();
+    if (!res.ok || !json.ok) throw new Error(json?.error?.message || "Couldn't check this device.");
+    return { ...json.data, phone: p };
+  };
+
+  const applyTrustedCheckout = (status) => {
+    const user = status?.user;
+    if (!user) return;
+    localStorage.setItem("mp_user", JSON.stringify(user));
+    setCheckoutUser(user);
+    setTrustedDeviceCheckout(true);
+    setName(user?.name || "");
+
+    const addresses = Array.isArray(status.addresses) ? status.addresses : [];
+    setSavedAddresses(addresses);
+    const defaultAddr = addresses.find(a => a.is_default) || addresses[0];
+    if (defaultAddr) {
+      setSelectedAddressId(defaultAddr.id);
+      setStreet(defaultAddr.line1 || "");
+      setCity(defaultAddr.city || "");
+      setArea(defaultAddr.district || "");
+      setShowAddAddressForm(false);
+    } else {
+      setSelectedAddressId("");
+    }
+  };
+
+  const resetTrustedCheckout = () => {
+    setStep("form");
+    setCheckoutUser(null);
+    setTrustedDeviceCheckout(false);
+    setCheckoutVerificationTicket("");
+    setPhoneStatus(null);
+    setSavedAddresses([]);
+    setSelectedAddressId("");
+    setCity(""); setArea(""); setStreet("");
+    setShowAddAddressForm(false);
+    setName("");
+    setPhone("");
+    setErrorMsg("");
+    setOtpDigits(["","","","","",""]); setOtpError("");
+    setOtpPurpose("phone");
+    setTimeout(() => document.querySelector('input[type="tel"]')?.focus(), 50);
+  };
+
+  useEffect(() => {
+    if (!open || loggedUser?.phone || step !== "form") return;
+    const p = normalizeBdMobile(phone);
+    if (!isValidBdMobile(p)) {
+      setPhoneStatus(null);
+      setPhoneChecking(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      setPhoneChecking(true);
+      try {
+        const status = await fetchDeviceStatus(p, controller.signal);
+        setPhoneStatus(status);
+        if (status.trusted) {
+          setPhone(p);
+          applyTrustedCheckout(status);
+          setStep("details");
+        }
+      } catch (err) {
+        if (err.name !== "AbortError") setPhoneStatus(null);
+      } finally {
+        if (!controller.signal.aborted) setPhoneChecking(false);
+      }
+    }, 350);
+
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [open, loggedUser?.phone, step, phone]);
 
   // 2-minute countdown -  starts/resets whenever we enter the OTP step
   useEffect(() => {
@@ -301,6 +420,16 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
     ? savedAddresses.find(a => a.id === selectedAddressId)?.line1 || [street.trim(), area, city].filter(Boolean).join(", ")
     : [street.trim(), area, city].filter(Boolean).join(", ");
   const normalizedPhone = normalizeBdMobile(phone);
+  const phoneStatusReady = phoneStatus?.phone === normalizedPhone;
+  const guestTrustedDevice = !loggedUser?.phone && phoneStatusReady && phoneStatus.trusted;
+  const guestNeedsOtp = !loggedUser?.phone && phoneStatusReady && !phoneStatus.trusted;
+  const phoneStatusHint = phoneChecking
+    ? "Checking this number..."
+    : guestTrustedDevice
+      ? "This device is verified for faster checkout."
+      : guestNeedsOtp
+        ? "We'll send a verification code for this phone."
+        : "Cash on delivery";
 
   // ── Shared styles ──────────────────────────────────────────────────────────
   const overlay = { position: "fixed", inset: 0, background: "rgba(0,0,0,.52)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" };
@@ -340,7 +469,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
             A confirmation SMS has been sent to <strong>{phone}</strong>.
           </p>
           {typeof MPFeedbackCard === "function" && <MPFeedbackCard orderRef={orderRef} />}
-          {!loggedUser && (
+          {!activeUser && (
             <div className="shop-post-order-member">
               <div className="shop-post-order-badge">MIDNIGHT CIRCLE</div>
               <strong>Save this order and collect points.</strong>
@@ -405,10 +534,39 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
       if (!otpComplete || isBusy) return;
       setIsBusy(true); setOtpError("");
       try {
-        const res  = await fetch(`${API_BASE}/orders/guest`, {
+        if (otpPurpose === "address") {
+          let order;
+          try {
+            const verifyRes = await fetch(`${API_BASE}/auth/otp/verify`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ phone: normalizedPhone, otp: otpDigits.join(""), purpose: "change_address" }),
+              credentials: "include",
+            });
+            const verifyJson = await verifyRes.json();
+            if (!verifyRes.ok || !verifyJson.ok) {
+              const err = new Error(verifyJson?.error?.message || "Invalid OTP.");
+              err.code = verifyJson?.error?.code;
+              throw err;
+            }
+            order = await placeQuickOrder(verifyJson.data.verification_ticket);
+          } catch (err) {
+            if (err.code === "INVALID_OTP" || err.code === "OTP_MAX_ATTEMPTS") {
+              setOtpError(err.message);
+              return;
+            }
+            throw err;
+          }
+          setOrderRef(order.order_ref);
+          setStep("success");
+          return;
+        }
+
+        const res  = await fetch(`${API_BASE}/auth/otp/verify`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: name.trim(), phone: normalizedPhone, address: composedAddress, qty, otp: otpDigits.join(""), ...(coupon ? { coupon_code: coupon } : {}), ...(product?.id ? { product_id: product.id } : {}) }),
+          body: JSON.stringify({ phone: normalizedPhone, otp: otpDigits.join(""), purpose: "checkout" }),
+          credentials: "include",
         });
         const json = await res.json();
         if (!res.ok) {
@@ -421,8 +579,13 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
           }
           return;
         }
-        setOrderRef(json.data.order_ref);
-        setStep("success");
+        const user = json.data.user;
+        localStorage.setItem("mp_user", JSON.stringify(user));
+        setCheckoutUser(user);
+        setTrustedDeviceCheckout(false);
+        setCheckoutVerificationTicket(json.data.verification_ticket || "");
+        if (user?.name) setName(user.name);
+        setStep("details");
       } catch (err) {
         setErrorMsg(err.message);
         setStep("error");
@@ -435,7 +598,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
       try {
         await fetch(`${API_BASE}/orders/request-otp`, {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ phone: normalizedPhone }),
+          body: JSON.stringify({ phone: normalizedPhone, purpose: otpPurpose === "address" ? "change_address" : "checkout" }),
         });
         setOtpDigits(["","","","","",""]); setOtpError("");
         setTimerKey(k => k + 1);
@@ -447,7 +610,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
         <div style={panel}>
           {/* Header */}
           <div style={hdr}>
-            <button onClick={() => setStep("form")} aria-label="Back" style={{ background: "none", border: "none", cursor: "pointer", color: "#571F29", fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", gap: 5 }}>
+            <button onClick={() => setStep(otpPurpose === "address" ? "details" : "form")} aria-label="Back" style={{ background: "none", border: "none", cursor: "pointer", color: "#571F29", fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", gap: 5 }}>
               <i className="fa-solid fa-arrow-left" aria-hidden="true" /> Back
             </button>
             <span style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 15, color: "#571F29" }}>Verify Phone</span>
@@ -459,7 +622,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
           <div style={{ padding: "26px 22px 24px" }}>
             {/* Instruction */}
             <p style={{ fontFamily: "var(--font-body)", fontSize: 14, color: "rgba(87,31,41,.75)", margin: "0 0 22px", textAlign: "center", lineHeight: 1.5 }}>
-              Enter the 6-digit code sent to<br />
+              {otpPurpose === "address" ? "Confirm this new delivery address with the 6-digit code sent to" : "Enter the 6-digit code sent to"}<br />
               <strong style={{ color: "#571F29" }}>{phone}</strong>
             </p>
 
@@ -504,8 +667,8 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
             {/* Confirm button */}
             <button onClick={handleVerify} disabled={!otpComplete || isBusy} style={primBtn(!otpComplete || isBusy)}>
               {isBusy
-                ? <><i className="fa-solid fa-spinner fa-spin" aria-hidden="true" /> Placing Order…</>
-                : <><i className="fa-solid fa-check" aria-hidden="true" /> Confirm Order -  ৳{totalPrice.toLocaleString()}</>
+                ? <><i className="fa-solid fa-spinner fa-spin" aria-hidden="true" /> Verifying…</>
+                : <><i className="fa-solid fa-check" aria-hidden="true" /> Verify & Continue</>
               }
             </button>
           </div>
@@ -514,11 +677,10 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
     );
   }
 
-  // ── Form Step ──────────────────────────────────────────────────────────────
-  const handleFormSubmit = async (e) => {
+  // ── Phone Step ─────────────────────────────────────────────────────────────
+  const handlePhoneSubmit = async (e) => {
     e.preventDefault();
-    const hasAddress = selectedAddressId ? true : (city && street.trim());
-    if (!name.trim() || !phone.trim() || !hasAddress || isBusy) return;
+    if (!phone.trim() || isBusy) return;
     if (!isValidBdMobile(phone)) {
       setErrorMsg("Enter a valid Bangladesh mobile number, e.g. 017XXXXXXXX or +88017XXXXXXXX.");
       return;
@@ -526,41 +688,21 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
     setPhone(normalizedPhone);
     setIsBusy(true);
 
-    if (loggedUser?.phone) {
-      // Authenticated — skip OTP, place order directly
-      try {
-        const res = await fetch(`${API_BASE}/orders/quick`, {
-          method: "POST",
-          credentials: "include",  // Send httpOnly cookie automatically
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            qty,
-            address: composedAddress,
-            ...(coupon ? { coupon_code: coupon } : {}),
-            ...(product?.id ? { product_id: product.id } : {}),
-          }),
-        });
-        const json = await res.json();
-        if (!res.ok) {
-          setErrorMsg(json?.error?.message || "Order failed. Please try again.");
-          setStep("error");
-          return;
-        }
-        setOrderRef(json.data.order_ref);
-        setStep("success");
-      } catch (err) {
-        setErrorMsg(err.message);
-        setStep("error");
-      } finally {
-        setIsBusy(false);
-      }
-      return;
-    }
-
-    // Guest — send OTP first
     try {
-      // Re-check the coupon for this phone before consuming an OTP: per-phone
-      // caps can't be known at the earlier verify step, which has no phone yet.
+      let status = phoneStatus?.phone === normalizedPhone ? phoneStatus : null;
+      if (!status) {
+        setPhoneChecking(true);
+        status = await fetchDeviceStatus(normalizedPhone);
+        setPhoneStatus(status);
+        setPhoneChecking(false);
+      }
+
+      if (status.trusted) {
+        applyTrustedCheckout(status);
+        setStep("details");
+        return;
+      }
+
       if (coupon) {
         const vres = await fetch(`${API_BASE}/coupons/validate`, {
           method: "POST",
@@ -574,15 +716,106 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
           return;
         }
       }
+
       const res = await fetch(`${API_BASE}/orders/request-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: normalizedPhone }),
+        body: JSON.stringify({ phone: normalizedPhone, purpose: "checkout" }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json?.error?.message || "Failed to send OTP.");
+      if (!res.ok) throw new Error(checkoutApiErrorMessage(json?.error, "Failed to send OTP."));
       setOtpDigits(["","","","","",""]); setOtpError("");
+      setOtpPurpose("phone");
       setStep("otp");
+    } catch (err) {
+      setErrorMsg(err.message);
+      setStep("error");
+    } finally {
+      setPhoneChecking(false);
+      setIsBusy(false);
+    }
+  };
+
+  const placeQuickOrder = async (verificationTicket = null) => {
+    const trustedCheckout = trustedDeviceCheckout && !!checkoutUser?.phone && !loggedUser?.phone;
+    const ticketCheckout = !!checkoutVerificationTicket && !trustedCheckout && !loggedUser?.phone;
+    const res = await fetch(ticketCheckout ? `${API_BASE}/orders/guest` : `${API_BASE}/orders/${trustedCheckout ? "trusted" : "quick"}`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...(trustedCheckout ? { phone: normalizedPhone } : {}),
+        ...(ticketCheckout ? { phone: normalizedPhone, name: name.trim(), verification_ticket: checkoutVerificationTicket } : {}),
+        ...(verificationTicket ? { verification_ticket: verificationTicket } : {}),
+        qty,
+        address: composedAddress,
+        ...(coupon ? { coupon_code: coupon } : {}),
+        ...(product?.id ? { product_id: product.id } : {}),
+      }),
+    });
+    const json = await res.json();
+    if (!res.ok) {
+      const err = new Error(json?.error?.message || "Order failed. Please try again.");
+      err.code = json?.error?.code;
+      throw err;
+    }
+    return json.data;
+  };
+
+  const handleDetailsSubmit = async (e) => {
+    e.preventDefault();
+    const hasAddress = selectedAddressId ? true : (city && street.trim());
+    if (!name.trim() || !hasAddress || isBusy) return;
+
+    setIsBusy(true); setErrorMsg("");
+    try {
+      if (trustedDeviceCheckout && !selectedAddressId) {
+        const res = await fetch(`${API_BASE}/orders/request-otp`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phone: normalizedPhone, purpose: "change_address" }),
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(checkoutApiErrorMessage(json?.error, "Failed to send OTP."));
+        setOtpDigits(["","","","","",""]); setOtpError("");
+        setOtpPurpose("address");
+        setTimerKey(k => k + 1);
+        setStep("otp");
+        return;
+      }
+
+      if (!checkoutVerificationTicket && (!activeUser?.name || activeUser.name !== name.trim())) {
+        const profileRes = await fetch(`${API_BASE}/me`, {
+          method: "PATCH",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: name.trim() }),
+        });
+        const profileJson = await profileRes.json();
+        if (!profileRes.ok || !profileJson.ok) throw new Error(profileJson?.error?.message || "Couldn't save your name.");
+        const updatedUser = { ...checkoutUser, ...profileJson.data };
+        localStorage.setItem("mp_user", JSON.stringify(updatedUser));
+        setCheckoutUser(updatedUser);
+      }
+
+      if (!checkoutVerificationTicket && !selectedAddressId) {
+        await fetch(`${API_BASE}/me/addresses`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            label: "Delivery",
+            line1: composedAddress,
+            city,
+            district: area,
+            is_default: true,
+          }),
+        }).catch(() => null);
+      }
+
+      const order = await placeQuickOrder();
+      setOrderRef(order.order_ref);
+      setStep("success");
     } catch (err) {
       setErrorMsg(err.message);
       setStep("error");
@@ -592,7 +825,9 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
   };
 
   const hasAddress = selectedAddressId ? true : (city && street.trim());
-  const canSubmit = name.trim() && isValidBdMobile(phone) && hasAddress && !isBusy;
+  const needsNameEntry = !activeUser?.name;
+  const canSubmitPhone = isValidBdMobile(phone) && !isBusy && !phoneChecking;
+  const canSubmitDetails = (!needsNameEntry || name.trim()) && hasAddress && !isBusy;
 
   return (
     <div style={overlay} onClick={e => e.target === e.currentTarget && onClose()}>
@@ -604,34 +839,70 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
 
         <SummaryStrip />
 
-        <form onSubmit={handleFormSubmit} style={{ padding: "20px 22px 22px" }}>
-          {loggedUser?.phone && (
+        <form onSubmit={step === "details" ? handleDetailsSubmit : handlePhoneSubmit} style={{ padding: "20px 22px 22px" }}>
+          {activeUser?.phone && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, padding: "8px 12px", background: "rgba(46,168,107,.08)", borderRadius: 8, border: "1px solid rgba(46,168,107,.2)" }}>
               <i className="fa-solid fa-circle-check" style={{ color: "#2ea86b", fontSize: 14 }} aria-hidden="true" />
-              <span style={{ fontFamily: "var(--font-body)", fontSize: 13, color: "#2ea86b", fontWeight: 600 }}>Logged in — no OTP needed</span>
+              <span style={{ fontFamily: "var(--font-body)", fontSize: 13, color: "#2ea86b", fontWeight: 600 }}>Phone confirmed</span>
             </div>
           )}
-          <div style={{ marginBottom: 14 }}>
-            <label style={lbl}>Full Name</label>
-            <input style={{ ...field, ...(loggedUser?.name ? { background: "rgba(87,31,41,.04)", color: "rgba(26,10,13,.6)" } : {}) }} type="text" placeholder="Your full name" value={name}
-              onChange={e => !loggedUser?.name && setName(e.target.value)} required disabled={isBusy || !!(loggedUser?.name)} autoFocus={!loggedUser?.name} />
-          </div>
-          <div style={{ marginBottom: 14 }}>
-            <label style={lbl}>Phone Number</label>
-            <input style={{ ...field, ...(loggedUser?.phone ? { background: "rgba(87,31,41,.04)", color: "rgba(26,10,13,.6)" } : {}) }} type="tel" placeholder="01XXXXXXXXX" value={phone}
-              onChange={e => !loggedUser?.phone && setPhone(e.target.value.replace(/[^\d+\s-]/g, "").slice(0, 20))} required disabled={isBusy || !!(loggedUser?.phone)} autoComplete="tel" />
-            {phone.trim() && !isValidBdMobile(phone) && (
-              <div style={{ fontFamily: "var(--font-body)", fontSize: 12, color: "#C82828", marginTop: 6 }}>
-                Use a Bangladesh mobile number: 013-019, 11 digits locally or +880 format.
+
+          {step === "form" && (
+            <>
+              <div style={{ marginBottom: 14 }}>
+                <label style={lbl}>Phone Number</label>
+                <input style={field} type="tel" placeholder="01XXXXXXXXX" value={phone}
+                  onChange={e => {
+                    setPhone(e.target.value.replace(/[^\d+\s-]/g, "").slice(0, 20));
+                    setErrorMsg("");
+                  }} required disabled={isBusy} autoComplete="tel" autoFocus />
+                {phone.trim() && !isValidBdMobile(phone) && (
+                  <div style={{ fontFamily: "var(--font-body)", fontSize: 12, color: "#C82828", marginTop: 6 }}>
+                    Use a Bangladesh mobile number: 013-019, 11 digits locally or +880 format.
+                  </div>
+                )}
+                {isValidBdMobile(phone) && (
+                  <div style={{ fontFamily: "var(--font-body)", fontSize: 12, color: "rgba(87,31,41,.55)", marginTop: 6 }}>
+                    {phoneStatusHint}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+
+            </>
+          )}
+
+          {step === "details" && (
+            <>
+              {needsNameEntry ? (
+                <div style={{ marginBottom: 14 }}>
+                  <label style={lbl}>Full Name</label>
+                  <input style={field} type="text" placeholder="Your full name" value={name}
+                    onChange={e => setName(e.target.value)} required disabled={isBusy} autoFocus={!name} autoComplete="name" />
+                </div>
+              ) : (
+                <div style={{ marginBottom: 14, padding: "8px 12px", background: "rgba(87,31,41,.04)", borderRadius: 8, border: "1px solid rgba(87,31,41,.08)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <i className="fa-solid fa-user-check" style={{ color: "#571F29", fontSize: 14 }} aria-hidden="true" />
+                    <span style={{ fontFamily: "var(--font-body)", fontSize: 13, color: "rgba(87,31,41,.72)", fontWeight: 600 }}>Ordering as {name}</span>
+                  </div>
+                  {trustedDeviceCheckout && (
+                    <button
+                      type="button"
+                      onClick={resetTrustedCheckout}
+                      style={{ marginTop: 7, background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 12, color: "#FF9100", textDecoration: "underline", textUnderlineOffset: 2 }}
+                    >
+                      Not you? Use a different number
+                    </button>
+                  )}
+                </div>
+              )}
+
           {/* ── Delivery Address ── */}
           <div style={{ marginBottom: 14 }}>
             <label style={lbl}>Delivery Address</label>
 
             {/* Saved addresses section (logged in users) */}
-            {loggedUser?.id && savedAddresses.length > 0 && (
+            {activeUser?.id && savedAddresses.length > 0 && (
               <>
                 <div style={{ marginBottom: 10 }}>
                   <label style={{ ...lbl, fontSize: 11, marginBottom: 6 }}>Select Saved Address</label>
@@ -666,17 +937,20 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
 
                 <button
                   type="button"
-                  onClick={() => { setShowAddAddressForm(!showAddAddressForm); setSelectedAddressId(""); }}
+                  onClick={() => {
+                    setSelectedAddressId("");
+                    if (!trustedDeviceCheckout) setShowAddAddressForm(!showAddAddressForm);
+                  }}
                   style={{ fontSize: 12, color: "#FF9100", background: "none", border: "none", cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 2, fontWeight: 600, marginBottom: 12 }}
                 >
                   <i className="fa-solid fa-plus" aria-hidden="true" style={{ marginRight: 4 }} />
-                  Add New Address
+                  {trustedDeviceCheckout ? "Use Different Address" : "Add New Address"}
                 </button>
               </>
             )}
 
             {/* No addresses prompt (logged in but no saved addresses) */}
-            {loggedUser?.id && savedAddresses.length === 0 && !showAddAddressForm && !loadingAddresses && (
+            {activeUser?.id && !trustedDeviceCheckout && savedAddresses.length === 0 && !showAddAddressForm && !loadingAddresses && (
               <div style={{ padding: "12px 12px", background: "rgba(255,145,0,.08)", borderRadius: 8, border: "1px solid rgba(255,145,0,.2)", marginBottom: 12 }}>
                 <p style={{ margin: "0 0 8px", fontFamily: "var(--font-body)", fontSize: 13, color: "rgba(87,31,41,.75)", fontWeight: 600 }}>
                   <i className="fa-solid fa-location-dot" aria-hidden="true" style={{ marginRight: 6, color: "#FF9100" }} />
@@ -694,7 +968,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
             )}
 
             {/* Add new address form */}
-            {(showAddAddressForm || (loggedUser?.id && savedAddresses.length === 0)) && (
+            {!trustedDeviceCheckout && (showAddAddressForm || (activeUser?.id && savedAddresses.length === 0)) && (
               <div style={{ background: "rgba(87,31,41,.04)", padding: 12, borderRadius: 8, marginBottom: 12 }}>
                 <div style={{ marginBottom: 10 }}>
                   <label style={{ ...lbl, fontSize: 11, marginBottom: 4 }}>Address Label (e.g., Home, Office)</label>
@@ -814,7 +1088,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
             )}
 
             {/* Manual address entry (for guests or if not using saved addresses) */}
-            {(!loggedUser?.id || selectedAddressId === "") && (
+            {(!activeUser?.id || selectedAddressId === "") && (
               <>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
                   <div style={{ position: "relative" }}>
@@ -822,7 +1096,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
                       style={{ ...field, appearance: "none", WebkitAppearance: "none", paddingRight: 30, cursor: "pointer", color: city ? "#1A0A0D" : "rgba(26,10,13,.38)" }}
                       value={city}
                       onChange={e => { setCity(e.target.value); setArea(""); }}
-                      required={!loggedUser?.id || selectedAddressId === ""}
+                      required={!activeUser?.id || selectedAddressId === ""}
                       disabled={isBusy}
                     >
                       <option value="" disabled>City</option>
@@ -855,22 +1129,37 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
                   placeholder="House no., road, block, building…"
                   value={street}
                   onChange={e => setStreet(e.target.value)}
-                  required={!loggedUser?.id || selectedAddressId === ""}
+                  required={!activeUser?.id || selectedAddressId === ""}
                   disabled={isBusy}
                 />
               </>
             )}
           </div>
-          <button type="submit" disabled={!canSubmit} style={primBtn(!canSubmit)}>
+            </>
+          )}
+
+          <button type="submit" disabled={step === "details" ? !canSubmitDetails : !canSubmitPhone} style={primBtn(step === "details" ? !canSubmitDetails : !canSubmitPhone)}>
             {isBusy
-              ? <><i className="fa-solid fa-spinner fa-spin" aria-hidden="true" /> {loggedUser?.phone ? "Placing Order…" : "Sending OTP…"}</>
-              : loggedUser?.phone
+              ? <><i className="fa-solid fa-spinner fa-spin" aria-hidden="true" /> {step === "details" ? "Placing Order…" : "Checking…"}</>
+              : step === "details"
                 ? <><i className="fa-solid fa-check" aria-hidden="true" /> Place Order — ৳{totalPrice.toLocaleString()}</>
-                : <><i className="fa-solid fa-mobile-screen-button" aria-hidden="true" /> Send Verification Code</>
+                : guestTrustedDevice
+                  ? <><i className="fa-solid fa-arrow-right-long" aria-hidden="true" /> Continue</>
+                  : phoneChecking
+                    ? <><i className="fa-solid fa-spinner fa-spin" aria-hidden="true" /> Checking Number…</>
+                    : guestNeedsOtp
+                      ? <><i className="fa-solid fa-mobile-screen-button" aria-hidden="true" /> Send Verification Code</>
+                      : <><i className="fa-solid fa-arrow-right-long" aria-hidden="true" /> Continue</>
             }
           </button>
           <p style={{ margin: "10px 0 0", fontSize: 11, color: "rgba(87,31,41,.4)", fontFamily: "var(--font-body)", textAlign: "center" }}>
-            {loggedUser?.phone ? "Cash on delivery · Your order will be confirmed immediately" : "Cash on delivery · A code will be sent to your number"}
+            {step === "details"
+              ? "Cash on delivery · Your order will be confirmed immediately"
+              : phoneChecking
+                ? "Cash on delivery · Checking this phone number"
+                : guestNeedsOtp
+                  ? "Cash on delivery · A code will be sent to your number"
+                  : "Cash on delivery · Enter your phone number to continue"}
           </p>
         </form>
       </div>
@@ -1268,7 +1557,6 @@ function ShopPage() {
       await fetch(`${API_BASE}/auth/logout`, {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/json" }
       });
     } catch (err) {
       console.error("Logout error:", err);

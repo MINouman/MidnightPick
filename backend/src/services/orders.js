@@ -437,6 +437,7 @@ async function cancelOrder(userId, orderId) {
     if (order.points_earned > 0) {
       await reversePoints(client, userId, order.points_earned,
         `Reversed: order ${order.order_ref} cancelled`, order.id)
+      await client.query(`UPDATE orders SET points_earned = 0 WHERE id = $1`, [order.id])
     }
 
     return { id: order.id, order_ref: order.order_ref, status: 'cancelled' }
@@ -482,13 +483,30 @@ async function trackOrder(orderRef) {
 const GUEST_PRODUCT_NAME = 'Midnight Blend — 95g Pouch'
 const GUEST_UNIT_PRICE   = 699
 
-async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, otp, product_id }) {
+async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, otp, password, product_id }) {
   const normalizedPhone = normalizeBdMobile(phone)
-  // Verify OTP before touching any order data
-  const { verifyOtp } = require('./otp')
-  await verifyOtp(normalizedPhone, otp)
+  let verifiedUserId = null
+
+  if (password) {
+    const { loginPhoneUser } = require('./users')
+    const user = await loginPhoneUser(normalizedPhone, password)
+    verifiedUserId = user.id
+  } else if (otp) {
+    const { verifyOtp } = require('./otp')
+    await verifyOtp(normalizedPhone, otp, 'checkout')
+  } else {
+    throw { code: 'VERIFICATION_REQUIRED', message: 'Verify your phone number or enter your saved password to place this order.' }
+  }
 
   return withTransaction(async (client) => {
+    if (!verifiedUserId) {
+      const { rows: userRows } = await client.query(
+        `SELECT id FROM users WHERE phone = $1 AND is_active = true`,
+        [normalizedPhone]
+      )
+      verifiedUserId = userRows[0]?.id || null
+    }
+
     // Resolve product price — use DB price if product_id provided, else hardcoded default
     let productName = GUEST_PRODUCT_NAME
     let unitPrice   = GUEST_UNIT_PRICE
@@ -538,9 +556,9 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
          (order_ref, user_id, customer_name, customer_phone,
           address_snapshot, payment_type, payment_number,
           coupon_code, discount_amount, subtotal, delivery_fee, total, notes)
-       VALUES ($1, NULL, $2, $3, $4, 'cod', $3, $5, $6, $7, $8, $9, $10)
+       VALUES ($1, $2, $3, $4, $5, 'cod', $4, $6, $7, $8, $9, $10, $11)
        RETURNING id, order_ref, status, created_at`,
-      [orderRef, name.trim(), normalizedPhone,
+      [orderRef, verifiedUserId, name.trim(), normalizedPhone,
        JSON.stringify(addrSnap),
        coupon ? coupon.code : null,
        discountAmount, subtotal, deliveryFee, total,

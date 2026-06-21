@@ -5,7 +5,7 @@ const { query } = require('../config/db')
 // Must be called inside an open DB transaction.
 // Updates the user's current_tier_id and creates tier_reward_claims for any
 // newly crossed tiers. Safe to call after every awardPoints().
-async function checkAndUpdateTier(client, userId) {
+async function checkAndUpdateTier(client, userId, previousLifetime = null, newLifetime = null) {
   const { rows: userRows } = await client.query(
     `SELECT points_lifetime, current_tier_id FROM users WHERE id = $1 FOR UPDATE`,
     [userId]
@@ -13,6 +13,8 @@ async function checkAndUpdateTier(client, userId) {
   if (!userRows.length) return null
 
   const { points_lifetime, current_tier_id } = userRows[0]
+  const lifetimeAfter = newLifetime == null ? Number(points_lifetime || 0) : Number(newLifetime)
+  const lifetimeBefore = previousLifetime == null ? lifetimeAfter : Number(previousLifetime)
 
   const { rows: tiers } = await client.query(
     `SELECT lt.*, p.name AS product_name
@@ -26,27 +28,22 @@ async function checkAndUpdateTier(client, userId) {
   // Highest tier the user now qualifies for
   let newTier = null
   for (const t of tiers) {
-    if (points_lifetime >= t.min_lifetime_pts) newTier = t
+    if (lifetimeAfter >= t.min_lifetime_pts) newTier = t
   }
   if (!newTier) return null
 
-  // Find the old tier's threshold so we know which tiers are newly crossed
-  const oldTier = tiers.find(t => t.id === current_tier_id)
-  const oldThreshold = oldTier ? oldTier.min_lifetime_pts : -1
-
-  if (newTier.id === current_tier_id) return null // no change
-
-  // Update current tier
-  await client.query(
-    `UPDATE users SET current_tier_id = $1, updated_at = NOW() WHERE id = $2`,
-    [newTier.id, userId]
-  )
+  if (newTier.id !== current_tier_id) {
+    await client.query(
+      `UPDATE users SET current_tier_id = $1, updated_at = NOW() WHERE id = $2`,
+      [newTier.id, userId]
+    )
+  }
 
   // Create claims for every tier that was just crossed (skipping base tier at 0)
   const newlyCrossed = tiers.filter(
     t => t.min_lifetime_pts > 0 &&
-         t.min_lifetime_pts > oldThreshold &&
-         t.min_lifetime_pts <= points_lifetime
+         lifetimeBefore < t.min_lifetime_pts &&
+         lifetimeAfter >= t.min_lifetime_pts
   )
 
   for (const tier of newlyCrossed) {

@@ -1942,6 +1942,7 @@ function UsersAdmin() {
   const [total, setTotal]           = useState(0);
   const [limit] = useState(20);
   const [selectedUser, setSelectedUser] = useState(null);
+  const [pointAdjustments, setPointAdjustments] = useState({});
   const [actionInProgress, setActionInProgress] = useState(false);
   const [actionMessage, setActionMessage] = useState('');
 
@@ -2006,6 +2007,33 @@ function UsersAdmin() {
       } else {
         throw new Error(res?.error?.message || 'Failed to deactivate user');
       }
+    } catch (err) {
+      setActionMessage(`✗ ${err.message}`);
+    } finally {
+      setActionInProgress(false);
+    }
+  };
+
+  const handlePointAdjust = async (user) => {
+    const form = pointAdjustments[user.id] || { amount: '', reason: '' };
+    const amount = Number(form.amount);
+    if (!Number.isInteger(amount) || amount === 0 || !form.reason?.trim()) {
+      setActionMessage('✗ Enter a non-zero whole point amount and a reason');
+      return;
+    }
+
+    setActionInProgress(true);
+    setActionMessage('');
+    try {
+      const res = await window.mpApi.fetch(`/admin/users/${user.id}/points/adjust`, {
+        method: 'POST',
+        body: JSON.stringify({ amount, reason: form.reason.trim() }),
+      });
+      if (!res?.ok) throw new Error(res?.error?.message || 'Failed to adjust points');
+      setPointAdjustments(prev => ({ ...prev, [user.id]: { amount: '', reason: '' } }));
+      setActionMessage(`✓ Points adjusted for ${user.email || user.phone}`);
+      setTimeout(() => setActionMessage(''), 3000);
+      loadUsers();
     } catch (err) {
       setActionMessage(`✗ ${err.message}`);
     } finally {
@@ -2080,69 +2108,103 @@ function UsersAdmin() {
               </thead>
               <tbody>
                 {users.map(user => (
-                  <tr key={user.id}>
-                    <td>{user.email || '—'}</td>
-                    <td>{user.phone || '—'}</td>
-                    <td>{user.name || '—'}</td>
-                    <td>
-                      <span style={{
-                        padding: '4px 8px',
-                        borderRadius: '4px',
-                        fontSize: '11px',
-                        fontWeight: 600,
-                        background: user.role === 'admin' ? 'rgba(255, 145, 0, 0.2)' : 'rgba(76, 175, 80, 0.2)',
-                        color: user.role === 'admin' ? 'var(--flame)' : '#4caf50',
-                        textTransform: 'uppercase',
-                      }}>
-                        {user.role}
-                      </span>
-                    </td>
-                    <td>
-                      <span style={{
-                        padding: '4px 8px',
-                        borderRadius: '4px',
-                        fontSize: '11px',
-                        fontWeight: 600,
-                        background: user.is_active ? 'rgba(76, 175, 80, 0.2)' : 'rgba(255, 68, 68, 0.2)',
-                        color: user.is_active ? '#4caf50' : '#ff4444',
-                        textTransform: 'uppercase',
-                      }}>
-                        {user.is_active ? 'Active' : 'Inactive'}
-                      </span>
-                    </td>
-                    <td>{user.points_balance.toLocaleString()}</td>
-                    <td style={{ fontSize: '12px', color: 'var(--cream-soft)' }}>
-                      {new Date(user.created_at).toLocaleDateString()}
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', gap: '8px' }}>
-                        {user.is_active ? (
+                  <React.Fragment key={user.id}>
+                    <tr>
+                      <td>{user.email || '—'}</td>
+                      <td>{user.phone || '—'}</td>
+                      <td>{user.name || '—'}</td>
+                      <td>
+                        <span style={{
+                          padding: '4px 8px',
+                          borderRadius: '4px',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          background: user.role === 'admin' ? 'rgba(255, 145, 0, 0.2)' : 'rgba(76, 175, 80, 0.2)',
+                          color: user.role === 'admin' ? 'var(--flame)' : '#4caf50',
+                          textTransform: 'uppercase',
+                        }}>
+                          {user.role}
+                        </span>
+                      </td>
+                      <td>
+                        <span style={{
+                          padding: '4px 8px',
+                          borderRadius: '4px',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          background: user.is_active ? 'rgba(76, 175, 80, 0.2)' : 'rgba(255, 68, 68, 0.2)',
+                          color: user.is_active ? '#4caf50' : '#ff4444',
+                          textTransform: 'uppercase',
+                        }}>
+                          {user.is_active ? 'Active' : 'Inactive'}
+                        </span>
+                      </td>
+                      <td>{user.points_balance.toLocaleString()}</td>
+                      <td style={{ fontSize: '12px', color: 'var(--cream-soft)' }}>
+                        {new Date(user.created_at).toLocaleDateString()}
+                      </td>
+                      <td>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          {user.is_active ? (
+                            <button
+                              onClick={() => handleDeactivate(user.id, user.email || user.phone)}
+                              disabled={actionInProgress}
+                              className="btn btn-sm btn-outline"
+                              style={{ color: '#ff4444', borderColor: '#ff4444' }}
+                            >
+                              Deactivate
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleActivate(user.id, user.email || user.phone)}
+                              disabled={actionInProgress}
+                              className="btn btn-sm btn-primary"
+                            >
+                              Activate
+                            </button>
+                          )}
                           <button
-                            onClick={() => handleDeactivate(user.id, user.email || user.phone)}
-                            disabled={actionInProgress}
-                            className="btn btn-sm btn-outline"
-                            style={{ color: '#ff4444', borderColor: '#ff4444' }}
+                            onClick={() => setSelectedUser(user.id === selectedUser ? null : user.id)}
+                            className="btn btn-sm btn-ghost"
                           >
-                            Deactivate
+                            <i className={`fa fa-chevron-${user.id === selectedUser ? 'up' : 'down'}`} />
                           </button>
-                        ) : (
-                          <button
-                            onClick={() => handleActivate(user.id, user.email || user.phone)}
-                            disabled={actionInProgress}
-                            className="btn btn-sm btn-primary"
-                          >
-                            Activate
+                        </div>
+                      </td>
+                    </tr>
+                    {user.id === selectedUser && (
+                      <tr>
+                        <td colSpan={8}>
+                          <div className="grid-2" style={{ gap: 12, padding: '12px 0' }}>
+                            <div className="input-group">
+                              <label className="input-label">Point adjustment</label>
+                              <input
+                                className="input"
+                                type="number"
+                                step="1"
+                                placeholder="Positive or negative"
+                                value={pointAdjustments[user.id]?.amount || ''}
+                                onChange={e => setPointAdjustments(prev => ({ ...prev, [user.id]: { ...(prev[user.id] || {}), amount: e.target.value } }))}
+                              />
+                            </div>
+                            <div className="input-group">
+                              <label className="input-label">Reason</label>
+                              <input
+                                className="input"
+                                maxLength={255}
+                                placeholder="Customer service note"
+                                value={pointAdjustments[user.id]?.reason || ''}
+                                onChange={e => setPointAdjustments(prev => ({ ...prev, [user.id]: { ...(prev[user.id] || {}), reason: e.target.value } }))}
+                              />
+                            </div>
+                          </div>
+                          <button className="btn btn-primary btn-sm" disabled={actionInProgress} onClick={() => handlePointAdjust(user)}>
+                            Apply Points Adjustment
                           </button>
-                        )}
-                        <button
-                          onClick={() => setSelectedUser(user.id === selectedUser ? null : user.id)}
-                          className="btn btn-sm btn-ghost"
-                        >
-                          <i className="fa fa-chevron-down" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>

@@ -4,6 +4,7 @@ const crypto = require('crypto')
 const { query, withTransaction } = require('../config/db')
 const { sendSms } = require('../services/sms')
 const { mapSteadfastStatusToOrderStatus } = require('../services/steadfast')
+const { awardPointsForDeliveredOrder } = require('../services/points')
 
 module.exports = async function webhookRoutes(app) {
 
@@ -97,19 +98,9 @@ module.exports = async function webhookRoutes(app) {
         [o.id, trackingStep, newStatus, `Steadfast: ${status}${note ? ` — ${note}` : ''}`, status]
       )
 
-      // Award points if order just transitioned to delivered
-      if (justDelivered && o.user_id && o.total > 0 && Number(o.points_earned) === 0) {
-        const { calculatePointsForOrder, awardPoints, getPointsSettings } = require('../services/points')
-        const ptSettings = await getPointsSettings(client)
-        const pts = calculatePointsForOrder(o.total, ptSettings.points_per_100_taka || 10)
-        if (pts > 0) {
-          await awardPoints(client, o.user_id, pts, `Order #${o.order_ref} delivered`, o.id)
-          await client.query(
-            `UPDATE orders SET points_earned = $2 WHERE id = $1`,
-            [o.id, pts]
-          )
-        }
-      }
+      // Award points if order just transitioned to delivered.
+      // The shared helper locks the order and no-ops if another path already awarded it.
+      if (justDelivered) await awardPointsForDeliveredOrder(client, o.id)
 
       // Sync commission if delivered (with error handling)
       if (justDelivered) {

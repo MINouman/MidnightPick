@@ -98,8 +98,13 @@ async function build() {
         return reply.code(401).send({ ok: false, error: { code: 'UNAUTHORIZED', message: 'Token has been revoked.' } })
       }
     } catch (err) {
-      // Log authentication failures for monitoring
-      if (err.name !== 'JsonWebTokenError') {
+      if (err.code === 'FAST_JWT_EXPIRED') {
+        return reply.code(401).send({ ok: false, error: { code: 'TOKEN_EXPIRED', message: 'Session expired. Please refresh or sign in again.' } })
+      }
+
+      // Log unexpected authentication failures for monitoring. Expired or
+      // malformed client tokens are normal 401s and should not pollute warn logs.
+      if (err.name !== 'JsonWebTokenError' && err.code !== 'FAST_JWT_MALFORMED' && err.code !== 'FAST_JWT_INVALID_SIGNATURE') {
         app.log.warn({ err }, 'Authentication middleware error')
       }
       return reply.code(401).send({ ok: false, error: { code: 'UNAUTHORIZED', message: 'Authentication required.' } })
@@ -117,11 +122,14 @@ async function build() {
     INVALID_TOKEN:                401,
     INVALID_PHONE:                400,
     PASSWORD_REQUIRED:            400,
+    PHONE_EXISTS:                 409,
     PHONE_OTP_REQUIRED:           409,
     OTP_RATE_LIMIT:               429,
     SMS_RATE_LIMIT:               429,
     RATE_LIMITED:                 429,
     OTP_MAX_ATTEMPTS:             400,
+    INVALID_OTP_PURPOSE:          400,
+    INVALID_OTP_TICKET:           401,
     INVALID_OTP:                  400,
     NO_OTP_SENT:                  400,
     NO_OTP:                       400,
@@ -139,6 +147,7 @@ async function build() {
     INVALID_ITEM:                 400,
     INVALID_ADDRESS:              400,
     ADDRESS_REQUIRED:             400,
+    ADDRESS_REVERIFY_REQUIRED:    403,
     CANNOT_CANCEL:                409,
     ORDER_LOCKED:                 409,
     INSUFFICIENT_STOCK:           409,
@@ -177,7 +186,9 @@ async function build() {
 
     // Business logic errors (thrown as plain objects with a known `code`)
     if (err.code && err.code in HTTP_STATUS && !err.statusCode) {
-      return reply.code(HTTP_STATUS[err.code]).send({ ok: false, error: { code: err.code, message: err.message } })
+      const error = { code: err.code, message: err.message }
+      if (err.retry_after_seconds) error.retry_after_seconds = err.retry_after_seconds
+      return reply.code(HTTP_STATUS[err.code]).send({ ok: false, error })
     }
 
     // @fastify/jwt 401s

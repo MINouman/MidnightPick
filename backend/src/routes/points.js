@@ -1,14 +1,14 @@
 'use strict'
 
 const { query, withTransaction } = require('../config/db')
-const { spendPoints } = require('../services/points')
+const { spendPoints, getPointsSettings } = require('../services/points')
 
 module.exports = async function pointsRoutes(app) {
 
   // ── GET /me/points — balance + tier info + pending claim
   app.get('/points', async (req) => {
     const userId = req.user.sub
-    const [userRes, tiersRes, claimRes] = await Promise.all([
+    const [userRes, tiersRes, claimRes, settings] = await Promise.all([
       query(`SELECT points_balance, points_lifetime FROM users WHERE id = $1`, [userId]),
       query(`SELECT lt.id, lt.name, lt.min_lifetime_pts, lt.badge_color, lt.reward_product_id, p.name AS reward_product_name FROM loyalty_tiers lt LEFT JOIN products p ON p.id = lt.reward_product_id WHERE lt.is_active = true ORDER BY lt.min_lifetime_pts ASC`),
       query(
@@ -19,6 +19,7 @@ module.exports = async function pointsRoutes(app) {
          ORDER  BY trc.created_at ASC LIMIT 1`,
         [userId]
       ),
+      getPointsSettings(),
     ])
 
     const balance  = userRes.rows[0]?.points_balance  || 0
@@ -38,6 +39,10 @@ module.exports = async function pointsRoutes(app) {
         nextTier,
         ptsToNextTier: nextTier ? nextTier.min_lifetime_pts - lifetime : 0,
         pendingClaim:  claimRes.rows[0] || null,
+        settings: {
+          points_per_100_taka: Number(settings.points_per_100_taka || 10),
+          min_order_amount: Number(settings.min_order_amount || 0),
+        },
       },
     }
   })
@@ -49,7 +54,7 @@ module.exports = async function pointsRoutes(app) {
 
     const [txRes, userRes, tiersRes, claimRes] = await Promise.all([
       query(
-        `SELECT type, points, balance_after, description, reference_id, reference_type, created_at
+        `SELECT type, points, balance_after, description, reference_id, reference_type, metadata, created_at
          FROM   points_transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2`,
         [userId, limit]
       ),
@@ -109,7 +114,7 @@ module.exports = async function pointsRoutes(app) {
       `SELECT COUNT(*) AS total FROM points_transactions WHERE user_id = $1`, [req.user.sub]
     )
     const { rows } = await query(
-      `SELECT id, type, points, balance_after, description, reference_id, reference_type, created_at
+      `SELECT id, type, points, balance_after, description, reference_id, reference_type, metadata, created_at
        FROM   points_transactions WHERE user_id = $1
        ORDER  BY created_at DESC LIMIT $2 OFFSET $3`,
       [req.user.sub, limit, offset]

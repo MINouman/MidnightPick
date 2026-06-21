@@ -37,6 +37,16 @@ async function loginUser(email, password) {
   return user
 }
 
+async function getEmailAuthStatus(email) {
+  const DUMMY_HASH = '$2b$12$CwTycUXWue0Thq9StjUM0uJ8ff5HYqbb8bHI.E4bfnWaaQG3VmN3W'
+  const { rows } = await query(
+    `SELECT id FROM users WHERE email = $1`,
+    [email]
+  )
+  await bcrypt.compare('not-the-password', DUMMY_HASH).catch(() => false)
+  return { exists: rows.length > 0 }
+}
+
 async function loginPhoneUser(phone, password) {
   const { rows } = await query(
     `SELECT id, phone, email, name, role, password_hash, is_active
@@ -176,7 +186,9 @@ async function findOrCreateUser(phone) {
       isNew = true
     }
 
-    // Migrate all previous guest orders placed with this phone to the user's account
+    // Migrate previous guest orders without recalculating loyalty points.
+    // Points are intentionally awarded only on the delivered-status transition;
+    // delivered guest orders linked later must not be back-awarded here.
     await client.query(
       `UPDATE orders SET user_id = $1 WHERE customer_phone = $2 AND user_id IS NULL`,
       [user.id, phone]
@@ -222,6 +234,30 @@ async function setUserPassword(id, password) {
     [id, passwordHash]
   )
   if (!rows[0]) throw { code: 'NOT_FOUND', message: 'User not found.' }
+  return rows[0]
+}
+
+async function attachPhoneToUser(id, phone) {
+  const { rows: existing } = await query(
+    `SELECT id FROM users WHERE phone = $1 AND id <> $2`,
+    [phone, id]
+  )
+  if (existing.length) {
+    throw { code: 'PHONE_EXISTS', message: 'This phone number is already linked to another account.' }
+  }
+
+  const { rows } = await query(
+    `UPDATE users
+     SET   phone = COALESCE(phone, $2),
+           updated_at = NOW()
+     WHERE id = $1
+     RETURNING id, phone, email, name, role, points_balance, is_active,
+               password_hash IS NOT NULL AS has_password`,
+    [id, phone]
+  )
+  if (!rows[0]) throw { code: 'NOT_FOUND', message: 'User not found.' }
+
+  await query(`UPDATE orders SET user_id = $1 WHERE customer_phone = $2 AND user_id IS NULL`, [id, phone])
   return rows[0]
 }
 
@@ -366,10 +402,10 @@ async function setDefaultPaymentMethod(userId, pmId) {
 }
 
 module.exports = {
-  registerUser, loginUser, loginPhoneUser, getPhoneAuthStatus,
+  registerUser, loginUser, getEmailAuthStatus, loginPhoneUser, getPhoneAuthStatus,
   findOrCreateGoogleUser,
   findOrCreateUser,
-  getUserById, updateUser, setUserPassword, deactivateUser,
+  getUserById, updateUser, setUserPassword, attachPhoneToUser, deactivateUser,
   getAddresses, createAddress, updateAddress, deleteAddress, setDefaultAddress,
   getPaymentMethods, createPaymentMethod, deletePaymentMethod, setDefaultPaymentMethod,
 }
