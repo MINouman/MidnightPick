@@ -2696,6 +2696,7 @@ a { color: inherit; text-decoration: none; }
   width: 100%;
   padding: 10px 12px;
   margin-top: 6px;
+  margin-bottom: 12px;
   border-radius: 8px;
   background: rgba(87,31,41,0.06);
   border: 1px solid rgba(87,31,41,0.1);
