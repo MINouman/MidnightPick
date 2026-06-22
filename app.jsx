@@ -89,19 +89,30 @@ function Nav({ onSignIn, loggedIn, dashUrl, onLogout }) {
       { id: "journal",    name: "blog" },
       { id: "faq",        name: "contact" },
     ];
-    const io = new IntersectionObserver((entries) => {
-      entries.forEach(entry => {
-        if (entry.isIntersecting) {
-          const sec = sections.find(s => s.id === entry.target.id);
-          if (sec) setActive(sec.name);
-        }
-      });
-    }, { threshold: 0.3 });
-    sections.forEach(s => {
-      const el = document.getElementById(s.id);
-      if (el) io.observe(el);
-    });
-    return () => io.disconnect();
+    let ticking = false;
+    const syncActive = () => {
+      const navH = document.querySelector(".nav")?.offsetHeight ?? 0;
+      const probeY = window.scrollY + navH + window.innerHeight * 0.22;
+      let current = sections[0];
+      for (const section of sections) {
+        const el = document.getElementById(section.id);
+        if (el && el.offsetTop <= probeY) current = section;
+      }
+      setActive(current.name);
+      ticking = false;
+    };
+    const onScroll = () => {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(syncActive);
+    };
+    syncActive();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+    };
   }, []);
 
   useEffect(() => {
@@ -115,14 +126,9 @@ function Nav({ onSignIn, loggedIn, dashUrl, onLogout }) {
     setMenuOpen(false);
     const el = document.getElementById(id);
     if (el) {
-      if (id === "collection") {
-        const top = el.getBoundingClientRect().top + window.scrollY + (el.offsetHeight - window.innerHeight) / 2 - window.innerHeight * 0.02;
-        window.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
-      } else {
-        const navH = document.querySelector(".nav")?.offsetHeight ?? 0;
-        const offset = name === "home" ? 0 : name === "about" ? window.innerHeight * 0.03 : navH + window.innerHeight * 0.005;
-        window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - offset, behavior: "smooth" });
-      }
+      const navH = document.querySelector(".nav")?.offsetHeight ?? 0;
+      const offset = name === "home" ? 0 : navH + 8;
+      window.scrollTo({ top: Math.max(0, el.getBoundingClientRect().top + window.scrollY - offset), behavior: "smooth" });
     }
   };
 
@@ -270,7 +276,7 @@ function MemberAccessCard({ onJoin }) {
 // ----------------- story -----------------
 function Story() {
   return (
-    <section className="story" id="story" data-screen-label="02 Story">
+    <section className="story" id="story" data-screen-label="03 Story">
       <div className="story-blob b1" />
       <div className="story-blob b2" />
       <div className="story-blob b3" />
@@ -353,7 +359,7 @@ function Collection({ onAdd }) {
   }, []);
 
   return (
-    <section className="collection" id="collection" data-screen-label="03 Collection">
+    <section className="collection" id="collection" data-screen-label="02 Collection">
       <div className="coll-words" aria-hidden="true">
         <span className="cw cw-1">MIDNIGHT</span>
         <span className="cw cw-2">BLEND</span>
@@ -1184,9 +1190,9 @@ function App() {
     <>
       <Nav onSubscribe={() => setModalOpen(true)} onSignIn={() => setAuthOpen(true)} loggedIn={auth.loggedIn} dashUrl={auth.dashUrl} onLogout={handleLogout} />
       <Hero headline={t.headline} showMountain={t.showMountain} />
+      <Collection onAdd={addToCart} />
       <Story />
       <MemberAccessCard onJoin={() => setAuthOpen(true)} />
-      <Collection onAdd={addToCart} />
       <Promo onShop={onShop} text={promoBanner.text} visible={promoBanner.visible} />
       <TheJournal />
       <Why />
