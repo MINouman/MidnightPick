@@ -215,6 +215,7 @@ async function build() {
   await app.register(require('./routes/tracking'),     { prefix: '/api/v1/tracking' })
   await app.register(require('./routes/policies'),     { prefix: '/api/v1' })
   await app.register(require('./routes/site'),         { prefix: '/api/v1' })
+  await app.register(require('./routes/banners'),      { prefix: '/api/v1' })
   await app.register(require('./routes/webhooks'),     { prefix: '/webhooks' })
 
   // Protected (JWT required on every request)

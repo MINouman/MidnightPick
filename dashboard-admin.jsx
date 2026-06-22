@@ -3843,40 +3843,159 @@ function Products() {
   );
 }
 
-// ── Section: Promo Banner ──────────────────────────────
+// ── Section: Site Banner ──────────────────────────────
 function PromoBannerAdmin() {
-  const [banner, setBanner] = useState(null);
-  const [text, setText] = useState('');
-  const [visible, setVisible] = useState(true);
+  const blank = {
+    id: null,
+    enabled: false,
+    banner_type: "short_announcement",
+    message_template: "Use {coupon_code} today on your next Midnight Pick order.",
+    linked_coupon_id: "",
+    display_format: "banner",
+    display_rule: "once_per_session",
+    suppress_days: 30,
+    start_at: "",
+    end_at: "",
+  };
+  const [banners, setBanners] = useState([]);
+  const [coupons, setCoupons] = useState([]);
+  const [form, setForm] = useState(blank);
   const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState(null); // { type: 'ok'|'err', text }
+  const [msg, setMsg] = useState(null);
 
-  useEffect(() => {
-    window.mpApi.fetch('/admin/promo-banner').then(res => {
-      if (res?.ok && res.data) {
-        setBanner(res.data);
-        setText(res.data.text);
-        setVisible(res.data.visible);
-      }
-    }).catch(() => {});
-  }, []);
+  function load() {
+    Promise.all([
+      window.mpApi.fetch('/admin/banners').catch(() => null),
+      window.mpApi.fetch('/admin/banner-coupons').catch(() => null),
+    ]).then(([bRes, cRes]) => {
+      setBanners(bRes?.data?.banners || []);
+      setCoupons(cRes?.data?.coupons || []);
+    });
+  }
 
-  async function handleSave() {
+  useEffect(() => { load(); }, []);
+
+  const selectedCoupon = form.banner_type === "coupon_offer" ? coupons.find(c => c.id === form.linked_coupon_id) : null;
+  const previewMessage = (form.message_template || "").replace(/\{coupon_code\}/g, selectedCoupon?.code || "");
+  const hasPrimaryCta = form.banner_type === "coupon_offer" || form.banner_type === "general_offer";
+  const selectedCouponInactive =
+    selectedCoupon &&
+    (!selectedCoupon.is_active ||
+      (selectedCoupon.status || "active") !== "active" ||
+      (selectedCoupon.expires_at && new Date(selectedCoupon.expires_at) < new Date()) ||
+      (selectedCoupon.max_uses != null && Number(selectedCoupon.used_count || 0) >= Number(selectedCoupon.max_uses)));
+  const activeSameFormatBanner = banners.find(b =>
+    b.enabled &&
+    b.display_format === form.display_format &&
+    b.id !== form.id
+  );
+
+  function couponOptionLabel(c) {
+    const flags = [];
+    if (!c.is_active || (c.status || "active") !== "active") flags.push("inactive");
+    if (c.expires_at && new Date(c.expires_at) < new Date()) flags.push("expired");
+    if (c.max_uses != null && Number(c.used_count || 0) >= Number(c.max_uses)) flags.push("maxed");
+    return flags.length ? `${c.code} (${flags.join(", ")})` : c.code;
+  }
+
+  function isoToDhakaInput(iso) {
+    if (!iso) return "";
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Dhaka",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(new Date(iso)).reduce((acc, part) => {
+      if (part.type !== "literal") acc[part.type] = part.value;
+      return acc;
+    }, {});
+    const hour = parts.hour === "24" ? "00" : parts.hour;
+    return `${parts.year}-${parts.month}-${parts.day}T${hour}:${parts.minute}`;
+  }
+
+  function dhakaInputToIso(value) {
+    if (!value) return null;
+    const date = new Date(`${value}:00+06:00`);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  }
+
+  function fmtDateTimeDhaka(iso) {
+    if (!iso) return "";
+    return new Date(iso).toLocaleString("en-GB", {
+      timeZone: "Asia/Dhaka",
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+
+  function bannerTypeLabel(type) {
+    if (type === "coupon_offer") return "Coupon offer";
+    if (type === "general_offer") return "General offer";
+    return "Announcement";
+  }
+
+  function editBanner(b) {
+    setForm({
+      id: b.id,
+      enabled: !!b.enabled,
+      banner_type: b.banner_type || (b.linked_coupon_id ? "coupon_offer" : "short_announcement"),
+      message_template: b.message_template || "",
+      linked_coupon_id: b.linked_coupon_id || "",
+      display_format: b.display_format || "banner",
+      display_rule: b.display_rule || "once_per_session",
+      suppress_days: b.suppress_days || 30,
+      start_at: isoToDhakaInput(b.start_at),
+      end_at: isoToDhakaInput(b.end_at),
+    });
+    setMsg(null);
+  }
+
+  async function saveBanner() {
     setSaving(true);
     setMsg(null);
+    const startIso = dhakaInputToIso(form.start_at);
+    const endIso = dhakaInputToIso(form.end_at);
+    if (startIso && endIso && new Date(endIso) <= new Date(startIso)) {
+      setMsg({ type: 'err', text: 'End date must be after the start date.' });
+      setSaving(false);
+      return;
+    }
+    const body = {
+      enabled: form.enabled,
+      banner_type: form.banner_type,
+      message_template: form.message_template,
+      linked_coupon_id: form.banner_type === "coupon_offer" ? form.linked_coupon_id || null : null,
+      display_format: form.display_format,
+      display_rule: form.display_rule,
+      suppress_days: Number(form.suppress_days || 30),
+      start_at: startIso,
+      end_at: endIso,
+    };
     try {
-      const res = await window.mpApi.fetch('/admin/promo-banner', {
-        method: 'PATCH',
-        body: JSON.stringify({ text, visible }),
+      const res = await window.mpApi.fetch(form.id ? `/admin/banners/${form.id}` : '/admin/banners', {
+        method: form.id ? 'PATCH' : 'POST',
+        body: JSON.stringify(body),
       });
-      if (res?.ok) {
-        setBanner(res.data);
-        setText(res.data.text);
-        setVisible(res.data.visible);
-        setMsg({ type: 'ok', text: 'Banner updated.' });
-      } else {
-        setMsg({ type: 'err', text: res?.error?.message || 'Failed to save.' });
+      if (!res?.ok) {
+        setMsg({ type: 'err', text: res?.error?.message || 'Could not save banner.' });
+        return;
       }
+      setMsg({
+        type: 'ok',
+        text: form.enabled
+            ? activeSameFormatBanner
+              ? `Banner saved and enabled. The previous enabled ${form.display_format === "modal" ? "modal popup" : "banner strip"} was disabled.`
+              : 'Banner saved and enabled.'
+            : 'Banner saved as disabled. It will not display until you enable it.',
+      });
+      setForm(blank);
+      load();
     } catch {
       setMsg({ type: 'err', text: 'Network error.' });
     } finally {
@@ -3884,11 +4003,20 @@ function PromoBannerAdmin() {
     }
   }
 
+  async function toggleBanner(b) {
+    const res = await window.mpApi.fetch(`/admin/banners/${b.id}/toggle`, { method: 'POST' }).catch(() => null);
+    if (!res?.ok) {
+      Swal.fire({ title: 'Could not update banner', text: res?.error?.message || 'Please check the linked coupon and try again.', icon: 'error', confirmButtonColor: '#FF9100' });
+      return;
+    }
+    load();
+  }
+
   return (
-    <div className="dash-inner">
-      <div className="page-title">Promo Banner</div>
+    <div className="dash-inner-wide">
+      <div className="page-title">Site Banner</div>
       <p style={{ color: 'var(--text-65)', fontSize: 13, marginBottom: 20 }}>
-        Controls the full-width orange banner on the homepage. Changes take effect immediately on next page load.
+        Controls site-wide top announcement strips and optional modals. One banner strip and one modal popup can be enabled at the same time.
       </p>
 
       {msg && (
@@ -3900,82 +4028,176 @@ function PromoBannerAdmin() {
         }}>{msg.text}</div>
       )}
 
-      <div className="card mb20">
-        <div className="eyebrow mb16">Banner Preview</div>
-        <div style={{
-          background: '#FF9100', borderRadius: 8, padding: '18px 24px',
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          gap: 16, opacity: visible ? 1 : 0.4,
-        }}>
-          <span style={{ fontWeight: 700, fontSize: 18, color: '#1E0C04' }}>
-            {text || 'Get 10% off your first order.'}
-          </span>
-          <span style={{
-            background: '#fff', color: '#1E0C04', borderRadius: 20,
-            padding: '6px 16px', fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap',
-          }}>Shop Now →</span>
-        </div>
-        {!visible && (
-          <p style={{ marginTop: 8, fontSize: 12, color: 'var(--text-65)' }}>
-            Banner is hidden — visitors will not see it.
-          </p>
-        )}
-      </div>
-
-      <div className="card">
-        <div className="eyebrow mb16">Settings</div>
-
-        <div className="input-group">
-          <label className="input-label">Banner Text</label>
-          <input
-            className="input"
-            value={text}
-            onChange={e => setText(e.target.value)}
-            maxLength={300}
-            placeholder="e.g. Get 10% off your first order."
-          />
-          <div style={{ fontSize: 11, color: 'var(--text-45)', marginTop: 4 }}>
-            {text.length}/300 characters
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.2fr) minmax(320px, .8fr)", gap: 16, alignItems: "start" }}>
+        <div className="card">
+          <div className="row-between mb16">
+            <div className="eyebrow" style={{ marginBottom: 0 }}>{form.id ? "Edit Banner" : "Create Banner"}</div>
+            <button className="btn btn-ghost btn-sm" onClick={() => setForm(blank)}>New</button>
           </div>
-        </div>
 
-        <div className="row-between" style={{ marginTop: 16, marginBottom: 20 }}>
-          <div>
-            <div style={{ fontWeight: 600, fontSize: 14 }}>Show Banner</div>
-            <div style={{ fontSize: 12, color: 'var(--text-65)', marginTop: 2 }}>
-              Toggle off to hide the banner from the homepage entirely.
+          <div className="row-between" style={{ marginBottom: 16 }}>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>Enabled</div>
+              <div style={{ fontSize: 12, color: "var(--text-65)", marginTop: 3 }}>
+                Enabling this will replace any currently enabled banner with the same display format.
+              </div>
+              {form.enabled && activeSameFormatBanner && (
+                <div style={{ fontSize: 11, color: "var(--orange)", marginTop: 5, fontWeight: 700 }}>
+                  This will disable the current {form.display_format === "modal" ? "modal popup" : "banner strip"}: "{activeSameFormatBanner.message}"
+                </div>
+              )}
+            </div>
+            <input type="checkbox" checked={form.enabled} onChange={e => setForm(f => ({ ...f, enabled: e.target.checked }))} style={{ width: 18, height: 18, accentColor: "var(--orange)" }} />
+          </div>
+
+          <div className="input-group">
+            <label className="input-label">Message Text</label>
+            <textarea className="input" rows={3} maxLength={500} value={form.message_template} onChange={e => setForm(f => ({ ...f, message_template: e.target.value }))} />
+            <div style={{ fontSize: 11, color: 'var(--text-45)', marginTop: 4 }}>
+              {form.banner_type === "coupon_offer"
+                ? <>Use {"{coupon_code}"} to insert the linked coupon code.</>
+                : "Write the exact short text customers should see."}
             </div>
           </div>
-          <button
-            onClick={() => setVisible(v => !v)}
-            style={{
-              width: 44, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer',
-              background: visible ? 'var(--orange)' : 'rgba(247,227,201,.2)',
-              position: 'relative', flexShrink: 0, transition: 'background .2s',
-            }}
-          >
-            <span style={{
-              position: 'absolute', top: 2, left: visible ? 22 : 2,
-              width: 20, height: 20, borderRadius: '50%', background: '#fff',
-              transition: 'left .2s', display: 'block',
-            }} />
-          </button>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div className="input-group">
+              <label className="input-label">Banner Type</label>
+              <select
+                className="select"
+                value={form.banner_type}
+                onChange={e => setForm(f => ({
+                  ...f,
+                  banner_type: e.target.value,
+                  linked_coupon_id: e.target.value === "coupon_offer" ? f.linked_coupon_id : "",
+                }))}
+              >
+                <option value="coupon_offer">Coupon discount offer</option>
+                <option value="short_announcement">Short announcement</option>
+                <option value="general_offer">Offer for all without coupon</option>
+              </select>
+            </div>
+            <div className="input-group">
+              <label className="input-label">Linked Coupon</label>
+              <select
+                className="select"
+                value={form.linked_coupon_id}
+                disabled={form.banner_type !== "coupon_offer"}
+                onChange={e => setForm(f => ({ ...f, linked_coupon_id: e.target.value }))}
+              >
+                <option value="">No coupon</option>
+                {coupons.map(c => <option key={c.id} value={c.id}>{couponOptionLabel(c)}</option>)}
+              </select>
+              {form.banner_type !== "coupon_offer" && (
+                <div style={{ fontSize: 11, color: 'var(--text-45)', marginTop: 4 }}>
+                  Coupon is only used for coupon discount offer banners.
+                </div>
+              )}
+              {selectedCouponInactive && (
+                <div style={{ fontSize: 11, color: "var(--red)", marginTop: 4 }}>
+                  Warning: linked coupon "{selectedCoupon.code}" is not currently usable. You can preview it, but publishing an enabled banner with this coupon will be blocked.
+                </div>
+              )}
+            </div>
+            <div className="input-group">
+              <label className="input-label">Display Format</label>
+              <select className="select" value={form.display_format} onChange={e => setForm(f => ({ ...f, display_format: e.target.value }))}>
+                <option value="banner">Banner Strip</option>
+                <option value="modal">Modal Popup</option>
+              </select>
+            </div>
+            <div className="input-group">
+              <label className="input-label">Display Rule</label>
+              <select className="select" value={form.display_rule} onChange={e => setForm(f => ({ ...f, display_rule: e.target.value }))}>
+                <option value="once_per_session">Once per session</option>
+                <option value="once_per_device">Once per device</option>
+                <option value="every_visit">Every visit</option>
+              </select>
+            </div>
+            {form.display_rule === "once_per_device" && (
+              <div className="input-group">
+                <label className="input-label">Hide After Dismissal (days)</label>
+                <input className="input" type="number" min="1" max="365" value={form.suppress_days} onChange={e => setForm(f => ({ ...f, suppress_days: e.target.value }))} />
+                <div style={{ fontSize: 11, color: 'var(--text-45)', marginTop: 4 }}>
+                  For Once per device: after a visitor closes or uses this banner, hide this same banner version on that browser/device for this many days.
+                </div>
+              </div>
+            )}
+            <div className="input-group">
+              <label className="input-label">Start Date (Bangladesh time)</label>
+              <input className="input" type="datetime-local" value={form.start_at} onChange={e => setForm(f => ({ ...f, start_at: e.target.value }))} />
+            </div>
+            <div className="input-group">
+              <label className="input-label">End Date (Bangladesh time)</label>
+              <input className="input" type="datetime-local" value={form.end_at} onChange={e => setForm(f => ({ ...f, end_at: e.target.value }))} />
+            </div>
+          </div>
+
+          <div className="row mt8" style={{ gap: 10 }}>
+            <button className="btn btn-primary" onClick={saveBanner} disabled={saving || !form.message_template.trim()}>{saving ? "Saving..." : "Save Banner"}</button>
+            {form.id && <button className="btn btn-ghost" onClick={() => setForm(blank)}>Cancel</button>}
+          </div>
         </div>
 
-        {banner?.updated_at && (
-          <div style={{ fontSize: 12, color: 'var(--text-45)', marginBottom: 16 }}>
-            Last updated: {new Date(banner.updated_at).toLocaleString()}
+        <div className="card">
+          <div className="eyebrow mb16">Live Preview</div>
+          <div style={{ opacity: form.enabled ? 1 : .55 }}>
+            {form.display_format === "modal" ? (
+              <div style={{ background: "rgba(30,12,4,.24)", borderRadius: 8, padding: 18 }}>
+                <div style={{ background: "var(--cream)", color: "var(--burgundy)", borderRadius: 8, padding: 22, position: "relative" }}>
+                  <button className="icon-btn" style={{ position: "absolute", right: 10, top: 10, color: "var(--burgundy)" }}><i className="fa fa-times" /></button>
+                  <div style={{ color: "var(--orange)", fontSize: 11, fontWeight: 800, marginBottom: 8 }}>MIDNIGHT PICK</div>
+                  <div style={{ fontSize: 20, lineHeight: 1.3, fontWeight: 800 }}>{previewMessage || "Your announcement appears here."}</div>
+                  <div className="row mt16" style={{ gap: 8 }}>
+                    {hasPrimaryCta && <span className="btn btn-primary btn-sm">{selectedCoupon ? "Copy Code" : "Shop Now"}</span>}
+                    <span className="btn btn-ghost btn-sm">No thanks</span>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div style={{ background: "var(--burgundy)", color: "var(--cream)", borderRadius: 6, padding: "10px 14px", textAlign: "center", fontSize: 12, fontWeight: 700 }}>
+                {previewMessage || "Your announcement appears here."}
+                {hasPrimaryCta && <span style={{ color: "var(--orange)", marginLeft: 10 }}>{selectedCoupon ? "Copy Code" : "Shop Now"}</span>}
+              </div>
+            )}
           </div>
-        )}
-
-        <button
-          className="btn btn-primary"
-          onClick={handleSave}
-          disabled={saving || !text.trim()}
-        >
-          {saving ? 'Saving…' : 'Save Banner'}
-        </button>
+          {!form.enabled && <div className="text-xs text-muted mt8">Preview is dimmed because this banner is disabled.</div>}
+        </div>
       </div>
+
+      <SectionCard style={{ padding: 0, overflow: "hidden", marginTop: 16 }}>
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead><tr><th>Status</th><th>Type</th><th>Message</th><th>Coupon</th><th>Format</th><th>Rule</th><th>Schedule</th><th>Last Edited By</th><th>Last Edited At</th><th>Actions</th></tr></thead>
+            <tbody>
+              {banners.length === 0 ? (
+                <tr><td colSpan={10} style={{ textAlign: "center", padding: 32, color: "var(--text-65)" }}>No site banners yet.</td></tr>
+              ) : banners.map(b => (
+                <tr key={b.id}>
+                  <td><span className={`badge ${b.enabled ? "badge-green" : "badge-gray"}`}>{b.enabled ? "Enabled" : "Disabled"}</span></td>
+                  <td>{bannerTypeLabel(b.banner_type)}</td>
+                  <td style={{ maxWidth: 260 }}>{b.message}</td>
+                  <td>
+                    {b.coupon_code ? <span className="mono fw700">{b.coupon_code}</span> : <span className="muted">No coupon</span>}
+                    {b.linked_coupon_id && !b.linked_coupon_active && <div style={{ color: "var(--red)", fontSize: 10, marginTop: 3 }}>Inactive coupon</div>}
+                  </td>
+                  <td>{b.display_format === "modal" ? "Modal" : "Banner"}</td>
+                  <td>{b.display_rule.replace(/_/g, " ")}</td>
+                  <td className="muted">{b.start_at ? fmtDateTimeDhaka(b.start_at) : "Now"} - {b.end_at ? fmtDateTimeDhaka(b.end_at) : "No end"}</td>
+                  <td>{b.updated_by_admin_name || b.created_by_admin_name || "Admin"}</td>
+                  <td className="muted">{b.updated_at ? new Date(b.updated_at).toLocaleString() : "—"}</td>
+                  <td>
+                    <div className="cell-action">
+                      <button className="btn btn-sm btn-ghost" onClick={() => editBanner(b)}>Edit</button>
+                      <button className="btn btn-sm btn-ghost" onClick={() => toggleBanner(b)}>{b.enabled ? "Disable" : "Enable"}</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </SectionCard>
     </div>
   );
 }
@@ -3999,7 +4221,7 @@ function Sidebar({ section, setSection, onLogout }) {
     { id: "influencer", icon: "fa-bolt",            label: "Influencers" },
     { id: "points",     icon: "fa-star",            label: "Points" },
     { id: "sms",        icon: "fa-envelope",        label: "SMS" },
-    { id: "banner",     icon: "fa-bullhorn",         label: "Promo Banner" },
+    { id: "banner",     icon: "fa-bullhorn",         label: "Site Banner" },
     { id: "financials", icon: "fa-chart-line",      label: "Financials" },
     { id: "settings",   icon: "fa-cog",             label: "Settings" },
   ];
@@ -4053,7 +4275,7 @@ function AdminTabbar({ section, setSection, onLogout }) {
     { id: "influencer", icon: "fa-bolt",           label: "Influencers" },
     { id: "points",     icon: "fa-star",           label: "Points" },
     { id: "sms",        icon: "fa-envelope",       label: "SMS" },
-    { id: "banner",     icon: "fa-bullhorn",        label: "Promo Banner" },
+    { id: "banner",     icon: "fa-bullhorn",        label: "Site Banner" },
     { id: "financials", icon: "fa-chart-line",     label: "Financials" },
     { id: "settings",   icon: "fa-cog",            label: "Settings" },
   ];

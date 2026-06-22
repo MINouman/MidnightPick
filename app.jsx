@@ -129,12 +129,7 @@ function Nav({ onSignIn, loggedIn, dashUrl, onLogout }) {
   return (
     <>
       <nav className={"nav" + (scrolled ? " scrolled" : "")}>
-        <div className="nav-announcement">
-          <a href="shop.html" className="nav-announcement-link">
-            95g of Premium Freeze-Dried Coffee · ৳699 · Cash on Delivery across Bangladesh
-            <ArrowRight size={13} />
-          </a>
-        </div>
+        <SiteBannerManager fallbackMessage="95g of Premium Freeze-Dried Coffee · ৳699 · Cash on Delivery across Bangladesh" />
         <div className="nav-inner">
           <a href="#home" onClick={jump("home", "home")} aria-label="Midnight Pick — home" className="nav-logo-link">
             <Logo variant="dark" height={96} />

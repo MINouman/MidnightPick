@@ -75,6 +75,7 @@ async function revokeTokens(fastify, rawAccessToken, rawRefreshToken) {
             await redis.setex(`token:blacklist:${rawAccessToken}`, ttl, '1')
           } catch (err) {
             logCritical('Failed to blacklist access token in Redis', err)
+            if (process.env.NODE_ENV !== 'production') return
             throw { code: 'INTERNAL_ERROR', message: 'Logout failed - token revocation unavailable' }
           }
         }

@@ -15,6 +15,12 @@ const { getWeightBasedFee } = require('../services/delivery')
 const { sendOrderOtp, verifyOrderOtp, getOrderOtpStatus } = require('../services/order-otp')
 const { checkAndIncrementDailyLimit, getDailyCount, resetDailyCount, getPhoneOverride, DEFAULT_DAILY_LIMIT } = require('../services/otp-daily-limit')
 const { getFinancialSummary } = require('../services/financials')
+const {
+  ACTIVE_COUPON_WHERE,
+  BANNER_SELECT,
+  adminBanner,
+  getCouponForPublish,
+} = require('../services/site-banners')
 
 module.exports = async function adminRoutes(app) {
 
@@ -1363,6 +1369,237 @@ module.exports = async function adminRoutes(app) {
       [couponId, user_ids]
     )
     return { ok: true, data: { removed: rowCount } }
+  })
+
+  // ── Site Banner CRUD ───────────────────────────────────────────────────────
+  app.get('/banner-coupons', async () => {
+    const { rows } = await query(
+      `SELECT c.id, c.code, c.discount_type, c.discount_value, c.expires_at,
+              c.max_uses, c.used_count, c.type, c.status, c.is_active
+       FROM coupons c
+       ORDER BY
+         (c.is_active = true
+          AND COALESCE(c.status, 'active') = 'active'
+          AND (c.expires_at IS NULL OR c.expires_at >= NOW())
+          AND (c.max_uses IS NULL OR c.used_count < c.max_uses)) DESC,
+         c.created_at DESC`
+    )
+    return { ok: true, data: { coupons: rows } }
+  })
+
+  app.get('/banners', async () => {
+    const { rows } = await query(
+      `SELECT ${BANNER_SELECT}
+       FROM site_banners b
+       LEFT JOIN coupons c ON c.id = b.linked_coupon_id
+       LEFT JOIN users creator ON creator.id = b.created_by_admin_id
+       LEFT JOIN users updater ON updater.id = b.updated_by_admin_id
+       ORDER BY b.enabled DESC, b.created_at DESC`
+    )
+    return { ok: true, data: { banners: rows.map(adminBanner) } }
+  })
+
+  async function disableOtherEnabledBanners(client, { id = null, displayFormat, adminId }) {
+    const params = [displayFormat, adminId]
+    const idClause = id ? 'AND id <> $3' : ''
+    if (id) params.push(id)
+    await client.query(
+      `UPDATE site_banners
+       SET enabled = false, updated_by_admin_id = $2, updated_at = NOW()
+       WHERE enabled = true
+         AND display_format = $1
+         ${idClause}`,
+      params
+    )
+  }
+
+  app.post('/banners', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['message_template'],
+        properties: {
+          message_template: { type: 'string', minLength: 1, maxLength: 500 },
+          banner_type:      { type: 'string', enum: ['coupon_offer', 'short_announcement', 'general_offer'], default: 'short_announcement' },
+          linked_coupon_id: { type: ['string', 'null'], format: 'uuid' },
+          display_format:   { type: 'string', enum: ['banner', 'modal'], default: 'banner' },
+          display_rule:     { type: 'string', enum: ['once_per_session', 'once_per_device', 'every_visit'], default: 'once_per_session' },
+          suppress_days:    { type: 'integer', minimum: 1, maximum: 365, default: 30 },
+          start_at:         { type: ['string', 'null'], maxLength: 35 },
+          end_at:           { type: ['string', 'null'], maxLength: 35 },
+          enabled:          { type: 'boolean', default: false },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req, reply) => {
+    const body = req.body
+    const adminId = req.user.sub
+    const result = await withTransaction(async (client) => {
+      const bannerType = body.banner_type || 'short_announcement'
+      const displayFormat = body.display_format || 'banner'
+      if (body.enabled && bannerType === 'coupon_offer' && !body.linked_coupon_id) {
+        throw { code: 'VALIDATION_ERROR', message: 'Coupon offer banners require a linked active coupon.' }
+      }
+      if (body.enabled && bannerType === 'coupon_offer' && body.linked_coupon_id) await getCouponForPublish(client, body.linked_coupon_id)
+      if (body.enabled) await disableOtherEnabledBanners(client, { displayFormat, adminId })
+      const { rows } = await client.query(
+        `INSERT INTO site_banners
+          (banner_type, message_template, linked_coupon_id, display_format, display_rule, suppress_days,
+           start_at, end_at, enabled, created_by_admin_id, updated_by_admin_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)
+         RETURNING id`,
+        [
+          bannerType,
+          body.message_template.trim(),
+          bannerType === 'coupon_offer' ? body.linked_coupon_id || null : null,
+          displayFormat,
+          body.display_rule || 'once_per_session',
+          body.suppress_days || 30,
+          body.start_at || null,
+          body.end_at || null,
+          !!body.enabled,
+          adminId,
+        ]
+      )
+      const { rows: out } = await client.query(
+        `SELECT ${BANNER_SELECT}
+         FROM site_banners b
+         LEFT JOIN coupons c ON c.id = b.linked_coupon_id
+         LEFT JOIN users creator ON creator.id = b.created_by_admin_id
+         LEFT JOIN users updater ON updater.id = b.updated_by_admin_id
+         WHERE b.id = $1`,
+        [rows[0].id]
+      )
+      return adminBanner(out[0])
+    })
+    return reply.code(201).send({ ok: true, data: result })
+  })
+
+  app.patch('/banners/:id', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+      body: {
+        type: 'object',
+        properties: {
+          message_template: { type: 'string', minLength: 1, maxLength: 500 },
+          banner_type:      { type: 'string', enum: ['coupon_offer', 'short_announcement', 'general_offer'] },
+          linked_coupon_id: { type: ['string', 'null'], format: 'uuid' },
+          display_format:   { type: 'string', enum: ['banner', 'modal'] },
+          display_rule:     { type: 'string', enum: ['once_per_session', 'once_per_device', 'every_visit'] },
+          suppress_days:    { type: 'integer', minimum: 1, maximum: 365 },
+          start_at:         { type: ['string', 'null'], maxLength: 35 },
+          end_at:           { type: ['string', 'null'], maxLength: 35 },
+          enabled:          { type: 'boolean' },
+        },
+        additionalProperties: false,
+        minProperties: 1,
+      },
+    },
+  }, async (req) => {
+    const id = req.params.id
+    const adminId = req.user.sub
+    const result = await withTransaction(async (client) => {
+      const { rows: currentRows } = await client.query(
+        `SELECT id, banner_type, message_template, linked_coupon_id, display_format, enabled FROM site_banners WHERE id = $1 FOR UPDATE`,
+        [id]
+      )
+      if (!currentRows.length) throw { code: 'NOT_FOUND', message: 'Banner not found.' }
+      const current = currentRows[0]
+      const nextBannerType = Object.prototype.hasOwnProperty.call(req.body, 'banner_type')
+        ? req.body.banner_type
+        : current.banner_type
+      const nextCouponId = Object.prototype.hasOwnProperty.call(req.body, 'linked_coupon_id')
+        ? req.body.linked_coupon_id
+        : current.linked_coupon_id
+      const nextEnabled = Object.prototype.hasOwnProperty.call(req.body, 'enabled') ? req.body.enabled : current.enabled
+      const nextDisplayFormat = Object.prototype.hasOwnProperty.call(req.body, 'display_format')
+        ? req.body.display_format
+        : current.display_format
+      if (nextEnabled && nextBannerType === 'coupon_offer' && !nextCouponId) {
+        throw { code: 'VALIDATION_ERROR', message: 'Coupon offer banners require a linked active coupon.' }
+      }
+      if (nextEnabled && nextBannerType === 'coupon_offer' && nextCouponId) await getCouponForPublish(client, nextCouponId)
+      if (nextEnabled) await disableOtherEnabledBanners(client, { id, displayFormat: nextDisplayFormat, adminId })
+
+      const allowed = ['banner_type', 'message_template', 'linked_coupon_id', 'display_format', 'display_rule', 'suppress_days', 'start_at', 'end_at', 'enabled']
+      const entries = Object.entries(req.body).filter(([k]) => allowed.includes(k))
+      const sets = []
+      const vals = [id]
+      entries.forEach(([k, v]) => {
+        const value = k === 'message_template'
+          ? v.trim()
+          : k === 'linked_coupon_id' && nextBannerType !== 'coupon_offer'
+            ? null
+            : (v === '' ? null : v)
+        vals.push(value)
+        sets.push(`${k} = $${vals.length}`)
+      })
+      const contentChanged =
+        ('banner_type' in req.body && req.body.banner_type !== current.banner_type) ||
+        ('message_template' in req.body && req.body.message_template.trim() !== current.message_template) ||
+        ('linked_coupon_id' in req.body && (nextBannerType === 'coupon_offer' ? req.body.linked_coupon_id || null : null) !== (current.linked_coupon_id || null))
+      if (contentChanged) sets.push('version = version + 1')
+      sets.push(`updated_by_admin_id = $${vals.length + 1}`)
+      vals.push(adminId)
+      sets.push('updated_at = NOW()')
+
+      await client.query(`UPDATE site_banners SET ${sets.join(', ')} WHERE id = $1`, vals)
+      const { rows: out } = await client.query(
+        `SELECT ${BANNER_SELECT}
+         FROM site_banners b
+         LEFT JOIN coupons c ON c.id = b.linked_coupon_id
+         LEFT JOIN users creator ON creator.id = b.created_by_admin_id
+         LEFT JOIN users updater ON updater.id = b.updated_by_admin_id
+         WHERE b.id = $1`,
+        [id]
+      )
+      return adminBanner(out[0])
+    })
+    return { ok: true, data: result }
+  })
+
+  app.post('/banners/:id/toggle', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+    },
+  }, async (req) => {
+    const id = req.params.id
+    const adminId = req.user.sub
+    const result = await withTransaction(async (client) => {
+      const { rows: currentRows } = await client.query(
+        `SELECT id, banner_type, display_format, enabled, linked_coupon_id FROM site_banners WHERE id = $1 FOR UPDATE`,
+        [id]
+      )
+      if (!currentRows.length) throw { code: 'NOT_FOUND', message: 'Banner not found.' }
+      const nextEnabled = !currentRows[0].enabled
+      if (nextEnabled && currentRows[0].banner_type === 'coupon_offer' && !currentRows[0].linked_coupon_id) {
+        throw { code: 'VALIDATION_ERROR', message: 'Coupon offer banners require a linked active coupon.' }
+      }
+      if (nextEnabled && currentRows[0].banner_type === 'coupon_offer' && currentRows[0].linked_coupon_id) {
+        await getCouponForPublish(client, currentRows[0].linked_coupon_id)
+      }
+      if (nextEnabled) {
+        await disableOtherEnabledBanners(client, { id, displayFormat: currentRows[0].display_format, adminId })
+      }
+      await client.query(
+        `UPDATE site_banners
+         SET enabled = $2, updated_by_admin_id = $3, updated_at = NOW()
+         WHERE id = $1`,
+        [id, nextEnabled, adminId]
+      )
+      const { rows: out } = await client.query(
+        `SELECT ${BANNER_SELECT}
+         FROM site_banners b
+         LEFT JOIN coupons c ON c.id = b.linked_coupon_id
+         LEFT JOIN users creator ON creator.id = b.created_by_admin_id
+         LEFT JOIN users updater ON updater.id = b.updated_by_admin_id
+         WHERE b.id = $1`,
+        [id]
+      )
+      return adminBanner(out[0])
+    })
+    return { ok: true, data: result }
   })
 
   // ── Midnight Crew Management ──────────────────────────────────────────────

@@ -150,37 +150,40 @@ function ShopHeader({ onSignIn, productName, loggedIn, dashUrl, onLogout }) {
   }, []);
 
   return (
-    <header className="shop-header">
-      <a href="index.html" className="shop-header-back" aria-label="Back to home">
-        <i className="fa-solid fa-arrow-left" aria-hidden="true" />
-        <span>Home</span>
-        {productName && (
-          <>
-            <span className="shop-breadcrumb-sep">/</span>
-            <span className="shop-breadcrumb-current">{productName}</span>
-          </>
-        )}
-      </a>
-      <div className="shop-header-actions">
-        {loggedIn ? (
-          <>
-            <a href={dashUrl} className="nav-signin-btn">
-              <i className="fa-solid fa-gauge" aria-hidden="true" />
-              Dashboard
-            </a>
-            <button className="nav-signin-btn" onClick={onLogout}>
-              <i className="fa-solid fa-right-from-bracket" aria-hidden="true" />
-              Log Out
+    <>
+      <SiteBannerManager floating />
+      <header className="shop-header">
+        <a href="index.html" className="shop-header-back" aria-label="Back to home">
+          <i className="fa-solid fa-arrow-left" aria-hidden="true" />
+          <span>Home</span>
+          {productName && (
+            <>
+              <span className="shop-breadcrumb-sep">/</span>
+              <span className="shop-breadcrumb-current">{productName}</span>
+            </>
+          )}
+        </a>
+        <div className="shop-header-actions">
+          {loggedIn ? (
+            <>
+              <a href={dashUrl} className="nav-signin-btn">
+                <i className="fa-solid fa-gauge" aria-hidden="true" />
+                Dashboard
+              </a>
+              <button className="nav-signin-btn" onClick={onLogout}>
+                <i className="fa-solid fa-right-from-bracket" aria-hidden="true" />
+                Log Out
+              </button>
+            </>
+          ) : (
+            <button className="nav-signin-btn" onClick={onSignIn}>
+              <i className="fa-solid fa-right-to-bracket" aria-hidden="true" />
+              Sign In
             </button>
-          </>
-        ) : (
-          <button className="nav-signin-btn" onClick={onSignIn}>
-            <i className="fa-solid fa-right-to-bracket" aria-hidden="true" />
-            Sign In
-          </button>
-        )}
-      </div>
-    </header>
+          )}
+        </div>
+      </header>
+    </>
   );
 }
 
@@ -712,12 +715,13 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
         const vjson = await vres.json().catch(() => null);
         if (!vres.ok) {
           setErrorMsg(vjson?.error?.message || "This coupon can't be used for this order.");
-          setStep("error");
-          return;
-        }
+        setStep("error");
+        return;
       }
+      window.mpDismissBannerForCoupon?.(coupon);
+    }
 
-      const res = await fetch(`${API_BASE}/orders/request-otp`, {
+    const res = await fetch(`${API_BASE}/orders/request-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone: normalizedPhone, purpose: "checkout" }),
@@ -1640,6 +1644,7 @@ function ShopPage() {
       }
       setDiscount(json.data.discount);
       setCouponStatus("ok");
+      window.mpDismissBannerForCoupon?.(coupon.trim());
     } catch {
       setDiscount(0);
       setCouponError("Could not verify coupon. Please try again.");

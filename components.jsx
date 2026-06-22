@@ -947,7 +947,224 @@ function getMidnightApiBase() {
 }
 
 const API_BASE = getMidnightApiBase();
+const MP_BANNER_COOKIE = "mp_banner_dismissed";
+const MP_BANNER_CACHE_KEY = "mp_active_banner_cache_v5";
+const MP_BANNER_CACHE_TTL = 5 * 60 * 1000;
 const AUTH_INACTIVITY_LIMIT_MS = 5 * 60 * 1000;
+
+function readCookie(name) {
+  return document.cookie.split("; ").find(row => row.startsWith(`${name}=`))?.split("=")[1] || "";
+}
+
+function readBannerDismissal() {
+  const raw = readCookie(MP_BANNER_COOKIE);
+  if (!raw) return null;
+  try { return JSON.parse(atob(decodeURIComponent(raw))); } catch { return null; }
+}
+
+function writeBannerDismissal(banner, options = {}) {
+  if (!banner || (banner.display_rule === "every_visit" && !options.forceDevice)) return;
+  const payload = encodeURIComponent(btoa(JSON.stringify({
+    banner_id: banner.id,
+    version: banner.version,
+    dismissed_at: new Date().toISOString(),
+    used_coupon: !!options.forceDevice,
+  })));
+  const maxAge = banner.display_rule === "once_per_device" || options.forceDevice
+    ? `; Max-Age=${Math.max(1, Number(banner.suppress_days || 30)) * 86400}`
+    : "";
+  document.cookie = `${MP_BANNER_COOKIE}=${payload}; Path=/; SameSite=Lax${maxAge}`;
+}
+
+function isBannerDismissed(banner) {
+  if (!banner) return false;
+  const dismissal = readBannerDismissal();
+  if (banner.display_rule === "every_visit" && dismissal?.used_coupon !== true) return false;
+  return dismissal?.banner_id === banner.id && Number(dismissal?.version) === Number(banner.version);
+}
+
+async function fetchActiveSiteBanner(options = {}) {
+  try {
+    const cached = JSON.parse(localStorage.getItem(MP_BANNER_CACHE_KEY) || "null");
+    if (!options.force && cached && Date.now() - cached.fetched_at < MP_BANNER_CACHE_TTL) return cached.banner;
+  } catch {}
+  const res = await fetch(`${API_BASE}/banner/active`, { credentials: "include" });
+  const payload = res.status === 204 ? null : await res.json();
+  const banners = normalizeBannerPayload(payload);
+  try { localStorage.setItem(MP_BANNER_CACHE_KEY, JSON.stringify({ fetched_at: Date.now(), banner: banners })); } catch {}
+  return banners;
+}
+
+function normalizeBannerPayload(payload) {
+  if (!payload) return [];
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload.banners)) return payload.banners;
+  if (Array.isArray(payload.data?.banners)) return payload.data.banners;
+  const banner = payload.data || payload;
+  return banner?.id ? [banner] : [];
+}
+
+function notifyBannerDismissed(banner) {
+  try {
+    window.dispatchEvent(new CustomEvent("mp:banner-dismissed", {
+      detail: { banner_id: banner?.id, version: banner?.version },
+    }));
+  } catch {}
+}
+
+function isSmallBannerViewport() {
+  return typeof window !== "undefined" && window.matchMedia("(max-width: 900px)").matches;
+}
+
+async function dismissActiveBannerForCoupon(couponCode) {
+  const normalized = String(couponCode || "").trim().toUpperCase();
+  if (!normalized) return false;
+  const banners = await fetchActiveSiteBanner({ force: true }).catch(() => []);
+  const banner = normalizeBannerPayload(banners).find(b => b?.coupon_code && String(b.coupon_code).toUpperCase() === normalized);
+  if (!banner?.coupon_code || String(banner.coupon_code).toUpperCase() !== normalized) return false;
+  writeBannerDismissal(banner, { forceDevice: true });
+  notifyBannerDismissed(banner);
+  return true;
+}
+
+window.mpDismissBannerForCoupon = dismissActiveBannerForCoupon;
+
+function SiteBannerManager({ fallbackMessage, floating = false, previewBanner = null }) {
+  const [banners, setBanners] = React.useState(previewBanner ? [previewBanner] : null);
+  const [hasActiveBanner, setHasActiveBanner] = React.useState(!!previewBanner);
+  const [toast, setToast] = React.useState("");
+  const [isSmallViewport, setIsSmallViewport] = React.useState(isSmallBannerViewport);
+
+  React.useEffect(() => {
+    if (previewBanner) {
+      setBanners([previewBanner]);
+      setHasActiveBanner(true);
+      return;
+    }
+    let alive = true;
+    fetchActiveSiteBanner().then(activePayload => {
+      if (!alive) return;
+      const active = normalizeBannerPayload(activePayload);
+      setHasActiveBanner(active.length > 0);
+      setBanners(active.filter(b => !isBannerDismissed(b)));
+    }).catch(() => {
+      setHasActiveBanner(false);
+      setBanners([]);
+    });
+    return () => { alive = false; };
+  }, [previewBanner?.id, previewBanner?.version]);
+
+  React.useEffect(() => {
+    const onDismissed = (event) => {
+      const detail = event.detail || {};
+      setBanners(current => (current || []).filter(b => !(detail.banner_id === b.id && Number(detail.version) === Number(b.version))));
+    };
+    window.addEventListener("mp:banner-dismissed", onDismissed);
+    return () => window.removeEventListener("mp:banner-dismissed", onDismissed);
+  }, []);
+
+  React.useEffect(() => {
+    const media = window.matchMedia("(max-width: 900px)");
+    const sync = () => setIsSmallViewport(media.matches);
+    sync();
+    media.addEventListener?.("change", sync);
+    media.addListener?.(sync);
+    return () => {
+      media.removeEventListener?.("change", sync);
+      media.removeListener?.(sync);
+    };
+  }, []);
+
+  function dismiss(banner) {
+    writeBannerDismissal(banner);
+    notifyBannerDismissed(banner);
+    setBanners(current => (current || []).filter(b => b.id !== banner.id));
+  }
+
+  async function primaryAction(banner) {
+    if (banner?.coupon_code) {
+      try {
+        await navigator.clipboard.writeText(banner.coupon_code);
+        setToast(banner.id);
+      } catch {}
+      writeBannerDismissal(banner);
+      window.setTimeout(() => {
+        notifyBannerDismissed(banner);
+        setBanners(current => (current || []).filter(b => b.id !== banner.id));
+      }, 900);
+      return;
+    }
+    if (banner.banner_type === "general_offer") {
+      writeBannerDismissal(banner);
+      window.location.href = "shop.html";
+      return;
+    }
+    if (banner.display_format === "banner") {
+      dismiss(banner);
+      return;
+    }
+    dismiss(banner);
+  }
+
+  if ((!banners || banners.length === 0) && !hasActiveBanner && fallbackMessage) {
+    return (
+      <div className="nav-announcement">
+        <a href="shop.html" className="nav-announcement-link">
+          {fallbackMessage}
+          <ArrowRight size={13} />
+        </a>
+      </div>
+    );
+  }
+
+  if (!banners || banners.length === 0) return null;
+
+  const renderableBanners = banners.filter(b => !(isSmallViewport && b.display_format === "banner"));
+  if (renderableBanners.length === 0) return null;
+
+  const firstModalId = renderableBanners.find(b => b.display_format === "modal")?.id;
+  const renderOne = (banner) => {
+    if (banner.display_format === "modal") {
+      if (banner.id !== firstModalId) return null;
+      const modal = (
+        <div className="site-banner-modal-overlay" role="dialog" aria-modal="true" aria-label="Announcement">
+          <div className="site-banner-modal">
+            <button className="site-banner-close" onClick={() => dismiss(banner)} aria-label="Close announcement"><CloseIcon size={18} /></button>
+            <div className="site-banner-modal-eyebrow">Midnight Pick</div>
+            <div className="site-banner-modal-message">{banner.message}</div>
+            <div className="site-banner-modal-actions">
+              {(banner.coupon_code || banner.banner_type === "general_offer") && (
+                <button className="site-banner-primary" onClick={() => primaryAction(banner)}>{banner.coupon_code ? "Copy Code" : "Shop Now"}</button>
+              )}
+              <button className="site-banner-secondary" onClick={() => dismiss(banner)}>No thanks</button>
+            </div>
+            {toast === banner.id && <div className="site-banner-toast">Code copied</div>}
+          </div>
+        </div>
+      );
+      return ReactDOM?.createPortal ? ReactDOM.createPortal(modal, document.body) : modal;
+    }
+
+    return (
+      <div key={banner.id} className={"nav-announcement mp-site-banner" + (floating ? " mp-site-banner-floating" : "")}>
+        <div className="nav-announcement-link mp-site-banner-inner">
+          <span>{banner.message}</span>
+          {(banner.coupon_code || banner.banner_type === "general_offer") && (
+            <button className="mp-site-banner-cta" onClick={() => primaryAction(banner)}>{banner.coupon_code ? "Copy Code" : "Shop Now"}</button>
+          )}
+          <button className="mp-site-banner-dismiss" onClick={() => dismiss(banner)} aria-label="Dismiss announcement"><CloseIcon size={13} /></button>
+        </div>
+        {toast === banner.id && <span className="mp-site-banner-toast">Code copied</span>}
+      </div>
+    );
+  };
+
+  return (
+    <React.Fragment>
+      {renderableBanners.map(renderOne)}
+    </React.Fragment>
+  );
+}
 
 const ROLE_ROUTES = {
   user:       "dashboard-user.html",
