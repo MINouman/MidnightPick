@@ -505,6 +505,10 @@ function calculateProductSubtotal(product, qty) {
   }
 }
 
+function hasActiveProductDiscount(product) {
+  return !!product?.discount_enabled && Number(product.discount_value || 0) > 0
+}
+
 async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, otp, password, product_id }) {
   const normalizedPhone = normalizeBdMobile(phone)
   let verifiedUserId = null
@@ -534,6 +538,7 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
     let unitPrice   = GUEST_UNIT_PRICE
     let subtotal    = GUEST_UNIT_PRICE * qty
     let itemProductId = null
+    let productHasDiscount = false
     if (product_id) {
       const { rows: pRows } = await client.query(
         `SELECT name, price, discount_enabled, discount_type, discount_value, discount_max_qty
@@ -547,6 +552,7 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
       const pricing = calculateProductSubtotal(pRows[0], qty)
       unitPrice = pricing.unitPrice
       subtotal = pricing.subtotal
+      productHasDiscount = hasActiveProductDiscount(pRows[0])
       itemProductId = product_id
     }
 
@@ -563,6 +569,9 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
     let discountAmount = 0
     let coupon         = null
     if (coupon_code) {
+      if (productHasDiscount) {
+        throw { code: 'INVALID_COUPON', message: 'Coupon codes cannot be used on discounted products.' }
+      }
       const c = await validateCoupon(client, { code: coupon_code, subtotal, customerPhone: normalizedPhone, lock: true })
       discountAmount = c.discount
       coupon         = c.coupon
@@ -673,6 +682,7 @@ async function placeQuickOrder(userId, { product_id, qty, address, coupon_code, 
     let unitPrice   = GUEST_UNIT_PRICE
     let subtotal    = GUEST_UNIT_PRICE * qty
     let itemProductId = null
+    let productHasDiscount = false
     if (product_id) {
       const { rows: pRows } = await client.query(
         `SELECT name, price, discount_enabled, discount_type, discount_value, discount_max_qty
@@ -684,6 +694,7 @@ async function placeQuickOrder(userId, { product_id, qty, address, coupon_code, 
       const pricing = calculateProductSubtotal(pRows[0], qty)
       unitPrice = pricing.unitPrice
       subtotal = pricing.subtotal
+      productHasDiscount = hasActiveProductDiscount(pRows[0])
       itemProductId = product_id
     }
 
@@ -698,6 +709,9 @@ async function placeQuickOrder(userId, { product_id, qty, address, coupon_code, 
     let discountAmount = 0
     let coupon         = null
     if (coupon_code) {
+      if (productHasDiscount) {
+        throw { code: 'INVALID_COUPON', message: 'Coupon codes cannot be used on discounted products.' }
+      }
       const c = await validateCoupon(client, { code: coupon_code, subtotal, customerPhone: phone, userId, lock: true })
       discountAmount = c.discount
       coupon         = c.coupon

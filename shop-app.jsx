@@ -74,6 +74,11 @@ function calculateProductPricing(product, qty) {
   };
 }
 
+function hasProductDiscount(product) {
+  return Number(product?.discountAmount || 0) > 0 ||
+    Number(product?.originalPrice || 0) > Number(product?.salePrice || product?.price || 0);
+}
+
 function checkoutApiErrorMessage(error, fallback) {
   if (error?.retry_after_seconds) {
     const minutes = Math.max(1, Math.ceil(error.retry_after_seconds / 60));
@@ -735,10 +740,15 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
       }
 
       if (coupon) {
+        if (hasProductDiscount(product)) {
+          setErrorMsg("Coupon codes cannot be used on discounted products.");
+          setStep("error");
+          return;
+        }
         const vres = await fetch(`${API_BASE}/coupons/validate`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ code: coupon, subtotal: pricing.productSubtotal, customer_phone: normalizedPhone }),
+          body: JSON.stringify({ code: coupon, subtotal: pricing.productSubtotal, customer_phone: normalizedPhone, ...(product?.id ? { product_id: product.id } : {}) }),
         });
         const vjson = await vres.json().catch(() => null);
         if (!vres.ok) {
@@ -1228,6 +1238,7 @@ function BuySheet({ open, onClose, qty, setQty, coupon, setCoupon, couponStatus,
   const pricing = calculateProductPricing(product, qty);
   const totalPrice = Math.max(0, pricing.productSubtotal - discount);
   const showOldPrice = pricing.productDiscountTotal > 0 || discount > 0;
+  const productDiscounted = hasProductDiscount(product);
 
   useEffect(() => {
     document.body.style.overflow = open ? "hidden" : "";
@@ -1260,30 +1271,37 @@ function BuySheet({ open, onClose, qty, setQty, coupon, setCoupon, couponStatus,
         </div>
 
         {/* coupon -  force row layout even on mobile */}
-        <div className="shop-coupon-row">
-          <div className="shop-coupon-wrap" style={{ flexDirection: "row", borderRadius: 8 }}>
-            <input
-              className={"shop-coupon-input" + (couponStatus === "ok" ? " coupon-ok" : couponStatus === "err" ? " coupon-err" : "")}
-              type="text"
-              placeholder="Enter coupon code"
-              value={coupon}
-              onChange={e => { setCoupon(e.target.value.toUpperCase()); setCouponStatus("idle"); }}
-              onKeyDown={e => e.key === "Enter" && verifyCoupon()}
-              aria-label="Coupon code"
-            />
-            <button className="shop-coupon-btn" onClick={verifyCoupon} style={{ borderRadius: 0, padding: "0 18px" }}>Verify</button>
+        {productDiscounted ? (
+          <div className="shop-coupon-disabled">
+            <i className="fa-solid fa-tag" aria-hidden="true" />
+            Coupon codes cannot be used on discounted products.
           </div>
-          {couponStatus === "ok" && (
-            <span className="shop-coupon-msg shop-coupon-msg--ok">
-              <i className="fa-solid fa-circle-check" aria-hidden="true" /> Coupon applied -  ৳{discount} off
-            </span>
-          )}
-          {couponStatus === "err" && (
-            <span className="shop-coupon-msg shop-coupon-msg--err">
-              <i className="fa-solid fa-circle-xmark" aria-hidden="true" /> {couponError}
-            </span>
-          )}
-        </div>
+        ) : (
+          <div className="shop-coupon-row">
+            <div className="shop-coupon-wrap" style={{ flexDirection: "row", borderRadius: 8 }}>
+              <input
+                className={"shop-coupon-input" + (couponStatus === "ok" ? " coupon-ok" : couponStatus === "err" ? " coupon-err" : "")}
+                type="text"
+                placeholder="Enter coupon code"
+                value={coupon}
+                onChange={e => { setCoupon(e.target.value.toUpperCase()); setCouponStatus("idle"); }}
+                onKeyDown={e => e.key === "Enter" && verifyCoupon()}
+                aria-label="Coupon code"
+              />
+              <button className="shop-coupon-btn" onClick={verifyCoupon} style={{ borderRadius: 0, padding: "0 18px" }}>Verify</button>
+            </div>
+            {couponStatus === "ok" && (
+              <span className="shop-coupon-msg shop-coupon-msg--ok">
+                <i className="fa-solid fa-circle-check" aria-hidden="true" /> Coupon applied - ৳{discount} off
+              </span>
+            )}
+            {couponStatus === "err" && (
+              <span className="shop-coupon-msg shop-coupon-msg--err">
+                <i className="fa-solid fa-circle-xmark" aria-hidden="true" /> {couponError}
+              </span>
+            )}
+          </div>
+        )}
 
         {/* qty + proceed */}
         <div className="shop-qty-row" style={{ marginBottom: 14 }}>
@@ -1673,7 +1691,17 @@ function ShopPage() {
   useEffect(() => { sessionStorage.setItem("mp_cart", JSON.stringify(cart)); }, [cart]);
 
   const pricing = calculateProductPricing(product, qty);
+  const productDiscounted = hasProductDiscount(product);
   const totalPrice = Math.max(0, pricing.productSubtotal - discount);
+
+  useEffect(() => {
+    if (!productDiscounted) return;
+    setCoupon("");
+    setCouponStatus("idle");
+    setCouponError("");
+    setDiscount(0);
+    setCouponOpen(false);
+  }, [productDiscounted, product.id]);
 
   const switchImage = (idx) => {
     setActiveImg(idx);
@@ -1682,12 +1710,18 @@ function ShopPage() {
 
   const verifyCoupon = async () => {
     if (!coupon.trim()) return;
+    if (productDiscounted) {
+      setDiscount(0);
+      setCouponStatus("err");
+      setCouponError("Coupon codes cannot be used on discounted products.");
+      return;
+    }
     setCouponStatus("loading");
     setCouponError("");
     try {
       const subtotal = pricing.productSubtotal;
       const res  = await fetch(
-        `${API_BASE}/coupons/verify?code=${encodeURIComponent(coupon.trim())}&subtotal=${subtotal}`,
+        `${API_BASE}/coupons/verify?code=${encodeURIComponent(coupon.trim())}&subtotal=${subtotal}${product.id ? `&product_id=${encodeURIComponent(product.id)}` : ""}`,
         { credentials: "include" }  // send auth cookie so specific coupons can check login
       );
       const json = await res.json();
@@ -1877,43 +1911,52 @@ function ShopPage() {
             <span className="shop-trust-chip"><i className="fa-solid fa-shield-halved" aria-hidden="true" /> Sealed Pack</span>
           </div>
 
-          {/* Collapsible coupon — hidden on mobile */}
-          <button
-            className="shop-coupon-toggle"
-            onClick={() => setCouponOpen(c => !c)}
-            aria-expanded={couponOpen}
-          >
-            <i className="fa-solid fa-tag" aria-hidden="true" />
-            Have a coupon?
-            <i className={`fa-solid fa-chevron-${couponOpen ? "up" : "down"}`} aria-hidden="true" />
-          </button>
-          {couponOpen && (
-            <div className="shop-coupon-row">
-              <div className="shop-coupon-wrap">
-                <input
-                  className={"shop-coupon-input" + (couponStatus === "ok" ? " coupon-ok" : couponStatus === "err" ? " coupon-err" : "")}
-                  type="text"
-                  placeholder="Enter coupon code"
-                  value={coupon}
-                  onChange={e => { setCoupon(e.target.value.toUpperCase()); setCouponStatus("idle"); }}
-                  onKeyDown={e => e.key === "Enter" && verifyCoupon()}
-                  aria-label="Coupon code"
-                />
-                <button className="shop-coupon-btn" onClick={verifyCoupon} disabled={couponStatus === "loading"}>
-                  {couponStatus === "loading" ? <i className="fa-solid fa-spinner fa-spin" aria-hidden="true" /> : "Apply"}
-                </button>
-              </div>
-              {couponStatus === "ok" && (
-                <span className="shop-coupon-msg shop-coupon-msg--ok">
-                  <i className="fa-solid fa-circle-check" aria-hidden="true" /> Coupon applied — ৳{discount} off
-                </span>
-              )}
-              {couponStatus === "err" && (
-                <span className="shop-coupon-msg shop-coupon-msg--err">
-                  <i className="fa-solid fa-circle-xmark" aria-hidden="true" /> {couponError}
-                </span>
-              )}
+          {productDiscounted ? (
+            <div className="shop-coupon-disabled">
+              <i className="fa-solid fa-tag" aria-hidden="true" />
+              Coupon codes cannot be used on discounted products.
             </div>
+          ) : (
+            <>
+              {/* Collapsible coupon — hidden on mobile */}
+              <button
+                className="shop-coupon-toggle"
+                onClick={() => setCouponOpen(c => !c)}
+                aria-expanded={couponOpen}
+              >
+                <i className="fa-solid fa-tag" aria-hidden="true" />
+                Have a coupon?
+                <i className={`fa-solid fa-chevron-${couponOpen ? "up" : "down"}`} aria-hidden="true" />
+              </button>
+              {couponOpen && (
+                <div className="shop-coupon-row">
+                  <div className="shop-coupon-wrap">
+                    <input
+                      className={"shop-coupon-input" + (couponStatus === "ok" ? " coupon-ok" : couponStatus === "err" ? " coupon-err" : "")}
+                      type="text"
+                      placeholder="Enter coupon code"
+                      value={coupon}
+                      onChange={e => { setCoupon(e.target.value.toUpperCase()); setCouponStatus("idle"); }}
+                      onKeyDown={e => e.key === "Enter" && verifyCoupon()}
+                      aria-label="Coupon code"
+                    />
+                    <button className="shop-coupon-btn" onClick={verifyCoupon} disabled={couponStatus === "loading"}>
+                      {couponStatus === "loading" ? <i className="fa-solid fa-spinner fa-spin" aria-hidden="true" /> : "Apply"}
+                    </button>
+                  </div>
+                  {couponStatus === "ok" && (
+                    <span className="shop-coupon-msg shop-coupon-msg--ok">
+                      <i className="fa-solid fa-circle-check" aria-hidden="true" /> Coupon applied — ৳{discount} off
+                    </span>
+                  )}
+                  {couponStatus === "err" && (
+                    <span className="shop-coupon-msg shop-coupon-msg--err">
+                      <i className="fa-solid fa-circle-xmark" aria-hidden="true" /> {couponError}
+                    </span>
+                  )}
+                </div>
+              )}
+            </>
           )}
 
         </div>

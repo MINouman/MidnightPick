@@ -20,6 +20,20 @@ function softReadUserId(app, req) {
   }
 }
 
+async function assertNoProductDiscount(productId) {
+  if (!productId) return
+  const { rows } = await query(
+    `SELECT discount_enabled, discount_value
+     FROM products
+     WHERE id = $1`,
+    [productId]
+  )
+  const p = rows[0]
+  if (p?.discount_enabled && Number(p.discount_value || 0) > 0) {
+    throw { code: 'INVALID_COUPON', message: 'Coupon codes cannot be used on discounted products.' }
+  }
+}
+
 module.exports = async function couponsRoutes(app) {
 
   // GET /coupons/verify?code=XXX&subtotal=YYY — public coupon validation
@@ -33,11 +47,13 @@ module.exports = async function couponsRoutes(app) {
         properties: {
           code:     { type: 'string', maxLength: 20 },
           subtotal: { type: 'number', minimum: 0 },
+          product_id: { type: 'string', format: 'uuid' },
         },
       },
     },
   }, async (req) => {
-    const { code, subtotal } = req.query
+    const { code, subtotal, product_id } = req.query
+    await assertNoProductDiscount(product_id)
     const userId = softReadUserId(app, req)
     const { coupon: c, discount } = await validateCoupon({ query }, { code, subtotal, userId })
     return { ok: true, data: { code: c.code, discount, discount_type: c.discount_type, discount_value: c.discount_value } }
@@ -53,11 +69,13 @@ module.exports = async function couponsRoutes(app) {
           code: { type: 'string', maxLength: 20 },
           subtotal: { type: 'number', minimum: 0 },
           customer_phone: { type: 'string', maxLength: 25 },
+          product_id: { type: 'string', format: 'uuid' },
         },
       },
     },
   }, async (req) => {
-    const { code, subtotal, customer_phone } = req.body
+    const { code, subtotal, customer_phone, product_id } = req.body
+    await assertNoProductDiscount(product_id)
     let customerPhone = customer_phone || null
     if (customerPhone) { try { customerPhone = normalizeBdMobile(customerPhone) } catch { /* keep raw */ } }
     const userId = softReadUserId(app, req)

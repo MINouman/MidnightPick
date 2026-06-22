@@ -858,6 +858,21 @@ module.exports = async function adminRoutes(app) {
       let coupon = null
       let discountInt = Math.min(Math.round(discount_amount), subtotal)
       if (coupon_code) {
+        const productIds = items.map(it => it.id).filter(Boolean)
+        if (productIds.length) {
+          const { rows: discounted } = await client.query(
+            `SELECT name
+             FROM products
+             WHERE id = ANY($1::uuid[])
+               AND discount_enabled = true
+               AND discount_value > 0
+             LIMIT 1`,
+            [productIds]
+          )
+          if (discounted.length) {
+            throw { code: 'INVALID_COUPON', message: 'Coupon codes cannot be used on discounted products.' }
+          }
+        }
         const v = await validateCoupon(client, { code: coupon_code, subtotal, customerPhone: couponPhone, lock: true })
         coupon = v.coupon
         discountInt = v.discount
