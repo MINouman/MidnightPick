@@ -22,6 +22,12 @@ const {
   getCouponForPublish,
 } = require('../services/site-banners')
 
+const PRODUCT_PRICE_RETURNING = `
+  id, sku, name, description, category, badge, status, price,
+  discount_enabled, discount_type, discount_value, discount_max_qty, discount_label,
+  stock, qty, unit, roast, origin, blend, process, images, created_at
+`
+
 module.exports = async function adminRoutes(app) {
 
   // Ensure requester is an admin on every route in this plugin
@@ -937,8 +943,7 @@ module.exports = async function adminRoutes(app) {
   // GET /admin/products
   app.get('/products', async () => {
     const { rows } = await query(
-      `SELECT id, sku, name, description, category, badge, status, price, stock, qty, unit,
-              roast, origin, blend, process, images, created_at
+      `SELECT ${PRODUCT_PRICE_RETURNING}
        FROM products ORDER BY created_at DESC`
     )
     return { ok: true, data: { products: rows } }
@@ -954,6 +959,11 @@ module.exports = async function adminRoutes(app) {
           name:        { type: 'string', minLength: 1, maxLength: 255 },
           description: { type: 'string', maxLength: 5000 },
           price:       { type: 'number', minimum: 0 },
+          discount_enabled: { type: 'boolean' },
+          discount_type:    { type: 'string', enum: ['flat', 'percent'] },
+          discount_value:   { type: 'number', minimum: 0 },
+          discount_max_qty: { type: ['integer', 'null'], minimum: 1 },
+          discount_label:   { type: ['string', 'null'], maxLength: 100 },
           stock:       { type: 'integer', minimum: 0 },
           qty:         { type: 'integer', minimum: 1 },
           unit:        { type: 'string', maxLength: 20 },
@@ -971,15 +981,18 @@ module.exports = async function adminRoutes(app) {
     },
   }, async (req, reply) => {
     const { name, description, price, stock = 0, qty, unit, status = 'Active', images = [],
-            category, badge, roast, origin, blend, process } = req.body
+            category, badge, roast, origin, blend, process,
+            discount_enabled = false, discount_type = 'flat', discount_value = 0, discount_max_qty, discount_label } = req.body
     const { rows } = await query(
       `INSERT INTO products (name, description, price, stock, qty, unit, status, images,
-                             category, badge, roast, origin, blend, process)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, $13, $14)
-       RETURNING id, sku, name, description, category, badge, status, price, stock, qty, unit,
-                 roast, origin, blend, process, images, created_at`,
+                             category, badge, roast, origin, blend, process,
+                             discount_enabled, discount_type, discount_value, discount_max_qty, discount_label)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, $13, $14,
+               $15, $16, $17, $18, $19)
+       RETURNING ${PRODUCT_PRICE_RETURNING}`,
       [name, description || null, price, stock, qty || null, unit || null, status, JSON.stringify(images),
-       category || null, badge || null, roast || null, origin || null, blend || null, process || null]
+       category || null, badge || null, roast || null, origin || null, blend || null, process || null,
+       !!discount_enabled, discount_type || 'flat', discount_value || 0, discount_max_qty || null, discount_label || null]
     )
     return reply.code(201).send({ ok: true, data: rows[0] })
   })
@@ -994,6 +1007,11 @@ module.exports = async function adminRoutes(app) {
           name:        { type: 'string', minLength: 1, maxLength: 255 },
           description: { type: 'string', maxLength: 5000 },
           price:       { type: 'number', minimum: 0 },
+          discount_enabled: { type: 'boolean' },
+          discount_type:    { type: 'string', enum: ['flat', 'percent'] },
+          discount_value:   { type: 'number', minimum: 0 },
+          discount_max_qty: { type: ['integer', 'null'], minimum: 1 },
+          discount_label:   { type: ['string', 'null'], maxLength: 100 },
           stock:       { type: 'integer', minimum: 0 },
           qty:         { type: 'integer', minimum: 1 },
           unit:        { type: 'string', maxLength: 20 },
@@ -1012,7 +1030,8 @@ module.exports = async function adminRoutes(app) {
   }, async (req) => {
     const fields = req.body
     const allowed = ['name', 'description', 'price', 'stock', 'qty', 'unit', 'status', 'images',
-                     'category', 'badge', 'roast', 'origin', 'blend', 'process']
+                     'category', 'badge', 'roast', 'origin', 'blend', 'process',
+                     'discount_enabled', 'discount_type', 'discount_value', 'discount_max_qty', 'discount_label']
     const sets = []
     const params = []
     for (const key of allowed) {
@@ -1031,8 +1050,7 @@ module.exports = async function adminRoutes(app) {
     const { rows } = await query(
       `UPDATE products SET ${sets.join(', ')}, updated_at = NOW()
        WHERE id = $${params.length}
-       RETURNING id, sku, name, description, category, badge, status, price, stock, qty, unit,
-                 roast, origin, blend, process, images, created_at`,
+       RETURNING ${PRODUCT_PRICE_RETURNING}`,
       params
     )
     if (!rows.length) throw { code: 'NOT_FOUND', message: 'Product not found.' }

@@ -323,6 +323,7 @@ function ProductRow({ p, onAdd }) {
         <div className="prod-row-meta">
           {p.old && <span className="prod-row-old">৳{p.old}</span>}
           <span className="prod-row-price">৳{p.price}</span>
+          {p.offer && <span className="prod-row-offer">{p.offer}</span>}
           {p.badge && <span className="badge" style={{ fontSize: 9, padding: "2px 7px" }}>{p.badge}</span>}
         </div>
       </div>
@@ -347,8 +348,9 @@ function Collection({ onAdd }) {
             id: p.id,
             name: p.name,
             badge: p.badge || p.category || null,
-            price: p.price,
-            old: null,
+            price: p.sale_price || p.price,
+            old: Number(p.discount_amount || 0) > 0 ? p.price : null,
+            offer: Number(p.discount_amount || 0) > 0 ? (p.discount_label || `Save ৳${p.discount_amount}`) : null,
             desc: p.description || "",
             specs: p.qty && p.unit ? `${p.unit.toUpperCase()} · ${p.qty}g` : "",
             images: p.images || [],

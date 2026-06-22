@@ -3297,6 +3297,15 @@ function serializeBlend(parts) {
   return valid.length ? valid.map(p => `${p.variety} ${p.pct}%`).join(" · ") : "";
 }
 
+function calcProductDiscount(p) {
+  const price = parseFloat(p?.price) || 0;
+  const value = parseFloat(p?.discount_value) || 0;
+  if (!p?.discount_enabled || value <= 0 || price <= 0) return { salePrice: price, amount: 0 };
+  const raw = p.discount_type === "percent" ? Math.round(price * value / 100) : value;
+  const amount = Math.min(price, Math.max(0, raw));
+  return { salePrice: Math.max(0, price - amount), amount };
+}
+
 function Products() {
   const [prodTab, setProdTab] = useState("Products");
   const { adminProducts: products, setAdminProducts: setProducts } = useContext(DashCtx);
@@ -3307,7 +3316,7 @@ function Products() {
   const fileRef = useRef(null);
   const activeImgIdx = useRef(0);
 
-  const emptyProd = { name: "", description: "", price: "", stock: "", qty: "", unit: "g", status: "Active", images: [], category: "", badge: "", roast: "", origin: "" };
+  const emptyProd = { name: "", description: "", price: "", stock: "", qty: "", unit: "g", status: "Active", images: [], category: "", badge: "", roast: "", origin: "", discount_enabled: false, discount_type: "flat", discount_value: "", discount_max_qty: "", discount_label: "" };
   const [form, setForm] = useState(emptyProd);
   const [blendMode, setBlendMode]       = useState("single"); // "single" | "blend"
   const [singleVariety, setSingleVariety] = useState("Robusta");
@@ -3355,7 +3364,7 @@ function Products() {
   }
 
   function openEditProduct(p) {
-    setForm({ ...p, price: String(p.price), stock: String(p.stock), qty: p.qty ? String(p.qty) : "", unit: p.unit || "g", images: p.images || (p.image ? [p.image] : []), category: p.category || "", badge: p.badge || "", roast: p.roast || "", origin: p.origin || "" });
+    setForm({ ...p, price: String(p.price), stock: String(p.stock), qty: p.qty ? String(p.qty) : "", unit: p.unit || "g", images: p.images || (p.image ? [p.image] : []), category: p.category || "", badge: p.badge || "", roast: p.roast || "", origin: p.origin || "", discount_enabled: !!p.discount_enabled, discount_type: p.discount_type || "flat", discount_value: p.discount_value ? String(p.discount_value) : "", discount_max_qty: p.discount_max_qty ? String(p.discount_max_qty) : "", discount_label: p.discount_label || "" });
     const mode = p.blend && p.blend.includes("%") ? "blend" : "single";
     setBlendMode(mode);
     if (mode === "single") {
@@ -3371,12 +3380,18 @@ function Products() {
 
   async function saveProduct() {
     if (!form.name || !form.price || !(form.images?.length)) return;
+    const maxDiscountQty = parseInt(form.discount_max_qty);
     const body = {
       name:   form.name,
       price:  parseFloat(form.price) || 0,
       stock:  parseInt(form.stock) || 0,
       status: form.status,
       images: form.images || [],
+      discount_enabled: !!form.discount_enabled,
+      discount_type: form.discount_type || "flat",
+      discount_value: parseFloat(form.discount_value) || 0,
+      discount_max_qty: maxDiscountQty > 0 ? maxDiscountQty : null,
+      discount_label: form.discount_label || null,
     };
     if (form.description) body.description = form.description;
     const qtyVal = parseInt(form.qty);
@@ -3479,7 +3494,20 @@ function Products() {
                 </div>
                 <div className="text-xs text-muted" style={{ lineHeight: 1.5, flex: 1, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical" }}>{p.description}</div>
                 <div className="row-between" style={{ flexShrink: 0 }}>
-                  <div style={{ color: "var(--orange)", fontWeight: 700, fontSize: 16 }}>৳{p.price}</div>
+                  <div>
+                    {(() => {
+                      const pricing = calcProductDiscount(p);
+                      return pricing.amount > 0 ? (
+                        <div style={{ display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap" }}>
+                          <span style={{ color: "var(--orange)", fontWeight: 700, fontSize: 16 }}>৳{pricing.salePrice}</span>
+                          <span style={{ color: "var(--text-45)", fontSize: 12, textDecoration: "line-through" }}>৳{p.price}</span>
+                          <span className="badge badge-green" style={{ fontSize: 9 }}>Discount</span>
+                        </div>
+                      ) : (
+                        <div style={{ color: "var(--orange)", fontWeight: 700, fontSize: 16 }}>৳{p.price}</div>
+                      );
+                    })()}
+                  </div>
                   <div className="text-xs text-muted">{p.qty && p.unit ? <span style={{ marginRight: 8 }}>{p.qty}{p.unit}</span> : null}Stock: {p.stock}</div>
                 </div>
                 <div className="row" style={{ gap: 8, flexShrink: 0 }}>
@@ -3595,6 +3623,38 @@ function Products() {
                   <label className="input-label">Stock Quantity</label>
                   <input className="input" type="number" min="0" placeholder="100" value={form.stock} onChange={e => setForm(f => ({ ...f, stock: e.target.value }))} />
                 </div>
+              </div>
+              <div className="input-group" style={{ padding: 12, borderRadius: 8, border: "1px solid rgba(255,160,0,.22)", background: "rgba(255,160,0,.06)" }}>
+                <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, cursor: "pointer" }}>
+                  <span>
+                    <span className="input-label" style={{ marginBottom: 3 }}>Product Discount</span>
+                    <span className="text-xs text-muted">Shown on product pages and applied at checkout.</span>
+                  </span>
+                  <input type="checkbox" checked={!!form.discount_enabled} onChange={e => setForm(f => ({ ...f, discount_enabled: e.target.checked }))} />
+                </label>
+                {form.discount_enabled && (
+                  <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <div>
+                      <label className="input-label">Discount Type</label>
+                      <select className="select" value={form.discount_type} onChange={e => setForm(f => ({ ...f, discount_type: e.target.value }))}>
+                        <option value="flat">Flat ৳ off</option>
+                        <option value="percent">Percent off</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="input-label">{form.discount_type === "percent" ? "Value (%)" : "Value (৳)"}</label>
+                      <input className="input" type="number" min="0" step="1" placeholder={form.discount_type === "percent" ? "15" : "100"} value={form.discount_value} onChange={e => setForm(f => ({ ...f, discount_value: e.target.value }))} />
+                    </div>
+                    <div>
+                      <label className="input-label">Max Discount Qty</label>
+                      <input className="input" type="number" min="1" step="1" placeholder="No cap" value={form.discount_max_qty} onChange={e => setForm(f => ({ ...f, discount_max_qty: e.target.value }))} />
+                    </div>
+                    <div>
+                      <label className="input-label">Offer Label</label>
+                      <input className="input" placeholder="Limited offer" value={form.discount_label} onChange={e => setForm(f => ({ ...f, discount_label: e.target.value }))} />
+                    </div>
+                  </div>
+                )}
               </div>
               <div className="input-group">
                 <label className="input-label">Quantity (grams)</label>

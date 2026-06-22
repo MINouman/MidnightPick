@@ -26,6 +26,11 @@ const PRODUCT_DEFAULT = {
   inStock: true,
   badge: "",
   price: 0,
+  originalPrice: 0,
+  salePrice: 0,
+  discountAmount: 0,
+  discountMaxQty: null,
+  discountLabel: "",
   desc: "",
   roast: "",
   origin: "",
@@ -49,6 +54,25 @@ function getMidnightApiBase() {
 const API_BASE = getMidnightApiBase();
 const THUMB_LABELS = ["Front", "Back"];
 const BD_MOBILE_PATTERN = /^01[3-9]\d{8}$/;
+
+function calculateProductPricing(product, qty) {
+  const originalPrice = Number(product.originalPrice || product.price || 0);
+  const salePrice = Number(product.salePrice || product.price || 0);
+  const discountPerUnit = Math.max(0, originalPrice - salePrice);
+  const discountedQty = discountPerUnit > 0
+    ? (product.discountMaxQty ? Math.min(qty, Number(product.discountMaxQty)) : qty)
+    : 0;
+  const originalSubtotal = originalPrice * qty;
+  const productDiscountTotal = discountPerUnit * discountedQty;
+  return {
+    originalPrice,
+    salePrice,
+    originalSubtotal,
+    productSubtotal: originalSubtotal - productDiscountTotal,
+    productDiscountTotal,
+    discountedQty,
+  };
+}
 
 function checkoutApiErrorMessage(error, fallback) {
   if (error?.retry_after_seconds) {
@@ -245,6 +269,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
   const [selectedAddressId, setSelectedAddressId] = useState("");
   const [loadingAddresses, setLoadingAddresses] = useState(false);
   const [showAddAddressForm, setShowAddAddressForm] = useState(false);
+  const [addressSaveStatus, setAddressSaveStatus] = useState(null);
   const [newAddressLabel, setNewAddressLabel] = useState("");
   const [newAddressLine1, setNewAddressLine1] = useState("");
   const [newAddressCity, setNewAddressCity] = useState("");
@@ -252,8 +277,8 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
   const otpRefs  = useRef([]);
   const timerRef = useRef(null);
 
-  const finalPrice = product.price - discount;
-  const totalPrice = finalPrice * qty;
+  const pricing = calculateProductPricing(product, qty);
+  const totalPrice = Math.max(0, pricing.productSubtotal - discount);
   const activeUser = checkoutUser;
 
   useEffect(() => {
@@ -308,6 +333,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
       setPhoneStatus(null); setPhoneChecking(false);
       setCity(""); setArea(""); setStreet("");
       setShowAddAddressForm(false);
+      setAddressSaveStatus(null);
       setNewAddressLabel(""); setNewAddressLine1(""); setNewAddressCity(""); setNewAddressDistrict("");
       setName("");
       setPhone("");
@@ -452,7 +478,8 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
         <div style={{ fontFamily: "var(--font-display)", fontWeight: 600, fontSize: 13, color: "#571F29" }}>
           {product.name} -  {product.weight} × {qty}
         </div>
-        {discount > 0 && <div style={{ fontSize: 11, color: "rgba(87,31,41,.5)", marginTop: 2 }}>Coupon applied -  ৳{discount} off / unit</div>}
+        {pricing.productDiscountTotal > 0 && <div style={{ fontSize: 11, color: "rgba(87,31,41,.5)", marginTop: 2 }}>{product.discountLabel || "Product offer"} - ৳{pricing.productDiscountTotal.toLocaleString()} off</div>}
+        {discount > 0 && <div style={{ fontSize: 11, color: "rgba(87,31,41,.5)", marginTop: 2 }}>Coupon applied - ৳{discount.toLocaleString()} off</div>}
       </div>
       <span style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 17, color: "#FF9100" }}>৳{totalPrice.toLocaleString()}</span>
     </div>
@@ -587,6 +614,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
         setCheckoutUser(user);
         setTrustedDeviceCheckout(false);
         setCheckoutVerificationTicket(json.data.verification_ticket || "");
+        setPhoneStatus({ phone: normalizedPhone, trusted: true, user, addresses: savedAddresses });
         if (user?.name) setName(user.name);
         setStep("details");
       } catch (err) {
@@ -710,7 +738,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
         const vres = await fetch(`${API_BASE}/coupons/validate`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ code: coupon, subtotal: product.price * qty, customer_phone: normalizedPhone }),
+          body: JSON.stringify({ code: coupon, subtotal: pricing.productSubtotal, customer_phone: normalizedPhone }),
         });
         const vjson = await vres.json().catch(() => null);
         if (!vres.ok) {
@@ -943,18 +971,19 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
                   type="button"
                   onClick={() => {
                     setSelectedAddressId("");
-                    if (!trustedDeviceCheckout) setShowAddAddressForm(!showAddAddressForm);
+                    setAddressSaveStatus(null);
+                    setShowAddAddressForm(v => !v);
                   }}
                   style={{ fontSize: 12, color: "#FF9100", background: "none", border: "none", cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 2, fontWeight: 600, marginBottom: 12 }}
                 >
                   <i className="fa-solid fa-plus" aria-hidden="true" style={{ marginRight: 4 }} />
-                  {trustedDeviceCheckout ? "Use Different Address" : "Add New Address"}
+                  {showAddAddressForm ? "Use Manual Address" : "Add New Address"}
                 </button>
               </>
             )}
 
             {/* No addresses prompt (logged in but no saved addresses) */}
-            {activeUser?.id && !trustedDeviceCheckout && savedAddresses.length === 0 && !showAddAddressForm && !loadingAddresses && (
+            {activeUser?.id && savedAddresses.length === 0 && !showAddAddressForm && !loadingAddresses && (
               <div style={{ padding: "12px 12px", background: "rgba(255,145,0,.08)", borderRadius: 8, border: "1px solid rgba(255,145,0,.2)", marginBottom: 12 }}>
                 <p style={{ margin: "0 0 8px", fontFamily: "var(--font-body)", fontSize: 13, color: "rgba(87,31,41,.75)", fontWeight: 600 }}>
                   <i className="fa-solid fa-location-dot" aria-hidden="true" style={{ marginRight: 6, color: "#FF9100" }} />
@@ -962,7 +991,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
                 </p>
                 <button
                   type="button"
-                  onClick={() => setShowAddAddressForm(true)}
+                  onClick={() => { setAddressSaveStatus(null); setShowAddAddressForm(true); }}
                   style={{ fontSize: 12, color: "#FF9100", background: "none", border: "none", cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 2, fontWeight: 600 }}
                 >
                   <i className="fa-solid fa-plus" aria-hidden="true" style={{ marginRight: 4 }} />
@@ -972,7 +1001,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
             )}
 
             {/* Add new address form */}
-            {!trustedDeviceCheckout && (showAddAddressForm || (activeUser?.id && savedAddresses.length === 0)) && (
+            {(showAddAddressForm || (activeUser?.id && savedAddresses.length === 0)) && (
               <div style={{ background: "rgba(87,31,41,.04)", padding: 12, borderRadius: 8, marginBottom: 12 }}>
                 <div style={{ marginBottom: 10 }}>
                   <label style={{ ...lbl, fontSize: 11, marginBottom: 4 }}>Address Label (e.g., Home, Office)</label>
@@ -981,7 +1010,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
                     type="text"
                     placeholder="Address label"
                     value={newAddressLabel}
-                    onChange={e => setNewAddressLabel(e.target.value)}
+                    onChange={e => { setNewAddressLabel(e.target.value); setAddressSaveStatus(null); }}
                     disabled={isBusy}
                   />
                 </div>
@@ -993,7 +1022,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
                     type="text"
                     placeholder="House no., road, block, building…"
                     value={newAddressLine1}
-                    onChange={e => setNewAddressLine1(e.target.value)}
+                    onChange={e => { setNewAddressLine1(e.target.value); setAddressSaveStatus(null); }}
                     disabled={isBusy}
                   />
                 </div>
@@ -1004,7 +1033,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
                     <select
                       style={{ ...field, appearance: "none", WebkitAppearance: "none", paddingRight: 30, cursor: "pointer", color: newAddressCity ? "#1A0A0D" : "rgba(26,10,13,.38)" }}
                       value={newAddressCity}
-                      onChange={e => { setNewAddressCity(e.target.value); setNewAddressDistrict(""); }}
+                      onChange={e => { setNewAddressCity(e.target.value); setNewAddressDistrict(""); setAddressSaveStatus(null); }}
                       disabled={isBusy}
                     >
                       <option value="">City</option>
@@ -1020,7 +1049,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
                     <select
                       style={{ ...field, appearance: "none", WebkitAppearance: "none", paddingRight: 30, cursor: newAddressCity ? "pointer" : "not-allowed", color: newAddressDistrict ? "#1A0A0D" : "rgba(26,10,13,.38)", opacity: newAddressCity ? 1 : 0.55 }}
                       value={newAddressDistrict}
-                      onChange={e => setNewAddressDistrict(e.target.value)}
+                      onChange={e => { setNewAddressDistrict(e.target.value); setAddressSaveStatus(null); }}
                       disabled={!newAddressCity || isBusy}
                     >
                       <option value="">{newAddressCity ? "Select area" : "Area"}</option>
@@ -1037,37 +1066,47 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
                     type="button"
                     onClick={async () => {
                       if (!newAddressLine1.trim() || !newAddressCity) {
-                        setErrorMsg("Please fill in street address and city.");
+                        setAddressSaveStatus({ type: "err", message: "Please fill in street address and city." });
                         return;
                       }
                       setIsBusy(true);
+                      setAddressSaveStatus(null);
                       try {
-                        const res = await fetch(`${API_BASE}/me/addresses`, {
+                        const useCheckoutAddressApi = !!checkoutVerificationTicket || trustedDeviceCheckout || !loggedUser?.id;
+                        const addressPayload = {
+                          label: newAddressLabel.trim() || "Untitled",
+                          line1: newAddressLine1.trim(),
+                          city: newAddressCity,
+                          district: newAddressDistrict,
+                          is_default: savedAddresses.length === 0,
+                        };
+                        const res = await fetch(`${API_BASE}${useCheckoutAddressApi ? "/orders/checkout-address" : "/me/addresses"}`, {
                           method: "POST",
                           credentials: "include",
                           headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({
-                            label: newAddressLabel.trim() || "Untitled",
-                            line1: newAddressLine1.trim(),
-                            city: newAddressCity,
-                            district: newAddressDistrict,
-                            is_default: savedAddresses.length === 0,
-                          }),
+                          body: JSON.stringify(useCheckoutAddressApi
+                            ? { ...addressPayload, phone: normalizedPhone, ...(checkoutVerificationTicket ? { verification_ticket: checkoutVerificationTicket } : {}) }
+                            : addressPayload),
                         });
-                        const json = await res.json();
-                        if (!res.ok) {
-                          setErrorMsg(json?.error?.message || "Failed to save address.");
+                        const json = await res.json().catch(() => null);
+                        if (!res.ok || !json?.ok) {
+                          setAddressSaveStatus({ type: "err", message: json?.error?.message || "Failed to save address. Please sign in again and retry." });
                           return;
                         }
-                        setSavedAddresses([...savedAddresses, json.data]);
+                        if (!json?.data?.id) {
+                          setAddressSaveStatus({ type: "err", message: "Address saved response was incomplete. Please refresh and retry." });
+                          return;
+                        }
+                        setSavedAddresses(prev => [...prev, json.data]);
                         setSelectedAddressId(json.data.id);
                         setNewAddressLabel(""); setNewAddressLine1(""); setNewAddressCity(""); setNewAddressDistrict("");
                         setShowAddAddressForm(false);
                         setStreet(json.data.line1);
                         setCity(json.data.city);
                         setArea(json.data.district);
+                        setAddressSaveStatus({ type: "ok", message: "Address saved and selected for this order." });
                       } catch (err) {
-                        setErrorMsg(err.message);
+                        setAddressSaveStatus({ type: "err", message: err.message || "Failed to save address." });
                       } finally {
                         setIsBusy(false);
                       }
@@ -1088,11 +1127,24 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
                     </button>
                   )}
                 </div>
+                {addressSaveStatus && (
+                  <div style={{ marginTop: 8, fontFamily: "var(--font-body)", fontSize: 12, color: addressSaveStatus.type === "ok" ? "#1E9E60" : "#C82828", fontWeight: 600 }}>
+                    <i className={`fa-solid ${addressSaveStatus.type === "ok" ? "fa-circle-check" : "fa-circle-xmark"}`} aria-hidden="true" style={{ marginRight: 5 }} />
+                    {addressSaveStatus.message}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {addressSaveStatus && !showAddAddressForm && (
+              <div style={{ marginBottom: 10, fontFamily: "var(--font-body)", fontSize: 12, color: addressSaveStatus.type === "ok" ? "#1E9E60" : "#C82828", fontWeight: 600 }}>
+                <i className={`fa-solid ${addressSaveStatus.type === "ok" ? "fa-circle-check" : "fa-circle-xmark"}`} aria-hidden="true" style={{ marginRight: 5 }} />
+                {addressSaveStatus.message}
               </div>
             )}
 
             {/* Manual address entry (for guests or if not using saved addresses) */}
-            {(!activeUser?.id || selectedAddressId === "") && (
+            {(!showAddAddressForm && (!activeUser?.id || selectedAddressId === "")) && (
               <>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
                   <div style={{ position: "relative" }}>
@@ -1173,8 +1225,9 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
 
 // ── Buy Sheet (mobile) ────────────────────────────────────────────────────────
 function BuySheet({ open, onClose, qty, setQty, coupon, setCoupon, couponStatus, setCouponStatus, couponError, discount, verifyCoupon, addToCart, addedAnim, product, onBuyNow, onCreateAccount }) {
-  const finalPrice = product.price - discount;
-  const totalPrice = finalPrice * qty;
+  const pricing = calculateProductPricing(product, qty);
+  const totalPrice = Math.max(0, pricing.productSubtotal - discount);
+  const showOldPrice = pricing.productDiscountTotal > 0 || discount > 0;
 
   useEffect(() => {
     document.body.style.overflow = open ? "hidden" : "";
@@ -1193,12 +1246,15 @@ function BuySheet({ open, onClose, qty, setQty, coupon, setCoupon, couponStatus,
             <div className="buy-sheet-product-name">{product.name} -  {product.weight}</div>
             <div className="buy-sheet-price">
               ৳{totalPrice.toLocaleString()}
-              {discount > 0 && (
+              {showOldPrice && (
                 <span style={{ fontSize: 13, fontWeight: 500, color: "rgba(87,31,41,0.5)", textDecoration: "line-through", marginLeft: 8 }}>
-                  ৳{(product.price * qty).toLocaleString()}
+                  ৳{pricing.originalSubtotal.toLocaleString()}
                 </span>
               )}
             </div>
+            {pricing.productDiscountTotal > 0 && (
+              <div className="shop-product-offer-note">{product.discountLabel || `Save ৳${pricing.productDiscountTotal.toLocaleString()}`}</div>
+            )}
           </div>
           <button className="buy-sheet-close" onClick={onClose} aria-label="Close">×</button>
         </div>
@@ -1589,7 +1645,12 @@ function ShopPage() {
         setProduct({
           id:       p.id,
           name:     p.name || "",
-          price:    p.price || 0,
+          price:    Number(p.sale_price || p.price || 0),
+          originalPrice: Number(p.price || 0),
+          salePrice: Number(p.sale_price || p.price || 0),
+          discountAmount: Number(p.discount_amount || 0),
+          discountMaxQty: p.discount_max_qty || null,
+          discountLabel: p.discount_label || "",
           desc:     p.description || "",
           weight:   p.qty ? `${p.qty}${p.unit || 'g'}` : "",
           category: p.category || "",
@@ -1611,8 +1672,8 @@ function ShopPage() {
 
   useEffect(() => { sessionStorage.setItem("mp_cart", JSON.stringify(cart)); }, [cart]);
 
-  const finalPrice = product.price - discount;
-  const totalPrice = finalPrice * qty;
+  const pricing = calculateProductPricing(product, qty);
+  const totalPrice = Math.max(0, pricing.productSubtotal - discount);
 
   const switchImage = (idx) => {
     setActiveImg(idx);
@@ -1624,7 +1685,7 @@ function ShopPage() {
     setCouponStatus("loading");
     setCouponError("");
     try {
-      const subtotal = product.price * qty;
+      const subtotal = pricing.productSubtotal;
       const res  = await fetch(
         `${API_BASE}/coupons/verify?code=${encodeURIComponent(coupon.trim())}&subtotal=${subtotal}`,
         { credentials: "include" }  // send auth cookie so specific coupons can check login
@@ -1653,7 +1714,7 @@ function ShopPage() {
   };
 
   const addToCart = () => {
-    const item = { id: product.id || "blend", name: product.name, price: finalPrice, qty };
+    const item = { id: product.id || "blend", name: product.name, price: totalPrice / qty, qty };
     setCart(c => [...c, item]);
     const id = Math.random().toString(36).slice(2);
     setToasts(ts => [...ts, { id, name: `${product.name}${product.weight ? ' -  ' + product.weight : ''}` }]);
@@ -1758,13 +1819,17 @@ function ShopPage() {
 
           <div className="shop-price-row">
             <span className="shop-price">৳{totalPrice.toLocaleString()}</span>
-            {discount > 0 && (
+            {(pricing.productDiscountTotal > 0 || discount > 0) && (
               <>
-                <span className="shop-old-price">৳{(product.price * qty).toLocaleString()}</span>
-                <span className="shop-save-badge">Coupon Applied</span>
+                <span className="shop-old-price">৳{pricing.originalSubtotal.toLocaleString()}</span>
+                {pricing.productDiscountTotal > 0 && <span className="shop-save-badge">{product.discountLabel || `Save ৳${pricing.productDiscountTotal.toLocaleString()}`}</span>}
+                {discount > 0 && <span className="shop-save-badge shop-save-badge--coupon">Coupon Applied</span>}
               </>
             )}
           </div>
+          {pricing.productDiscountTotal > 0 && product.discountMaxQty && (
+            <div className="shop-product-offer-note">Offer applies to first {product.discountMaxQty} {Number(product.discountMaxQty) === 1 ? "unit" : "units"} per order.</div>
+          )}
 
           <p className="shop-desc">{product.desc}</p>
 
@@ -1867,8 +1932,8 @@ function ShopPage() {
       <div className="shop-sticky-cta">
         <div className="shop-sticky-cta-left">
           <span className="shop-sticky-price">৳{totalPrice.toLocaleString()}</span>
-          {discount > 0 && (
-            <span className="shop-sticky-old">৳{(product.price * qty).toLocaleString()}</span>
+          {(pricing.productDiscountTotal > 0 || discount > 0) && (
+            <span className="shop-sticky-old">৳{pricing.originalSubtotal.toLocaleString()}</span>
           )}
         </div>
         <button

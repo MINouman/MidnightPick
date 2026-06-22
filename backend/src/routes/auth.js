@@ -288,6 +288,24 @@ module.exports = async function authRoutes(app) {
       user = found.user
       isNew = found.isNew
     }
+    if (['checkout', 'new_device_checkout'].includes(purpose)) {
+      const tokens = await createTokenPair(app, user)
+      reply.setCookie('mp_access_token', tokens.access_token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'Lax',
+        path: '/',
+        maxAge: 15 * 60 * 1000
+      })
+      reply.setCookie('mp_refresh_token', tokens.refresh_token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'Lax',
+        path: '/',
+        maxAge: 30 * 24 * 60 * 60 * 1000
+      })
+      setCheckoutTrustCookie(app, reply, user)
+    }
     return reply.send({
       ok: true,
       data: {

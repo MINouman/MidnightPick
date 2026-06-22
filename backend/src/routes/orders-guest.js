@@ -4,6 +4,7 @@ const ordersSvc = require('../services/orders')
 const otpSvc    = require('../services/otp')
 const usersSvc  = require('../services/users')
 const { verifyOtpTicket } = require('../services/otp-ticket')
+const { rotateRefreshToken } = require('../services/tokens')
 const { normalizeBdMobile } = require('../services/phone')
 
 const CHECKOUT_TRUST_COOKIE = 'mp_checkout_trust'
@@ -33,31 +34,66 @@ function isSavedAddress(address, savedAddresses) {
   return !!normalized && savedAddresses.some(addr => normalizeAddressLine(addr.line1) === normalized)
 }
 
-async function getTrustedCheckoutUser(app, req, phone) {
-  const token = req.cookies?.[CHECKOUT_TRUST_COOKIE]
-  if (!token) return null
+function matchesPhone(user, phone) {
+  try {
+    return !!user && user.is_active && normalizeBdMobile(user.phone || '') === phone
+  } catch {
+    return false
+  }
+}
 
+async function userFromAccessToken(app, token, phone) {
+  if (!token) return null
   let decoded
   try {
     decoded = app.jwt.verify(token)
   } catch {
     return null
   }
-
-  if (decoded?.purpose !== 'checkout_trust') return null
-  try {
-    if (normalizeBdMobile(decoded.phone || '') !== phone) return null
-  } catch {
-    return null
-  }
-
   const user = await usersSvc.getUserById(decoded.sub)
+  return matchesPhone(user, phone) ? user : null
+}
+
+async function getTrustedCheckoutUser(app, req, reply, phone) {
+  const trustToken = req.cookies?.[CHECKOUT_TRUST_COOKIE]
+  if (trustToken) {
+    let decoded
+    try {
+      decoded = app.jwt.verify(trustToken)
+    } catch {
+      decoded = null
+    }
+    if (decoded?.purpose === 'checkout_trust') {
+      const user = await usersSvc.getUserById(decoded.sub)
+      if (matchesPhone(user, phone)) return user
+    }
+  }
+
+  const accessUser = await userFromAccessToken(app, req.cookies?.mp_access_token, phone)
+  if (accessUser) return accessUser
+
+  const refreshToken = req.cookies?.mp_refresh_token
+  if (!refreshToken || !reply) return null
   try {
-    if (!user || !user.is_active || normalizeBdMobile(user.phone || '') !== phone) return null
+    const tokens = await rotateRefreshToken(app, refreshToken)
+    reply.setCookie('mp_access_token', tokens.access_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'Lax',
+      path: '/',
+      maxAge: 15 * 60 * 1000
+    })
+    reply.setCookie('mp_refresh_token', tokens.refresh_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'Lax',
+      path: '/',
+      maxAge: 30 * 24 * 60 * 60 * 1000
+    })
+    return userFromAccessToken(app, tokens.access_token, phone)
   } catch {
     return null
   }
-  return user
 }
 
 module.exports = async function guestOrderRoutes(app) {
@@ -96,7 +132,7 @@ module.exports = async function guestOrderRoutes(app) {
     },
   }, async (req, reply) => {
     const phone = normalizeBdMobile(req.body.phone)
-    const user = await getTrustedCheckoutUser(app, req, phone)
+    const user = await getTrustedCheckoutUser(app, req, reply, phone)
     if (!user) return reply.send({ ok: true, data: { trusted: false } })
 
     const addresses = await usersSvc.getAddresses(user.id)
@@ -108,6 +144,55 @@ module.exports = async function guestOrderRoutes(app) {
         addresses,
       },
     })
+  })
+
+  // POST /orders/checkout-address — save an address during checkout using
+  // either the verified checkout ticket from OTP or this browser's checkout
+  // trust cookie. This is intentionally narrower than /me/addresses.
+  app.post('/checkout-address', {
+    config: { rateLimit: { max: 10, timeWindow: '10 minutes' } },
+    schema: {
+      body: {
+        type: 'object',
+        required: ['phone', 'label', 'line1'],
+        properties: {
+          phone:       { type: 'string', minLength: 10, maxLength: 20 },
+          verification_ticket: { type: 'string', minLength: 1 },
+          label:      { type: 'string', minLength: 1, maxLength: 50 },
+          line1:      { type: 'string', minLength: 1, maxLength: 255 },
+          city:       { type: 'string', maxLength: 100 },
+          district:   { type: 'string', maxLength: 100 },
+          is_default: { type: 'boolean' },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req, reply) => {
+    const phone = normalizeBdMobile(req.body.phone)
+    let user = await getTrustedCheckoutUser(app, req, reply, phone)
+
+    if (!user && req.body.verification_ticket) {
+      const ticket = await verifyOtpTicket(app, req.body.verification_ticket, ['checkout', 'new_device_checkout', 'change_address'])
+      if (normalizeBdMobile(ticket.phone || '') !== phone) {
+        throw { code: 'INVALID_OTP_TICKET', message: 'Verification phone does not match this address.' }
+      }
+      const found = await usersSvc.findOrCreateUser(phone)
+      user = found.user
+    }
+
+    if (!user) {
+      throw { code: 'UNAUTHORIZED', message: 'Phone verification is required before saving an address.' }
+    }
+
+    const addr = await usersSvc.createAddress(user.id, {
+      label: req.body.label,
+      line1: req.body.line1,
+      city: req.body.city || null,
+      district: req.body.district || null,
+      is_default: !!req.body.is_default,
+    })
+    setCheckoutTrustCookie(app, reply, user)
+    return reply.code(201).send({ ok: true, data: addr })
   })
 
   // POST /orders/trusted — same-device checkout after prior OTP verification
@@ -131,7 +216,7 @@ module.exports = async function guestOrderRoutes(app) {
     },
   }, async (req, reply) => {
     const phone = normalizeBdMobile(req.body.phone)
-    const user = await getTrustedCheckoutUser(app, req, phone)
+    const user = await getTrustedCheckoutUser(app, req, reply, phone)
     if (!user) throw { code: 'UNAUTHORIZED', message: 'Phone verification is required for this device.' }
 
     const addresses = await usersSvc.getAddresses(user.id)

@@ -483,6 +483,28 @@ async function trackOrder(orderRef) {
 const GUEST_PRODUCT_NAME = 'Midnight Blend — 95g Pouch'
 const GUEST_UNIT_PRICE   = 699
 
+function calculateProductSubtotal(product, qty) {
+  const basePrice = Number(product?.price || GUEST_UNIT_PRICE)
+  if (!product?.discount_enabled || Number(product.discount_value || 0) <= 0) {
+    return { subtotal: basePrice * qty, unitPrice: basePrice, discountPerUnit: 0 }
+  }
+
+  const rawDiscount = product.discount_type === 'percent'
+    ? Math.round((basePrice * Number(product.discount_value || 0)) / 100)
+    : Number(product.discount_value || 0)
+  const discountPerUnit = Math.min(basePrice, Math.max(0, rawDiscount))
+  const discountedQty = product.discount_max_qty
+    ? Math.min(qty, Number(product.discount_max_qty))
+    : qty
+  const subtotal = (basePrice - discountPerUnit) * discountedQty + basePrice * (qty - discountedQty)
+
+  return {
+    subtotal,
+    unitPrice: subtotal / qty,
+    discountPerUnit,
+  }
+}
+
 async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, otp, password, product_id }) {
   const normalizedPhone = normalizeBdMobile(phone)
   let verifiedUserId = null
@@ -510,17 +532,21 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
     // Resolve product price — use DB price if product_id provided, else hardcoded default
     let productName = GUEST_PRODUCT_NAME
     let unitPrice   = GUEST_UNIT_PRICE
+    let subtotal    = GUEST_UNIT_PRICE * qty
     let itemProductId = null
     if (product_id) {
       const { rows: pRows } = await client.query(
-        `SELECT name, price FROM products WHERE id = $1 AND LOWER(status) = 'active'`,
+        `SELECT name, price, discount_enabled, discount_type, discount_value, discount_max_qty
+         FROM products WHERE id = $1 AND LOWER(status) = 'active'`,
         [product_id]
       )
       // No silent fallback: the customer must get the product they ordered,
       // at its real price — not the hardcoded default.
       if (!pRows.length) throw { code: 'INVALID_ITEM', message: 'This product is not available right now.' }
       productName = pRows[0].name
-      unitPrice   = parseInt(pRows[0].price, 10)
+      const pricing = calculateProductSubtotal(pRows[0], qty)
+      unitPrice = pricing.unitPrice
+      subtotal = pricing.subtotal
       itemProductId = product_id
     }
 
@@ -531,8 +557,6 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
       )
       if (!rowCount) throw { code: 'INSUFFICIENT_STOCK', message: 'Not enough stock for this product.' }
     }
-
-    const subtotal = unitPrice * qty
 
     // Coupon rejections propagate — silently charging full price when the
     // customer expected a discount is worse than asking them to retry.
@@ -569,7 +593,7 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
     await client.query(
       `INSERT INTO order_items (order_id, product_id, name_snapshot, qty, unit_price, subtotal)
        VALUES ($1, $2, $3, $4, $5, $6)`,
-      [order.id, itemProductId, productName, qty, unitPrice, unitPrice * qty]
+      [order.id, itemProductId, productName, qty, unitPrice, subtotal]
     )
 
     if (coupon) {
@@ -647,15 +671,19 @@ async function placeQuickOrder(userId, { product_id, qty, address, coupon_code, 
     // Resolve product price
     let productName = GUEST_PRODUCT_NAME
     let unitPrice   = GUEST_UNIT_PRICE
+    let subtotal    = GUEST_UNIT_PRICE * qty
     let itemProductId = null
     if (product_id) {
       const { rows: pRows } = await client.query(
-        `SELECT name, price FROM products WHERE id = $1 AND LOWER(status) = 'active'`,
+        `SELECT name, price, discount_enabled, discount_type, discount_value, discount_max_qty
+         FROM products WHERE id = $1 AND LOWER(status) = 'active'`,
         [product_id]
       )
       if (!pRows.length) throw { code: 'INVALID_ITEM', message: 'This product is not available right now.' }
       productName = pRows[0].name
-      unitPrice   = parseInt(pRows[0].price, 10)
+      const pricing = calculateProductSubtotal(pRows[0], qty)
+      unitPrice = pricing.unitPrice
+      subtotal = pricing.subtotal
       itemProductId = product_id
     }
 
@@ -666,8 +694,6 @@ async function placeQuickOrder(userId, { product_id, qty, address, coupon_code, 
       )
       if (!rowCount) throw { code: 'INSUFFICIENT_STOCK', message: 'Not enough stock for this product.' }
     }
-
-    const subtotal = unitPrice * qty
 
     let discountAmount = 0
     let coupon         = null
@@ -702,7 +728,7 @@ async function placeQuickOrder(userId, { product_id, qty, address, coupon_code, 
     await client.query(
       `INSERT INTO order_items (order_id, product_id, name_snapshot, qty, unit_price, subtotal)
        VALUES ($1, $2, $3, $4, $5, $6)`,
-      [order.id, itemProductId, productName, qty, unitPrice, unitPrice * qty]
+      [order.id, itemProductId, productName, qty, unitPrice, subtotal]
     )
 
     if (coupon) {
