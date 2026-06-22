@@ -11,6 +11,15 @@
   <link rel="stylesheet" href="dashboard.css" />
   <script src="vendor/react.production.min.js" crossorigin="anonymous"></script>
   <script src="vendor/react-dom.production.min.js" crossorigin="anonymous"></script>
+  <script>
+    (function () {
+      const warn = console.warn.bind(console);
+      console.warn = function (...args) {
+        if (String(args[0] || "").includes("in-browser Babel transformer")) return;
+        warn(...args);
+      };
+    })();
+  </script>
   <script src="vendor/babel-standalone.min.js" crossorigin="anonymous"></script>
 </head>
 <body>

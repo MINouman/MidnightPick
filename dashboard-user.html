@@ -11,6 +11,15 @@
   <link rel="stylesheet" href="dashboard.css" />
   <script src="vendor/react.production.min.js" crossorigin="anonymous"></script>
   <script src="vendor/react-dom.production.min.js" crossorigin="anonymous"></script>
+  <script>
+    (function () {
+      const warn = console.warn.bind(console);
+      console.warn = function (...args) {
+        if (String(args[0] || "").includes("in-browser Babel transformer")) return;
+        warn(...args);
+      };
+    })();
+  </script>
   <script src="vendor/babel-standalone.min.js" crossorigin="anonymous"></script>
   <script src="vendor/sweetalert2.all.min.js"></script>
 </head>
@@ -18,7 +27,7 @@
   <div id="root"></div>
   <script src="mp-api.js"></script>
   <script type="text/babel" src="loading-screen.jsx"></script>
-  <script type="text/babel" src="feedback-widgets.jsx"></script>
+  <script type="text/babel" src="feedback-widgets.jsx?v=20260622-auth-review-guard"></script>
   <script type="text/babel" src="dashboard-user.jsx"></script>
 </body>
 </html>

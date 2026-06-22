@@ -18,6 +18,14 @@
 
   const MP_API = getMidnightApiBase();
 
+  function hasLocalSignedInUser() {
+    try {
+      return !!JSON.parse(localStorage.getItem("mp_user") || "{}")?.role;
+    } catch {
+      return false;
+    }
+  }
+
   // ── Shared styles ──────────────────────────────────────────────────────────
   const css = `
   .mpw-card {
@@ -300,6 +308,7 @@
 
     React.useEffect(() => {
       if (manual) return;
+      if (!hasLocalSignedInUser()) return;
       if (localStorage.getItem(DONE_KEY)) return;
       const snooze = parseInt(localStorage.getItem(SNOOZE_KEY) || "0", 10);
       if (snooze > Date.now()) return;

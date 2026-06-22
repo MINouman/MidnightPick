@@ -132,6 +132,15 @@
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="vendor/react.production.min.js" crossorigin="anonymous"></script>
   <script src="vendor/react-dom.production.min.js" crossorigin="anonymous"></script>
+  <script>
+    (function () {
+      const warn = console.warn.bind(console);
+      console.warn = function (...args) {
+        if (String(args[0] || "").includes("in-browser Babel transformer")) return;
+        warn(...args);
+      };
+    })();
+  </script>
   <script src="vendor/babel-standalone.min.js" crossorigin="anonymous"></script>
   <script src="vendor/marked.min.js"></script>
 </head>
@@ -157,7 +166,7 @@
   <script type="text/babel" src="markdown-editor.jsx"></script>
   <script type="text/babel" src="tweaks-panel.jsx"></script>
   <script type="text/babel" src="components.jsx?v=20260622-banner-mobile-modal"></script>
-  <script type="text/babel" src="feedback-widgets.jsx"></script>
+  <script type="text/babel" src="feedback-widgets.jsx?v=20260622-auth-review-guard"></script>
   <script type="text/babel" src="app.jsx?v=20260622-mobile-product-expand"></script>
 </body>
 </html>
