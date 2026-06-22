@@ -336,6 +336,7 @@ function ProductRow({ p, onAdd }) {
 
 function Collection({ onAdd }) {
   const [products, setProducts] = useState(PRODUCTS_STATIC);
+  const [imageExpanded, setImageExpanded] = useState(false);
 
   useEffect(() => {
     fetch(COLLECTION_API)
@@ -377,7 +378,14 @@ function Collection({ onAdd }) {
         </div>
         {products.length > 0 && products[0].images && products[0].images[0] && (
           <div className="coll-imgs">
-            <div className="coll-img ci-0"><LazyImage src={products[0].images[0]} alt={products[0].name} style={{ width: '100%', height: '100%' }} /></div>
+            <button
+              type="button"
+              className={"coll-img ci-0" + (imageExpanded ? " expanded" : "")}
+              onClick={() => setImageExpanded(v => !v)}
+              aria-label={`${imageExpanded ? "Collapse" : "Expand"} ${products[0].name} image`}
+            >
+              <LazyImage src={products[0].images[0]} alt={products[0].name} style={{ width: '100%', height: '100%' }} />
+            </button>
           </div>
         )}
         <div className="coll-cta-row">
