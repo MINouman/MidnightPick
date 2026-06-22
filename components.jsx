@@ -888,12 +888,19 @@ async function _handleGoogleCredential(response) {
 function _initGsi() {
   const clientId = window.MP_CONFIG?.googleClientId;
   if (!clientId || !window.google?.accounts?.id) return;
+  if (window._gsiInitializedClientId === clientId) {
+    if (!_gsiErrorReporter && window._authModalSetError) {
+      _gsiErrorReporter = window._authModalSetError;
+    }
+    return;
+  }
   window.google.accounts.id.initialize({
     client_id:             clientId,
     callback:              _handleGoogleCredential,
     auto_select:           false,
     cancel_on_tap_outside: false,
   });
+  window._gsiInitializedClientId = clientId;
   // Set up error reporter for automatic prompts if modal is open
   // This will be overridden when user manually clicks the Google button
   if (!_gsiErrorReporter && window._authModalSetError) {

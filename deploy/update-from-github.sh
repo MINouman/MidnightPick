@@ -21,8 +21,8 @@ echo "[deploy] running database migrations"
 node src/db/migrate.js
 
 echo "[deploy] syncing frontend files to $WEB_ROOT"
-mkdir -p "$WEB_ROOT"
-rsync -a \
+sudo mkdir -p "$WEB_ROOT"
+sudo rsync -a --no-owner --no-group \
   --exclude ".git" \
   --exclude ".agents" \
   --exclude ".codex" \
@@ -32,6 +32,7 @@ rsync -a \
   --exclude "dump.rdb" \
   --exclude "backend/dump.rdb" \
   "$APP_DIR/" "$WEB_ROOT/"
+sudo chown -R www-data:www-data "$WEB_ROOT"
 
 echo "[deploy] restarting PM2 app: $PM2_APP"
 pm2 restart "$PM2_APP"
