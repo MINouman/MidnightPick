@@ -262,7 +262,59 @@ async function attachPhoneToUser(id, phone) {
 }
 
 async function deactivateUser(id) {
-  await query(`UPDATE users SET is_active = false, updated_at = NOW() WHERE id = $1`, [id])
+  return withTransaction(async (client) => {
+    const { rows } = await client.query(
+      `SELECT id, phone, email, name FROM users WHERE id = $1 FOR UPDATE`,
+      [id]
+    )
+    const user = rows[0]
+    if (!user) throw { code: 'NOT_FOUND', message: 'User not found.' }
+
+    const deletedMarker = `deleted-${id}`
+    await client.query(
+      `UPDATE subscriptions
+       SET status = 'cancelled',
+           cancel_reason = COALESCE(cancel_reason, 'Customer deleted account'),
+           cancelled_at = COALESCE(cancelled_at, NOW()),
+           updated_at = NOW()
+       WHERE user_id = $1 AND status != 'cancelled'`,
+      [id]
+    )
+    await client.query(
+      `INSERT INTO subscription_events (subscription_id, event_type, note, metadata)
+       SELECT id, 'cancelled', 'Subscription cancelled because customer deleted account.',
+              $2::jsonb
+       FROM subscriptions
+       WHERE user_id = $1 AND cancel_reason = 'Customer deleted account'`,
+      [id, JSON.stringify({ actor: 'user', source: 'customer_dashboard' })]
+    )
+    await client.query(`UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL`, [id])
+    await client.query(`DELETE FROM payment_methods WHERE user_id = $1`, [id])
+    await client.query(`DELETE FROM addresses WHERE user_id = $1`, [id])
+    await client.query(
+      `UPDATE users
+       SET is_active = false,
+           email = NULL,
+           phone = NULL,
+           name = 'Deleted Account',
+           password_hash = NULL,
+           google_id = NULL,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [id]
+    )
+    await client.query(
+      `INSERT INTO customer_timeline_events
+         (customer_id, event_type, actor_type, entity_type, entity_id, note, metadata)
+       SELECT c.id, 'user_deleted_account', 'user', 'user', $1::text,
+              'Customer deleted their account from dashboard.', $2::jsonb
+       FROM customers c
+       WHERE c.phone = $3
+       LIMIT 1`,
+      [id, JSON.stringify({ user_id: id, source: 'customer_dashboard', previous_email: user.email || null, marker: deletedMarker }), user.phone]
+    ).catch(() => null)
+    return { ok: true }
+  })
 }
 
 // ── Addresses ───────────────────────────────────────────────────────────────

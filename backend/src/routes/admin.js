@@ -1960,6 +1960,37 @@ module.exports = async function adminRoutes(app) {
     return { ok: true, data: result }
   })
 
+  app.post('/subscriptions/:id/skip-next', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+      body: { type: 'object', properties: { note: { type: 'string', maxLength: 1000 } }, additionalProperties: false },
+    },
+  }, async (req) => {
+    const result = await withTransaction(async (client) => {
+      const cur = await client.query(`SELECT * FROM subscriptions WHERE id = $1 AND status = 'active' FOR UPDATE`, [req.params.id])
+      if (!cur.rows.length) throw { code: 'NOT_FOUND', message: 'Active subscription not found.' }
+      const oldNext = cur.rows[0].next_delivery_date
+      const newNext = addMonthsToDate(oldNext, 1)
+      const { rows } = await client.query(
+        `UPDATE subscriptions
+         SET next_delivery_date = $2,
+             admin_note = COALESCE($3, admin_note),
+             updated_by_admin_id = $4,
+             updated_at = NOW()
+         WHERE id = $1 AND status = 'active'
+         RETURNING *`,
+        [req.params.id, newNext, req.body.note || null, req.admin.id]
+      )
+      await addSubscriptionEvent(client, req, req.params.id, 'skipped_next_delivery', req.body.note || 'Next delivery skipped by admin.', {
+        old_next_delivery_date: oldNext,
+        new_next_delivery_date: newNext,
+      })
+      await auditLog(client, req, { action: 'subscriptions.skip_next', section: 'subscriptions', entity_type: 'subscription', entity_id: req.params.id, summary: `Subscription next delivery moved from ${oldNext} to ${newNext}.` })
+      return rows[0]
+    })
+    return { ok: true, data: result }
+  })
+
   app.post('/subscriptions/:id/create-order', {
     schema: {
       params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },

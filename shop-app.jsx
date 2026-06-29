@@ -2823,7 +2823,7 @@ function ReviewsSection({ productSlug = "midnight-blend", onStats, loggedIn, onS
 
   return (
     <section id="reviews-section" style={{ borderTop: "1px solid rgba(87,31,41,.1)", marginTop: 36 }}>
-      <div style={{ maxWidth: 900, margin: "0 auto", padding: "40px 24px 64px" }}>
+      <div style={{ maxWidth: 900, margin: "0 auto", padding: isMobile ? "40px 24px 128px" : "40px 24px 64px" }}>
         <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginBottom: 18, flexWrap: "wrap", gap: 16 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
             <div style={{ textAlign: "center" }}>

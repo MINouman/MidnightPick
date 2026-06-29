@@ -58,6 +58,7 @@ module.exports = async function userRoutes(app) {
   // DELETE /me  (soft-delete)
   app.delete('/', async (req, reply) => {
     await usersSvc.deactivateUser(req.user.sub)
+    if (app.clearAuthCookies) app.clearAuthCookies(reply)
     return reply.send({ ok: true })
   })
 
@@ -258,7 +259,8 @@ module.exports = async function userRoutes(app) {
               cs.max_uses_per_coupon, cs.max_usage_per_phone,
               cs.max_active_coupons_per_crew, cs.require_coupon_approval,
               cs.allow_crew_edit_active_coupon, cs.allow_crew_deactivate_coupon,
-              cs.allow_coupon_expiry, cs.commission_type, cs.commission_value,
+              cs.allow_coupon_expiry, cs.allow_reapply_after_rejection,
+              cs.applications_enabled, cs.commission_type, cs.commission_value,
               cs.commission_base, cs.commission_mode, cs.commission_min_value,
               cs.payout_threshold
        FROM crew_profiles cp
@@ -350,6 +352,10 @@ module.exports = async function userRoutes(app) {
         type: 'object',
         properties: {
           is_active: { type: 'boolean' },
+          discount_type: { type: 'string', enum: ['pct', 'flat'] },
+          discount_value: { type: 'number', minimum: 1 },
+          max_uses: { type: 'integer', minimum: 1 },
+          expires_at: { type: ['string', 'null'], maxLength: 30 },
           internal_note: { type: ['string', 'null'], maxLength: 500 },
         },
         additionalProperties: false,
@@ -362,8 +368,19 @@ module.exports = async function userRoutes(app) {
     const { rows: existing } = await query(`SELECT * FROM coupons WHERE id = $1 AND crew_profile_id = $2`, [id, profile.id])
     if (!existing.length) throw { code: 'NOT_FOUND', message: 'Coupon not found.' }
     const coupon = existing[0]
-    if (coupon.status === 'active' && !profile.allow_crew_edit_active_coupon && Object.keys(req.body).some(k => k !== 'is_active')) {
+    const editingFields = Object.keys(req.body).some(k => !['is_active', 'internal_note'].includes(k))
+    if (coupon.status === 'active' && editingFields && !profile.allow_crew_edit_active_coupon) {
       throw { code: 'NOT_ELIGIBLE', message: 'Active coupon editing is not available.' }
+    }
+    if (editingFields) {
+      const value = Number(req.body.discount_value ?? coupon.discount_value)
+      const discountType = req.body.discount_type || coupon.discount_type
+      const maxUsesNext = Number(req.body.max_uses ?? coupon.max_uses)
+      if (discountType === 'pct' && value > (profile.custom_max_pct_discount ?? profile.max_pct_discount)) throw { code: 'VALIDATION_ERROR', message: `Maximum allowed discount is ${profile.custom_max_pct_discount ?? profile.max_pct_discount}%.` }
+      if (discountType === 'flat' && value > (profile.custom_max_flat_discount ?? profile.max_flat_discount)) throw { code: 'VALIDATION_ERROR', message: `Maximum allowed flat discount is ৳${profile.custom_max_flat_discount ?? profile.max_flat_discount}.` }
+      if (maxUsesNext > (profile.custom_max_uses_per_coupon ?? profile.max_uses_per_coupon)) throw { code: 'VALIDATION_ERROR', message: `Maximum allowed usage is ${profile.custom_max_uses_per_coupon ?? profile.max_uses_per_coupon} orders.` }
+      if (req.body.expires_at && !profile.allow_coupon_expiry) throw { code: 'VALIDATION_ERROR', message: 'Expiry dates are not available for crew coupons right now.' }
+      if (Number(coupon.used_count || 0) > maxUsesNext) throw { code: 'VALIDATION_ERROR', message: 'Maximum orders cannot be lower than existing usage.' }
     }
     if ('is_active' in req.body && req.body.is_active === false && !profile.allow_crew_deactivate_coupon) {
       throw { code: 'NOT_ELIGIBLE', message: 'Deactivating coupons is not available.' }
@@ -379,17 +396,19 @@ module.exports = async function userRoutes(app) {
       )).rows[0].count
       if (activeCount >= profile.max_active_coupons_per_crew) throw { code: 'NOT_ELIGIBLE', message: 'You have reached your active coupon limit.' }
     }
-    const allowed = ['is_active', 'internal_note']
+    const allowed = ['is_active', 'discount_type', 'discount_value', 'max_uses', 'expires_at', 'internal_note']
     const entries = Object.entries(req.body || {}).filter(([k]) => allowed.includes(k))
     if (!entries.length) throw { code: 'VALIDATION_ERROR', message: 'No fields to update.' }
     const sets = entries.map(([k], i) => `${k} = $${i + 3}`)
-    const vals = entries.map(([, v]) => v)
+    const vals = entries.map(([k, v]) => k === 'expires_at' ? toEndOfDayDhaka(v) : (k === 'discount_value' ? Math.round(Number(v)) : v))
     // status must follow is_active, otherwise a reactivated coupon stays
     // status='disabled' and is silently rejected by coupon validation forever
     if (req.body.is_active === false) {
       sets.push(`status = 'disabled'`, `disabled_by = 'crew'`)
     } else if (req.body.is_active === true) {
       sets.push(`status = 'active'`, `disabled_by = NULL`)
+    } else if (editingFields && profile.require_coupon_approval) {
+      sets.push(`status = 'pending_approval'`, `is_active = false`, `disabled_by = NULL`)
     }
     const { rows } = await query(
       `UPDATE coupons SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $1 AND crew_profile_id = $2 RETURNING *`,

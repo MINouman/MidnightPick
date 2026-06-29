@@ -174,19 +174,24 @@ module.exports = async function guestOrderRoutes(app) {
         const used = Number(usageRows[0]?.used || 0)
         const price = Math.round(Number(product.price || 0))
         const limit = Number(product.discount_max_orders || 0)
-        const capReached = !!product.discount_enabled && Number(product.discount_value || 0) > 0 && limit > 0 && used >= limit
-        const rawDiscount = product.discount_type === 'percent'
-          ? Math.round((price * Number(product.discount_value || 0)) / 100)
-          : Math.round(Number(product.discount_value || 0))
-        const discountPerUnit = Math.min(price, Math.max(0, rawDiscount))
-        const salePrice = capReached ? price : Math.max(0, price - discountPerUnit)
+        const discountEnabled = !!product.discount_enabled && Number(product.discount_value || 0) > 0
+        const capReached = discountEnabled && limit > 0 && used >= limit
+        const rawDiscount = discountEnabled
+          ? (product.discount_type === 'percent'
+              ? Math.round((price * Number(product.discount_value || 0)) / 100)
+              : Math.round(Number(product.discount_value || 0)))
+          : 0
+        const discountPerUnit = discountEnabled && !capReached
+          ? Math.min(price, Math.max(0, rawDiscount))
+          : 0
+        const salePrice = Math.max(0, price - discountPerUnit)
 
         data.pricing = {
           product_id: product.id,
           product_name: product.name,
           original_price: price,
           sale_price: salePrice,
-          discount_amount: capReached ? 0 : discountPerUnit,
+          discount_amount: discountPerUnit,
           discount_blocked: capReached,
           discount_block_reason: capReached ? 'max_orders_reached' : null,
           discount_orders_used: used,

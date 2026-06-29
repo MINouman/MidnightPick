@@ -3316,7 +3316,7 @@ function ReviewsSection({
     style: {
       maxWidth: 900,
       margin: "0 auto",
-      padding: "40px 24px 64px"
+      padding: isMobile ? "40px 24px 128px" : "40px 24px 64px"
     }
   }, React.createElement("div", {
     style: {

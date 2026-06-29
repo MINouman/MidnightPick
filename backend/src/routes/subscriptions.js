@@ -47,7 +47,8 @@ function daysUntilDate(dateStr) {
 }
 
 function assertCanChangeUpcomingDelivery(sub, action) {
-  if (sub.status !== 'active') return
+  if (!sub || sub.status === 'cancelled') return
+  if (!sub.next_delivery_date) return
   const daysUntilDelivery = daysUntilDate(sub.next_delivery_date)
   if (daysUntilDelivery <= SUBSCRIPTION_CHANGE_CUTOFF_DAYS) {
     throw {
@@ -55,6 +56,14 @@ function assertCanChangeUpcomingDelivery(sub, action) {
       message: `This subscription can no longer be ${action} for the upcoming delivery. Please make changes at least ${SUBSCRIPTION_CHANGE_CUTOFF_DAYS} days before delivery.`,
     }
   }
+}
+
+async function addSubscriptionEvent(subscriptionId, eventType, note, metadata = {}) {
+  await query(
+    `INSERT INTO subscription_events (subscription_id, event_type, note, metadata)
+     VALUES ($1, $2, $3, $4::jsonb)`,
+    [subscriptionId, eventType, note || null, JSON.stringify({ actor: 'user', ...metadata })]
+  )
 }
 
 // ── Routes ──────────────────────────────────────────────────────────────────
@@ -136,6 +145,11 @@ module.exports = async function subscriptionRoutes(app) {
       }
       throw dbErr
     }
+    await addSubscriptionEvent(insertRows[0].id, 'created', 'Subscription created from customer dashboard.', {
+      next_delivery_date: insertRows[0].next_delivery_date,
+      product_name: insertRows[0].product_name,
+      qty: insertRows[0].qty,
+    })
     return reply.code(201).send({ ok: true, data: insertRows[0] })
   })
 
@@ -200,6 +214,11 @@ module.exports = async function subscriptionRoutes(app) {
        product_id || sub.product_id, productName, unitPrice,
        qty, address?.trim(), newBillingDay, newDeliveryDate]
     )
+    await addSubscriptionEvent(rows[0].id, 'edited', 'Subscription updated from customer dashboard.', {
+      fields: Object.keys(req.body || {}),
+      old_next_delivery_date: sub.next_delivery_date,
+      new_next_delivery_date: rows[0].next_delivery_date,
+    })
     return { ok: true, data: rows[0] }
   })
 
@@ -238,12 +257,22 @@ module.exports = async function subscriptionRoutes(app) {
        RETURNING *`,
       [userId, newDelivery]
     )
+    await addSubscriptionEvent(rows[0].id, 'paused', `Subscription paused until ${newDelivery}.`, {
+      months,
+      old_next_delivery_date: cur[0].next_delivery_date,
+      new_next_delivery_date: rows[0].next_delivery_date,
+    })
     return { ok: true, data: rows[0] }
   })
 
   // POST /subscriptions/resume — resume a paused subscription
   app.post('/resume', async (req) => {
     const userId = req.user.sub
+    const { rows: cur } = await query(
+      `SELECT * FROM subscriptions WHERE user_id = $1 AND status = 'paused' LIMIT 1`,
+      [userId]
+    )
+    if (!cur.length) throw { code: 'NOT_FOUND', message: 'No paused subscription found.' }
     const { rows } = await query(
       `UPDATE subscriptions
        SET status = 'active',
@@ -263,7 +292,56 @@ module.exports = async function subscriptionRoutes(app) {
       [userId]
     )
     if (!rows.length) throw { code: 'NOT_FOUND', message: 'No paused subscription found.' }
+    await addSubscriptionEvent(rows[0].id, 'resumed', 'Subscription resumed from customer dashboard.', {
+      old_next_delivery_date: cur[0].next_delivery_date,
+      new_next_delivery_date: rows[0].next_delivery_date,
+    })
     return { ok: true, data: rows[0] }
+  })
+
+  // POST /subscriptions/skip-next — skip one delivery while keeping plan active
+  app.post('/skip-next', async (req) => {
+    const userId = req.user.sub
+    const { rows: cur } = await query(
+      `SELECT * FROM subscriptions WHERE user_id = $1 AND status = 'active' LIMIT 1`,
+      [userId]
+    )
+    if (!cur.length) throw { code: 'NOT_FOUND', message: 'No active subscription to skip.' }
+    assertCanChangeUpcomingDelivery(cur[0], 'skipped')
+
+    const oldNext = cur[0].next_delivery_date
+    const newNext = addMonthsToDate(oldNext, 1)
+    const { rows } = await query(
+      `UPDATE subscriptions
+       SET next_delivery_date = $2,
+           updated_at = NOW()
+       WHERE user_id = $1 AND status = 'active'
+       RETURNING *`,
+      [userId, newNext]
+    )
+    await addSubscriptionEvent(rows[0].id, 'skipped_next_delivery', 'Customer skipped the next delivery.', {
+      old_next_delivery_date: oldNext,
+      new_next_delivery_date: newNext,
+    })
+    return { ok: true, data: rows[0] }
+  })
+
+  // GET /subscriptions/events — customer-visible subscription event history
+  app.get('/events', async (req) => {
+    const { rows: subs } = await query(
+      `SELECT id FROM subscriptions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      [req.user.sub]
+    )
+    if (!subs.length) return { ok: true, data: { events: [] } }
+    const { rows } = await query(
+      `SELECT id, event_type, note, metadata, created_at
+       FROM subscription_events
+       WHERE subscription_id = $1
+       ORDER BY created_at DESC
+       LIMIT 50`,
+      [subs[0].id]
+    )
+    return { ok: true, data: { events: rows } }
   })
 
   // DELETE /subscriptions — cancel the subscription
@@ -285,6 +363,7 @@ module.exports = async function subscriptionRoutes(app) {
       [userId]
     )
     if (!rows.length) throw { code: 'NOT_FOUND', message: 'No active subscription found.' }
+    await addSubscriptionEvent(cur[0].id, 'cancelled', 'Subscription cancelled from customer dashboard.')
     return { ok: true, data: { cancelled: true } }
   })
 }

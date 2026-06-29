@@ -303,6 +303,9 @@ async function listOrders(userId, { status, page = 1, limit = 10 }) {
     `SELECT o.id, o.order_ref, o.status,
             o.subtotal, o.discount_amount, o.delivery_fee, o.total,
             o.points_earned, o.coupon_code, o.payment_type, o.payment_number,
+            o.payment_status, o.payment_trx_id, o.payment_amount,
+            o.return_status, o.refund_amount, o.refund_reason,
+            o.steadfast_consignment_id,
             o.address_snapshot, o.notes, o.created_at,
             (SELECT json_agg(json_build_object(
                'id', oi.id, 'name', oi.name_snapshot,
@@ -326,7 +329,9 @@ async function getOrder(userId, orderId) {
     `SELECT o.id, o.order_ref, o.status,
             o.subtotal, o.discount_amount, o.delivery_fee, o.total,
             o.points_earned, o.coupon_code,
-            o.payment_type, o.payment_number,
+            o.payment_type, o.payment_number, o.payment_status, o.payment_trx_id,
+            o.payment_amount, o.return_status, o.refund_amount, o.refund_reason,
+            o.steadfast_consignment_id,
             o.address_snapshot, o.notes,
             o.created_at, o.updated_at,
             (SELECT json_agg(json_build_object(
@@ -348,10 +353,10 @@ async function getOrder(userId, orderId) {
 }
 
 function assertCustomerCanChangeOrder(order, action = 'edited') {
-  if (!['processing', 'confirmed', 'packed'].includes(order.status)) {
+  if (!['processing', 'confirmed'].includes(order.status)) {
     throw {
       code: 'ORDER_LOCKED',
-      message: `Orders with status "${order.status}" can no longer be ${action}.`,
+      message: `Orders with status "${order.status}" can no longer be ${action}. Please contact support.`,
     }
   }
 }

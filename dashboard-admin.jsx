@@ -12,7 +12,8 @@ function fmtDate(iso) {
 
 function fmtStatus(s) {
   if (!s) return '—';
-  return s.charAt(0).toUpperCase() + s.slice(1);
+  const normalized = String(s).toLowerCase() === 'packaged' ? 'packed' : String(s).toLowerCase();
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
 
 function orderSummary(items) {
@@ -83,7 +84,7 @@ function StatusBadge({ status }) {
   const map = {
     confirmed: "badge-orange", processing: "badge-orange", packed: "badge-orange",
     shipped: "badge-blue", delivered: "badge-green", cancelled: "badge-red",
-    Processing: "badge-orange", Packaged: "badge-orange", Shipped: "badge-blue",
+    Processing: "badge-orange", Confirmed: "badge-orange", Packed: "badge-orange", Shipped: "badge-blue",
     Delivered: "badge-green", Cancelled: "badge-red", Active: "badge-green",
     Paused: "badge-gray", paid: "badge-green", Pending: "badge-orange",
   };
@@ -833,7 +834,7 @@ function Orders() {
     { val: "All", label: "All Statuses" },
     { val: "confirmed",  label: "Confirmed" },
     { val: "processing", label: "Processing" },
-    { val: "packed",     label: "Packaged" },
+    { val: "packed",     label: "Packed" },
     { val: "shipped",    label: "Shipped" },
     { val: "delivered",  label: "Delivered" },
     { val: "cancelled",  label: "Cancelled" },
@@ -1110,7 +1111,7 @@ function Orders() {
                     <div className="col-gap" style={{ gap: 8 }}>
                       {(panel.status === "processing" || panel.status === "confirmed") && can(user, "orders.update_status") && (
                         <button className="btn btn-primary btn-sm" onClick={() => updateStatus("packed")}>
-                          <i className="fa fa-box-open" style={{ fontSize: 11 }} /> Mark as Packaged
+                          <i className="fa fa-box-open" style={{ fontSize: 11 }} /> Mark as Packed
                         </button>
                       )}
                       {panel.status === "packed" && can(user, "orders.update_status") && (
@@ -1753,6 +1754,8 @@ function Subscriptions() {
       body = { reason };
     } else if (action === "resume") {
       body = { note: actionNote || undefined };
+    } else if (action === "skip-next") {
+      body = { note: actionNote || undefined };
     } else if (action === "create-order") {
       body = { note: actionNote || undefined };
     }
@@ -1906,6 +1909,7 @@ function Subscriptions() {
             <textarea className="input mb10" rows={2} placeholder="Optional action note" value={actionNote} onChange={e => setActionNote(e.target.value)} />
             <div className="col-gap" style={{ gap: 8 }}>
               {selected.status === "active" && can(user, "subscriptions.pause") && <button className="btn btn-ghost btn-sm" onClick={() => subAction("pause")}>Pause Subscription</button>}
+              {selected.status === "active" && can(user, "subscriptions.edit") && <button className="btn btn-ghost btn-sm" onClick={() => subAction("skip-next")}>Skip Next Delivery</button>}
               {selected.status === "paused" && can(user, "subscriptions.resume") && <button className="btn btn-primary btn-sm" onClick={() => subAction("resume")}>Resume Subscription</button>}
               {selected.status === "active" && can(user, "subscriptions.edit") && <button className="btn btn-ghost btn-sm" onClick={() => subAction("create-order")}>Create Order From Subscription</button>}
               {selected.status !== "cancelled" && can(user, "subscriptions.cancel") && <button className="btn btn-ghost btn-sm" style={{ color: "var(--red)", border: "1px solid rgba(217,64,64,.35)" }} onClick={() => subAction("cancel")}>Cancel Subscription</button>}
@@ -6601,7 +6605,7 @@ function ReviewsAdmin() {
       <div className="row-between mb20" style={{ alignItems: "flex-start" }}>
         <div>
           <div className="page-title" style={{ marginBottom: 2 }}>Reviews</div>
-          <div className="page-sub">Verified-purchase reviews go live immediately. Hide or remove anything inappropriate.</div>
+          <div className="page-sub">Verified-purchase reviews are submitted for moderation before appearing publicly.</div>
         </div>
         <button className="btn btn-ghost btn-sm" onClick={() => load(filter)}><i className="fa fa-sync" style={{ fontSize: 12 }} /> Refresh</button>
       </div>

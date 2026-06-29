@@ -66,7 +66,8 @@ function fmtDate(iso) {
 }
 function fmtStatus(s) {
   if (!s) return "";
-  return s.charAt(0).toUpperCase() + s.slice(1);
+  const normalized = String(s).toLowerCase() === "packaged" ? "packed" : String(s).toLowerCase();
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
 function orderSummary(items) {
   if (!items || !items.length) return "";
@@ -94,6 +95,20 @@ function crewState(crew, user) {
   if (crew?.application?.status === "pending") return "pending";
   if (crew?.application?.status === "rejected") return "rejected";
   return "none";
+}
+
+function eventLabel(type) {
+  const labels = {
+    created: "Created",
+    edited: "Updated",
+    updated: "Updated",
+    paused: "Paused",
+    resumed: "Resumed",
+    skipped_next_delivery: "Skipped next delivery",
+    cancelled: "Cancelled",
+    order_created: "Order created",
+  };
+  return labels[type] || fmtStatus(String(type || "").replace(/_/g, " "));
 }
 
 // ── Status Badge ──────────────────────────────────────────────
@@ -248,6 +263,8 @@ function HomeTab({ setTab }) {
 
 function CrewHomeCard({ state, crew, setTab, compact = false }) {
   const summary = crew?.summary || {};
+  const settings = crew?.settings || {};
+  const reapplyAllowed = settings.allow_reapply_after_rejection !== false;
   const copy = {
     none: {
       title: "Join the Midnight Crew",
@@ -261,8 +278,8 @@ function CrewHomeCard({ state, crew, setTab, compact = false }) {
     },
     rejected: {
       title: "Application Not Approved Yet",
-      body: "You can contact support or reapply if available.",
-      cta: "Apply Again",
+      body: reapplyAllowed ? "You can contact support or reapply if available." : "Reapplication is not available right now. Contact support if you think this is a mistake.",
+      cta: reapplyAllowed ? "Apply Again" : "View Details",
     },
     approved: {
       title: "Midnight Crew",
@@ -318,7 +335,7 @@ function OrdersTab() {
   }
 
   function canChangeOrder(order) {
-    return ["processing", "confirmed", "packed"].includes(String(order.status || "").toLowerCase());
+    return ["processing", "confirmed"].includes(String(order.status || "").toLowerCase());
   }
 
   function openEdit(order) {
@@ -336,8 +353,15 @@ function OrdersTab() {
     });
   }
 
+  function viewReceipt(order) {
+    const rows = (order.items || []).map(item => `<tr><td>${item.name}</td><td>${item.qty}</td><td>৳${Number(item.unit_price || 0).toLocaleString()}</td><td>৳${Number(item.subtotal ?? item.unit_price * item.qty).toLocaleString()}</td></tr>`).join("");
+    const html = `<!doctype html><html><head><title>Receipt ${order.order_ref}</title><style>body{font-family:Arial,sans-serif;color:#2b171b;padding:24px}h1{font-size:22px;margin:0 0 8px}table{width:100%;border-collapse:collapse;margin-top:18px}th,td{border-bottom:1px solid #eee;padding:8px;text-align:left}.total{font-weight:700;color:#ff9100}</style></head><body><h1>Midnight Pick Receipt</h1><div>${order.order_ref}</div><div>${fmtDate(order.created_at)}</div><table><thead><tr><th>Product</th><th>Qty</th><th>Unit</th><th>Subtotal</th></tr></thead><tbody>${rows}</tbody></table><p>Subtotal: ৳${Number(order.subtotal || 0).toLocaleString()}</p><p>Delivery: ৳${Number(order.delivery_fee || 0).toLocaleString()}</p><p>Discount: ৳${Number(order.discount_amount || 0).toLocaleString()}</p><p class="total">Total: ৳${Number(order.total || 0).toLocaleString()}</p><p>Payment: ${order.payment_type || "—"} · ${order.payment_status || "pending"}</p></body></html>`;
+    const w = window.open("", "_blank", "noopener,noreferrer");
+    if (w) { w.document.write(html); w.document.close(); }
+  }
+
   async function saveOrderEdit() {
-    if (!editingOrder || !editForm.line1.trim()) return;
+    if (!editingOrder || !editForm.line1.trim() || !editForm.city || !editForm.district) return;
     setActionBusy(true);
     try {
       const body = {
@@ -345,8 +369,8 @@ function OrdersTab() {
           label: editForm.label.trim() || "Delivery",
           line1: editForm.line1.trim(),
           line2: editForm.line2.trim() || undefined,
-          city: editForm.city.trim() || undefined,
-          district: editForm.district.trim() || undefined,
+          city: editForm.city,
+          district: editForm.district,
         },
         payment_type: editForm.payment_type,
         payment_number: editForm.payment_number.trim() || "cod",
@@ -368,7 +392,7 @@ function OrdersTab() {
   async function cancelOrder(order) {
     const result = await Swal.fire({
       title: "Cancel this order?",
-      text: "You can cancel before the order is shipped to the courier.",
+      text: "You can edit or cancel while the order is still being confirmed. Once packed, please contact support.",
       icon: "warning",
       showCancelButton: true,
       confirmButtonText: "Yes, Cancel Order",
@@ -450,6 +474,24 @@ function OrdersTab() {
                   <i className="fa fa-credit-card" style={{ width: 14, textAlign: "center", color: "var(--text-65)", flexShrink: 0, fontSize: 12 }} />
                   <span className="text-sm text-muted" style={{ textTransform: "capitalize" }}>{order.payment_type}</span>
                 </div>
+                {order.payment_status && (
+                  <div className="row">
+                    <i className="fa fa-receipt" style={{ width: 14, textAlign: "center", color: "var(--text-65)", flexShrink: 0, fontSize: 12 }} />
+                    <span className="text-sm text-muted">Payment {fmtStatus(order.payment_status.replace(/_/g, " "))}{order.payment_trx_id ? ` · ${order.payment_trx_id}` : ""}{order.payment_amount ? ` · ৳${order.payment_amount}` : ""}</span>
+                  </div>
+                )}
+                {order.steadfast_consignment_id && (
+                  <div className="row">
+                    <i className="fa fa-truck" style={{ width: 14, textAlign: "center", color: "var(--text-65)", flexShrink: 0, fontSize: 12 }} />
+                    <span className="text-sm text-muted">Tracking ID: <span className="mono">{order.steadfast_consignment_id}</span></span>
+                  </div>
+                )}
+                {order.return_status && order.return_status !== "none" && (
+                  <div className="row">
+                    <i className="fa fa-undo" style={{ width: 14, textAlign: "center", color: "var(--text-65)", flexShrink: 0, fontSize: 12 }} />
+                    <span className="text-sm text-muted">Return / refund: {fmtStatus(order.return_status.replace(/_/g, " "))}</span>
+                  </div>
+                )}
                 {order.coupon_code && (
                   <div className="row">
                     <i className="fa fa-tag" style={{ width: 14, textAlign: "center", color: "var(--green)", flexShrink: 0, fontSize: 12 }} />
@@ -483,6 +525,14 @@ function OrdersTab() {
                 <a href={waLink(order.order_ref)} target="_blank" rel="noreferrer" className="btn btn-ghost btn-sm">
                   <i className="fab fa-whatsapp" /> Get Help
                 </a>
+                {["confirmed", "processing", "packed", "shipped", "delivered"].includes(String(order.status || "").toLowerCase()) && (
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => viewReceipt(order)}>
+                    <i className="fa fa-receipt" /> View Receipt
+                  </button>
+                )}
+                <a href={`shop.html?reorder=${encodeURIComponent(order.id)}`} className="btn btn-ghost btn-sm">
+                  <i className="fa fa-redo" /> Reorder
+                </a>
               </div>
             </div>
           )}
@@ -494,7 +544,7 @@ function OrdersTab() {
             <div className="sheet-handle" />
             <div className="sheet-title">Edit Order</div>
             <div className="sheet-body" style={{ textAlign: "left", marginBottom: 14 }}>
-              {editingOrder.order_ref} can be updated until it is shipped to the courier.
+              {editingOrder.order_ref} can be updated until it is packed.
             </div>
 
             <div className="input-group">
@@ -512,13 +562,26 @@ function OrdersTab() {
             <div className="grid-2">
               <div className="input-group">
                 <label className="input-label">City</label>
-                <input className="input" value={editForm.city} onChange={e => setEditForm(f => ({ ...f, city: e.target.value }))} placeholder="Dhaka" />
+                <div style={{ position: "relative" }}>
+                  <select className="select" style={{ appearance: "none", WebkitAppearance: "none", paddingRight: 36, cursor: "pointer" }} value={editForm.city} onChange={e => setEditForm(f => ({ ...f, city: e.target.value, district: "" }))}>
+                    <option value="">City</option>
+                    {Object.keys(BD_AREAS).sort().map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                  <i className="fa fa-chevron-down" style={{ position: "absolute", right: 13, top: "50%", transform: "translateY(-50%)", fontSize: 11, color: "var(--cream-65)", pointerEvents: "none" }} />
+                </div>
               </div>
               <div className="input-group">
-                <label className="input-label">District</label>
-                <input className="input" value={editForm.district} onChange={e => setEditForm(f => ({ ...f, district: e.target.value }))} placeholder="Dhaka" />
+                <label className="input-label">Area</label>
+                <div style={{ position: "relative" }}>
+                  <select className="select" style={{ appearance: "none", WebkitAppearance: "none", paddingRight: 36, cursor: editForm.city ? "pointer" : "not-allowed", opacity: editForm.city ? 1 : .55 }} value={editForm.district} onChange={e => setEditForm(f => ({ ...f, district: e.target.value }))} disabled={!editForm.city}>
+                    <option value="">{editForm.city ? "Select area" : "Area"}</option>
+                    {(BD_AREAS[editForm.city] || []).map(a => <option key={a} value={a}>{a}</option>)}
+                  </select>
+                  <i className="fa fa-chevron-down" style={{ position: "absolute", right: 13, top: "50%", transform: "translateY(-50%)", fontSize: 11, color: "var(--cream-65)", pointerEvents: "none" }} />
+                </div>
               </div>
             </div>
+            {(!editForm.city || !editForm.district) && <div className="input-note mb12" style={{ color: "var(--red)" }}>City and area are required for delivery.</div>}
 
             <div className="grid-2">
               <div className="input-group">
@@ -543,7 +606,7 @@ function OrdersTab() {
             </div>
 
             <div className="col-gap">
-              <button className="btn btn-primary btn-full" disabled={actionBusy || !editForm.line1.trim()} onClick={saveOrderEdit}>
+              <button className="btn btn-primary btn-full" disabled={actionBusy || !editForm.line1.trim() || !editForm.city || !editForm.district} onClick={saveOrderEdit}>
                 {actionBusy ? "Saving…" : "Save Changes"}
               </button>
               <button className="btn btn-ghost btn-full" disabled={actionBusy} onClick={() => setEditingOrder(null)}>Cancel</button>
@@ -570,11 +633,15 @@ function SubscriptionTab() {
   const [planStep, setPlanStep] = useState(0);
   const [pauseMonths, setPauseMonths] = useState(1);
   const [busy, setBusy]         = useState(false);
+  const [events, setEvents]     = useState([]);
 
   useEffect(() => {
     mpApi.fetch("/subscriptions")
       .then(res => setSub(res?.data ?? null))
       .catch(() => setSub(null));
+    mpApi.fetch("/subscriptions/events")
+      .then(res => setEvents(res?.data?.events || []))
+      .catch(() => setEvents([]));
     mpApi.fetch("/products")
       .then(res => setProducts((res?.data?.products || []).filter(p => (p.status || "").toLowerCase() === "active")))
       .catch(() => {});
@@ -628,9 +695,13 @@ function SubscriptionTab() {
   }
 
   function canChangeUpcomingDelivery(s) {
-    if (!s || s.status !== "active") return true;
+    if (!s || s.status === "cancelled") return false;
     const days = daysUntilDelivery(s);
     return days == null || days > SUBSCRIPTION_CHANGE_CUTOFF_DAYS;
+  }
+  async function reloadEvents() {
+    const res = await mpApi.fetch("/subscriptions/events").catch(() => null);
+    setEvents(res?.data?.events || []);
   }
 
   function showSubscriptionLockNotice() {
@@ -665,7 +736,7 @@ function SubscriptionTab() {
         if (!Object.keys(body).length) { setSheet(null); return; }
         res = await mpApi.fetch("/subscriptions", { method: "PATCH", body: JSON.stringify(body) });
       }
-      if (res?.ok) { setSub(res.data); setSheet(null); }
+      if (res?.ok) { setSub(res.data); setSheet(null); reloadEvents(); }
       else apiError(res);
     } finally { setBusy(false); }
   }
@@ -678,7 +749,7 @@ function SubscriptionTab() {
     setBusy(true);
     try {
       const res = await mpApi.fetch("/subscriptions/pause", { method: "POST", body: JSON.stringify({ months: pauseMonths }) });
-      if (res?.ok) { setSub(res.data); setSheet(null); }
+      if (res?.ok) { setSub(res.data); setSheet(null); reloadEvents(); }
       else apiError(res);
     } finally { setBusy(false); }
   }
@@ -702,11 +773,12 @@ function SubscriptionTab() {
     if (!result.isConfirmed) return;
     setBusy(true);
     try {
-      // No skip endpoint — pause 1 month, then resume, so the date moves but the plan stays active
-      const paused = await mpApi.fetch("/subscriptions/pause", { method: "POST", body: JSON.stringify({ months: 1 }) });
-      if (!paused?.ok) { apiError(paused); return; }
-      const res = await mpApi.fetch("/subscriptions/resume", { method: "POST" });
-      if (res?.ok) setSub(res.data);
+      const res = await mpApi.fetch("/subscriptions/skip-next", { method: "POST" });
+      if (res?.ok) {
+        setSub(res.data);
+        reloadEvents();
+        Swal.fire({ title: "Next delivery skipped", text: "Your next delivery has been moved one month ahead.", icon: "success", confirmButtonColor: "#FF9100" });
+      }
       else apiError(res);
     } finally { setBusy(false); }
   }
@@ -718,7 +790,7 @@ function SubscriptionTab() {
     setBusy(true);
     try {
       const res = await mpApi.fetch("/subscriptions", { method: "PATCH", body: JSON.stringify({ qty: Math.min(20, sub.qty + 1) }) });
-      if (res?.ok) setSub(res.data);
+      if (res?.ok) { setSub(res.data); reloadEvents(); }
       else apiError(res);
     } finally { setBusy(false); }
   }
@@ -726,7 +798,7 @@ function SubscriptionTab() {
     setBusy(true);
     try {
       const res = await mpApi.fetch("/subscriptions/resume", { method: "POST" });
-      if (res?.ok) setSub(res.data);
+      if (res?.ok) { setSub(res.data); reloadEvents(); }
       else apiError(res);
     } finally { setBusy(false); }
   }
@@ -751,7 +823,7 @@ function SubscriptionTab() {
     setBusy(true);
     try {
       const res = await mpApi.fetch("/subscriptions", { method: "DELETE" });
-      if (res?.ok) setSub(null);
+      if (res?.ok) { setSub(null); reloadEvents(); }
       else apiError(res);
     } finally { setBusy(false); }
   }
@@ -1018,6 +1090,14 @@ function SubscriptionTab() {
         <div className="text-sm text-muted mt8">
           <i className="fa fa-map-marker-alt" style={{ fontSize: 11, marginRight: 5 }} />{sub.address}
         </div>
+        <div className="divider" />
+        <div className="eyebrow mb10">Next Delivery Preview</div>
+        <div className="grid-2">
+          <div><div className="profile-label">Product</div><div className="profile-value">{sub.product_name}</div></div>
+          <div><div className="profile-label">Quantity</div><div className="profile-value">{sub.qty} pack{sub.qty !== 1 ? "s" : ""}</div></div>
+          <div><div className="profile-label">Estimated amount</div><div className="profile-value">{money(totalPrice)}</div></div>
+          <div><div className="profile-label">Payment</div><div className="profile-value">{defaultPaymentLabel()}</div></div>
+        </div>
 
         <div className="plan-action-grid">
           {!isPaused && <button className="btn btn-ghost btn-full" onClick={handleSkipNext} disabled={busy || changeLocked}>
@@ -1075,6 +1155,20 @@ function SubscriptionTab() {
               <button className="btn btn-ghost btn-full" onClick={() => setSheet(null)}>Cancel</button>
             </div>
           </div>
+        </div>
+      )}
+      {events.length > 0 && (
+        <div className="card mt12">
+          <div className="eyebrow mb10">Plan History</div>
+          {events.slice(0, 8).map(ev => (
+            <div key={ev.id} className="pts-history-row">
+              <div>
+                <div className="pts-history-desc">{eventLabel(ev.event_type)}</div>
+                <div className="pts-history-date">{ev.note || fmtDate(ev.created_at)}</div>
+              </div>
+              <span className="text-xs text-muted">{fmtDate(ev.created_at)}</span>
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -1272,66 +1366,54 @@ function ReviewsTab() {
     loadReviews();
   }, []);
 
-  if (loading) return <div style={{ padding: "20px", textAlign: "center" }}>Loading your reviews...</div>;
+  if (loading) return <div className="card text-sm text-muted" style={{ textAlign: "center" }}>Loading your reviews...</div>;
 
   return (
-    <div className="dash-section">
-      <h2>My Reviews</h2>
+    <div>
+      <div className="page-title">My Reviews</div>
+      <div className="page-sub">Reviews may be checked before appearing publicly.</div>
 
       {stats && (
-        <div style={{ display: "flex", gap: "20px", marginBottom: "20px", flexWrap: "wrap" }}>
-          <div style={{ background: "rgba(255,255,255,0.05)", padding: "15px", borderRadius: "8px", flex: 1, minWidth: "120px" }}>
-            <div style={{ fontSize: "24px", fontWeight: "bold", color: "#f39c12" }}>{stats.count}</div>
-            <div style={{ fontSize: "12px", color: "#999", marginTop: "5px" }}>Reviews Written</div>
+        <div className="stat-row mb16">
+          <div className="stat-card">
+            <div className="stat-value">{stats.count}</div>
+            <div className="stat-label">Reviews Written</div>
           </div>
-          <div style={{ background: "rgba(255,255,255,0.05)", padding: "15px", borderRadius: "8px", flex: 1, minWidth: "120px" }}>
-            <div style={{ fontSize: "24px", fontWeight: "bold", color: "#f39c12" }}>{stats.avg_rating.toFixed(1)}</div>
-            <div style={{ fontSize: "12px", color: "#999", marginTop: "5px" }}>Average Rating</div>
+          <div className="stat-card">
+            <div className="stat-value">{stats.avg_rating.toFixed(1)}</div>
+            <div className="stat-label">Average Rating</div>
           </div>
         </div>
       )}
 
       {reviews.length > 0 ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+        <div className="col-gap">
           {reviews.map((review) => (
-            <div
-              key={review.id}
-              style={{
-                background: "rgba(255,255,255,0.05)",
-                padding: "15px",
-                borderRadius: "8px",
-                borderLeft: "3px solid #f39c12",
-              }}
-            >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: "10px" }}>
+            <div key={review.id} className="card">
+              <div className="row-between mb10" style={{ alignItems: "flex-start" }}>
                 <div>
-                  <div style={{ fontWeight: "600", marginBottom: "5px", textTransform: "capitalize" }}>{review.product_slug}</div>
-                  <div style={{ fontSize: "14px", color: "#f39c12" }}>{"⭐".repeat(review.rating)}</div>
+                  <div style={{ fontWeight: "600", marginBottom: 5, textTransform: "capitalize" }}>{review.product_name || review.product_slug}</div>
+                  <div style={{ fontSize: 14, color: "var(--orange)" }}>{"★".repeat(review.rating)}{"☆".repeat(5 - review.rating)}</div>
                 </div>
-                <div style={{ fontSize: "11px", background: review.status === "visible" ? "#27ae60" : "#e74c3c", color: "white", padding: "4px 8px", borderRadius: "4px" }}>
-                  {review.status === "visible" ? "✓ Visible" : "Hidden"}
-                </div>
+                <span className={`badge ${review.status === "visible" ? "badge-green" : "badge-orange"}`}>{review.status === "visible" ? "Visible" : "Under Review"}</span>
               </div>
               {review.highlight_tags && review.highlight_tags.length > 0 && (
-                <div style={{ display: "flex", gap: "5px", flexWrap: "wrap", marginBottom: "10px" }}>
+                <div className="filter-row mb10">
                   {review.highlight_tags.map((tag) => (
-                    <span key={tag} style={{ fontSize: "11px", background: "rgba(243,156,18,0.2)", color: "#f39c12", padding: "2px 6px", borderRadius: "10px" }}>
-                      {tag}
-                    </span>
+                    <span key={tag} className="pill active">{tag}</span>
                   ))}
                 </div>
               )}
-              {review.comment && <p style={{ margin: "10px 0 0 0", fontSize: "14px", color: "#ddd", lineHeight: "1.4" }}>{review.comment}</p>}
-              <div style={{ marginTop: "10px", fontSize: "12px", color: "#999" }}>
-                {new Date(review.created_at).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" })}
-              </div>
+              {review.comment && <p className="text-sm text-muted" style={{ lineHeight: 1.4 }}>{review.comment}</p>}
+              <div className="text-xs text-muted mt10">{fmtDate(review.created_at)}</div>
             </div>
           ))}
         </div>
       ) : (
-        <div style={{ textAlign: "center", padding: "40px 20px", color: "#999" }}>
-          <p>No reviews yet</p>
-          <p style={{ fontSize: "12px", marginTop: "10px" }}>Start reviewing products you've purchased!</p>
+        <div className="empty-state">
+          <div className="empty-icon"><i className="fa fa-star" /></div>
+          <h3>No reviews yet</h3>
+          <p>Start reviewing products you've purchased.</p>
         </div>
       )}
     </div>
@@ -1354,6 +1436,8 @@ function CrewTab() {
   const [activity, setActivity] = useState([]);
   const [commissions, setCommissions] = useState([]);
   const [couponForm, setCouponForm] = useState(CREW_COUPON_BLANK);
+  const [editingCoupon, setEditingCoupon] = useState(null);
+  const [editCouponForm, setEditCouponForm] = useState(CREW_COUPON_BLANK);
   const [couponError, setCouponError] = useState("");
   const settings = crew?.settings || {};
   const profile = crew?.profile || {};
@@ -1459,6 +1543,49 @@ function CrewTab() {
     }
   }
 
+  function openEditCoupon(c) {
+    setEditingCoupon(c);
+    setEditCouponForm({
+      code: c.code || "",
+      discount_type: c.discount_type || "pct",
+      discount_value: String(c.discount_value || ""),
+      max_uses: String(c.max_uses || ""),
+      expires_at: c.expires_at ? String(c.expires_at).slice(0, 10) : "",
+      internal_note: c.internal_note || "",
+    });
+    setCouponError("");
+  }
+
+  async function saveCouponEdit() {
+    if (!editingCoupon) return;
+    const val = Number(editCouponForm.discount_value || 0);
+    const uses = Number(editCouponForm.max_uses || 0);
+    if (editCouponForm.discount_type === "pct" && val > maxPct) { setCouponError(`Maximum allowed discount is ${maxPct}%.`); return; }
+    if (editCouponForm.discount_type === "flat" && val > maxFlat) { setCouponError(`Maximum allowed flat discount is ৳${maxFlat}.`); return; }
+    if (uses > maxUses) { setCouponError(`Maximum allowed usage is ${maxUses} orders.`); return; }
+    if (!val || !uses) { setCouponError("Discount value and maximum orders are required."); return; }
+    setBusy(true); setCouponError("");
+    try {
+      const res = await mpApi.fetch(`/me/crew/coupons/${editingCoupon.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          discount_type: editCouponForm.discount_type,
+          discount_value: Number(editCouponForm.discount_value),
+          max_uses: Number(editCouponForm.max_uses),
+          expires_at: editCouponForm.expires_at || null,
+          internal_note: editCouponForm.internal_note || null,
+        }),
+      }).catch(() => null);
+      if (res?.ok) {
+        setCoupons(prev => prev.map(x => x.id === editingCoupon.id ? res.data : x));
+        setEditingCoupon(null);
+        Swal.fire({ title: res.data.status === "pending_approval" ? "Coupon submitted for approval" : "Coupon updated", icon: "success", timer: 1400, showConfirmButton: false });
+      } else {
+        setCouponError(res?.error?.message || "Could not update coupon.");
+      }
+    } finally { setBusy(false); }
+  }
+
   function copyCode(code) {
     navigator.clipboard?.writeText(code);
     Swal.fire({ title: "Code copied", timer: 900, showConfirmButton: false, icon: "success" });
@@ -1473,6 +1600,7 @@ function CrewTab() {
     const rejected = state === "rejected";
     const paused = state === "paused";
     const appsClosed = settings.applications_enabled === false;
+    const reapplyAllowed = settings.allow_reapply_after_rejection !== false;
     return (
       <div style={{ maxWidth: 720 }}>
         <div className="page-title">Crew</div>
@@ -1483,11 +1611,13 @@ function CrewTab() {
             <span style={{ fontWeight: 700, fontSize: 16 }}>{paused ? "Crew Access Paused" : pending ? "Application Pending" : rejected ? "Application Not Approved Yet" : appsClosed ? "Applications Closed" : "Join the Midnight Crew"}</span>
           </div>
           <div className="text-sm text-muted mb14">
-            {paused ? "Your crew access is currently paused and your codes are inactive. Contact Midnight Pick support for details." : pending ? "We're reviewing your request." : rejected ? "You can contact support or reapply if available." : appsClosed ? "Crew applications are not open right now. Check back later." : "Earn rewards when friends order with your code."}
+            {paused ? "Your crew access is currently paused and your codes are inactive. Contact Midnight Pick support for details." : pending ? "We're reviewing your request." : rejected && !reapplyAllowed ? "Reapplication is not available right now. Contact support if you think this is a mistake." : rejected ? "You can contact support or reapply if available." : appsClosed ? "Crew applications are not open right now. Check back later." : "Earn rewards when friends order with your code."}
           </div>
           {paused ? null : pending ? (
             <button className="btn btn-ghost btn-sm" onClick={() => setSheet("view")}>View Application</button>
-          ) : appsClosed ? null : (
+          ) : appsClosed || (rejected && !reapplyAllowed) ? (
+            <button className="btn btn-ghost btn-sm" onClick={() => setSheet("view")}>View Details</button>
+          ) : (
             <button className="btn btn-primary btn-sm" onClick={() => setSheet("apply")}>{rejected ? "Apply Again" : "Apply to Join"}</button>
           )}
         </div>
@@ -1586,12 +1716,35 @@ function CrewTab() {
               <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
                 <button className="btn btn-ghost btn-sm" onClick={() => copyCode(c.code)}>Copy</button>
                 <button className="btn btn-ghost btn-sm" onClick={() => shareCode(c.code)}><i className="fab fa-whatsapp" /> Share</button>
+                {settings.allow_crew_edit_active_coupon && c.status === "active" && <button className="btn btn-ghost btn-sm" onClick={() => openEditCoupon(c)}>Edit</button>}
                 {settings.allow_crew_deactivate_coupon !== false && c.status !== "pending_approval" && <button className="btn btn-ghost btn-sm" onClick={() => toggleCoupon(c)}>{c.is_active ? "Deactivate" : "Activate"}</button>}
               </div>
             </div>
           ))}
         </div>
       </div>
+
+      {editingCoupon && (
+        <div className="overlay" onClick={() => setEditingCoupon(null)}>
+          <div className="sheet" onClick={e => e.stopPropagation()}>
+            <div className="sheet-handle" />
+            <div className="sheet-title">Edit Coupon</div>
+            <div className="sheet-body">{editingCoupon.code}</div>
+            <div className="grid-2">
+              <div className="input-group"><label className="input-label">Discount type</label><select className="select" value={editCouponForm.discount_type} onChange={e => setEditCouponForm(f => ({ ...f, discount_type: e.target.value }))}><option value="pct">Percentage</option><option value="flat">Flat amount</option></select></div>
+              <div className="input-group"><label className="input-label">Discount value</label><input className="input" type="number" value={editCouponForm.discount_value} onChange={e => setEditCouponForm(f => ({ ...f, discount_value: e.target.value }))} /></div>
+              <div className="input-group"><label className="input-label">Maximum orders</label><input className="input" type="number" value={editCouponForm.max_uses} onChange={e => setEditCouponForm(f => ({ ...f, max_uses: e.target.value }))} /></div>
+              {settings.allow_coupon_expiry !== false && <div className="input-group"><label className="input-label">Expiry date</label><input className="input" type="date" value={editCouponForm.expires_at} onChange={e => setEditCouponForm(f => ({ ...f, expires_at: e.target.value }))} /></div>}
+              <div className="input-group" style={{ gridColumn: "1/-1" }}><label className="input-label">Internal note</label><input className="input" value={editCouponForm.internal_note} onChange={e => setEditCouponForm(f => ({ ...f, internal_note: e.target.value }))} placeholder="Optional" /></div>
+            </div>
+            {couponError && <div className="input-note mb12" style={{ color: "var(--red)" }}>{couponError}</div>}
+            <div className="col-gap">
+              <button className="btn btn-primary btn-full" disabled={busy} onClick={saveCouponEdit}>{busy ? "Saving..." : "Save Coupon"}</button>
+              <button className="btn btn-ghost btn-full" disabled={busy} onClick={() => setEditingCoupon(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="card mt16">
         <div className="eyebrow mb10">Referral Activity</div>
@@ -1643,17 +1796,21 @@ function AccountTab({ setTab }) {
   async function saveProfile() {
     setSaving(true);
     try {
-      await mpApi.fetch("/me", {
+      const res = await mpApi.fetch("/me", {
         method: "PATCH",
         body: JSON.stringify({ name: profile.name, email: profile.email || undefined }),
       });
+      if (!res?.ok) {
+        Swal.fire({ title: "Could not save profile", text: res?.error?.message || "Please try again.", icon: "error", confirmButtonColor: "#FF9100" });
+        return;
+      }
       setEditing(false);
       reload();
     } finally { setSaving(false); }
   }
 
   async function saveAddress() {
-    if (!addrForm.label || !addrForm.line1) return;
+    if (!addrForm.label || !addrForm.line1 || !addrForm.city || !addrForm.area) return;
     setSubmitting(true);
     try {
       const url    = editingAddrId ? `/me/addresses/${editingAddrId}` : "/me/addresses";
@@ -1670,6 +1827,7 @@ function AccountTab({ setTab }) {
         }),
       });
       if (res?.ok) { setSheet(null); setAddrForm(ADDR_BLANK); setEditingAddrId(null); reload(); }
+      else Swal.fire({ title: "Could not save address", text: res?.error?.message || "City and area are required for delivery.", icon: "error", confirmButtonColor: "#FF9100" });
     } finally { setSubmitting(false); }
   }
 
@@ -1682,6 +1840,7 @@ function AccountTab({ setTab }) {
         body: JSON.stringify({ type: pmForm.type, number: pmForm.number, is_default: pmForm.is_default }),
       });
       if (res?.ok) { setSheet(null); setPmForm(PM_BLANK); reload(); }
+      else Swal.fire({ title: "Could not save payment method", text: res?.error?.message || "Please check the number and try again.", icon: "error", confirmButtonColor: "#FF9100" });
     } finally { setSubmitting(false); }
   }
 
@@ -1699,8 +1858,9 @@ function AccountTab({ setTab }) {
       reverseButtons: true,
     });
     if (!result.isConfirmed) return;
-    await mpApi.fetch(`/me/addresses/${id}`, { method: "DELETE" });
-    reload();
+    const res = await mpApi.fetch(`/me/addresses/${id}`, { method: "DELETE" });
+    if (res?.ok) reload();
+    else Swal.fire({ title: "Could not remove address", text: res?.error?.message || "Please try again.", icon: "error", confirmButtonColor: "#FF9100" });
   }
 
   async function deletePaymentMethod(id) {
@@ -1717,8 +1877,9 @@ function AccountTab({ setTab }) {
       reverseButtons: true,
     });
     if (!result.isConfirmed) return;
-    await mpApi.fetch(`/me/payment-methods/${id}`, { method: "DELETE" });
-    reload();
+    const res = await mpApi.fetch(`/me/payment-methods/${id}`, { method: "DELETE" });
+    if (res?.ok) reload();
+    else Swal.fire({ title: "Could not remove payment method", text: res?.error?.message || "Please try again.", icon: "error", confirmButtonColor: "#FF9100" });
   }
 
   async function handleLogout() {
@@ -1915,7 +2076,10 @@ function AccountTab({ setTab }) {
           onClick={async () => {
             const r = await Swal.fire({
               title: "Delete account?",
-              text: "This is permanent. All your order history, points, and subscription will be removed.",
+              text: "Your account will be deactivated. Active subscriptions will be cancelled. Past order records may be retained for business and delivery records.",
+              input: "text",
+              inputPlaceholder: "Type DELETE to confirm",
+              inputValidator: value => value === "DELETE" ? undefined : "Type DELETE to confirm.",
               icon: "warning",
               showCancelButton: true,
               confirmButtonText: "Yes, Delete My Account",
@@ -1925,6 +2089,15 @@ function AccountTab({ setTab }) {
               customClass: { cancelButton: "swal-cancel-dark" },
               reverseButtons: true,
             });
+            if (!r.isConfirmed) return;
+            const res = await mpApi.fetch("/me", { method: "DELETE" });
+            if (res?.ok) {
+              try { await fetch(window.mpApi.base + "/auth/logout", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" } }); } catch {}
+              localStorage.removeItem("mp_user");
+              window.location.href = "index.html?account=deleted";
+            } else {
+              Swal.fire({ title: "Could not delete account", text: res?.error?.message || "Please contact support.", icon: "error", confirmButtonColor: "#FF9100" });
+            }
           }}
         >
           Delete Account
@@ -1995,9 +2168,10 @@ function AccountTab({ setTab }) {
               <label htmlFor="addr-default" style={{ fontSize: 13, cursor: "pointer" }}>Set as default address</label>
             </div>
             <div className="col-gap">
-              <button className="btn btn-primary btn-full" disabled={submitting || !addrForm.label || !addrForm.line1} onClick={saveAddress}>
+              <button className="btn btn-primary btn-full" disabled={submitting || !addrForm.label || !addrForm.line1 || !addrForm.city || !addrForm.area} onClick={saveAddress}>
                 {submitting ? "Saving…" : editingAddrId ? "Update Address" : "Save Address"}
               </button>
+              {(!addrForm.city || !addrForm.area) && <div className="input-note" style={{ color: "var(--red)" }}>City and area are required for delivery.</div>}
               <button className="btn btn-ghost btn-full" onClick={() => { setSheet(null); setEditingAddrId(null); setAddrForm(ADDR_BLANK); }}>Cancel</button>
             </div>
           </div>
@@ -2061,6 +2235,7 @@ function Sidebar({ tab, setTab }) {
     { id: "home",         icon: "fa-home",          label: "Home" },
     { id: "orders",       icon: "fa-box",            label: "Orders" },
     { id: "subscription", icon: "fa-calendar-check", label: "Plan" },
+    { id: "reviews",      icon: "fa-star",           label: "Reviews" },
     { id: "points",       icon: "fa-star",           label: "Points" },
     { id: "crew",         icon: "fa-fire",           label: "Crew" },
     { id: "account",      icon: "fa-user",           label: "Account" },
@@ -2200,7 +2375,18 @@ function UserDashboard() {
   }
 
   useEffect(() => {
-    if (!mpApi.guard(["user", "crew", "influencer"])) return;
+    const stored = (() => {
+      try { return JSON.parse(localStorage.getItem("mp_user") || "null"); } catch { return null; }
+    })();
+    if (stored?.role === "influencer") {
+      window.location.replace("dashboard-influencer.html");
+      return;
+    }
+    if (stored?.role === "admin") {
+      window.location.replace("dashboard-admin.html");
+      return;
+    }
+    if (!mpApi.guard(["user", "crew"])) return;
     loadData();
   }, []);
 
