@@ -2,6 +2,7 @@
 
 const usersSvc = require('../services/users')
 const { query, withTransaction } = require('../config/db')
+const { getAdminContext } = require('../services/rbac')
 const { spendPoints } = require('../services/points')
 const { toEndOfDayDhaka } = require('../services/dates')
 const { getRateLimitConfig } = require('../config/rate-limits')
@@ -10,10 +11,12 @@ module.exports = async function userRoutes(app) {
 
   // GET /me
   app.get('/', async (req) => {
-    console.log('[DEBUG /me] req.user.sub=', req.user?.sub)
     const user = await usersSvc.getUserById(req.user.sub)
-    console.log('[DEBUG /me] retrieved user:', user ? `id=${user.id}, email=${user.email}, name=${user.name}` : 'null')
     if (!user) throw { code: 'NOT_FOUND', message: 'User not found.' }
+    if (user.role === 'admin') {
+      const admin = await getAdminContext(user.id)
+      if (admin) return { ok: true, data: { ...user, admin_role: admin.admin_role, permissions: admin.permissions } }
+    }
     return { ok: true, data: user }
   })
 

@@ -3,6 +3,7 @@
 const { query, withTransaction } = require('../config/db')
 
 module.exports = async function adminRewardsRoutes(app) {
+  app.addHook('preHandler', app.requireAdminPermission())
 
   // Auth check
   const ensureAdmin = async (req, reply) => {

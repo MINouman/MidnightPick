@@ -3,6 +3,8 @@
 const { updateZone, createZone, moveDistrictToZone, getZoneHistory, getRecentChanges, getDistrictHistory, compareZones } = require('../services/zone-admin')
 
 async function routes(app) {
+  app.addHook('preHandler', app.requireAdminPermission())
+
   // Check admin role
   const ensureAdmin = async (req, reply) => {
     if (req.user.role !== 'admin' && req.user.role !== 'super_admin') {

@@ -58,6 +58,8 @@ const BKASH_TXN_ID_PATTERN = /^[A-Z0-9]{10}$/;
 const BKASH_TXN_ID_PATTERN_MESSAGE = "bKash transaction ID must be exactly 10 letters or numbers.";
 const BKASH_MERCHANT_NUMBER = "01XXXXXXXXX";
 const BKASH_QR_IMAGE_PATH   = "/bkash-qr.png";
+// TODO: Enable after bKash merchant approval.
+const ENABLE_BKASH_PAYMENT = false;
 
 // TASK 2 — OrderModal mobile sheet
 let mpSheetStyleInjected = false;
@@ -756,8 +758,9 @@ function OrderModal({ open, onClose, product, qty, discount, setDiscount, coupon
   const pricing = calculateProductPricing(effectiveProduct, qty);
   const totalPrice = Math.max(0, pricing.productSubtotal - discount);
   const checkoutCharges = calculateCheckoutCharges(effectiveProduct, qty, { city, area }, totalPrice);
+  const isBkashPayment = ENABLE_BKASH_PAYMENT && paymentMethod === "bkash";
   // PAYMENT — fee override
-  const effectiveCodFee = paymentMethod === "bkash" ? 0 : checkoutCharges.codFee;
+  const effectiveCodFee = isBkashPayment ? 0 : checkoutCharges.codFee;
   const effectiveFinalTotal = checkoutCharges.shippingCost + effectiveCodFee + totalPrice;
   const discountCapMessage = getDiscountCapMessage(effectiveProduct, qty);
 
@@ -998,7 +1001,7 @@ function OrderModal({ open, onClose, product, qty, discount, setDiscount, coupon
   }, [step, timerKey]);
 
   useEffect(() => {
-    if (!open || paymentMethod !== "bkash") {
+    if (!ENABLE_BKASH_PAYMENT || !open || !isBkashPayment) {
       setBkashTxnChecking(false);
       return;
     }
@@ -1030,7 +1033,7 @@ function OrderModal({ open, onClose, product, qty, discount, setDiscount, coupon
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [open, paymentMethod, bkashTxnId]);
+  }, [open, isBkashPayment, bkashTxnId]);
 
   const fmtTime = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 
@@ -1106,7 +1109,7 @@ function OrderModal({ open, onClose, product, qty, discount, setDiscount, coupon
           {paymentMethod === "cod" && (
             <div><span>COD charge (1%)</span><strong>৳{effectiveCodFee.toLocaleString()}</strong></div>
           )}
-          {paymentMethod === "bkash" && (
+          {isBkashPayment && (
             <div style={{ display: "flex", justifyContent: "space-between" }}>
               <span style={{ color: "#1a9a50", fontWeight: 600 }}>bKash — no COD charge</span>
               <strong style={{ color: "#1a9a50" }}>৳0</strong>
@@ -1135,7 +1138,7 @@ function OrderModal({ open, onClose, product, qty, discount, setDiscount, coupon
           <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 22, color: "#571F29", margin: "0 0 6px" }}>Order Placed!</h2>
           <p style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 18, color: "#FF9100", margin: "0 0 10px" }}>#{orderRef}</p>
           {/* PAYMENT — success screen */}
-          {paymentMethod === "bkash" ? (
+          {isBkashPayment ? (
             <p style={{ fontFamily: "var(--font-body)", fontSize: 13.5, color: "rgba(87,31,41,.65)", margin: "0 0 18px", lineHeight: 1.5 }}>
               Your order <strong>#{orderRef}</strong> is under review.
               Our team is verifying your bKash transaction (<strong>{bkashTxnId}</strong>).
@@ -1468,8 +1471,8 @@ function OrderModal({ open, onClose, product, qty, discount, setDiscount, coupon
         ...(coupon ? { coupon_code: coupon } : {}),
         ...(product?.id ? { product_id: product.id } : {}),
         // PAYMENT — API payload
-        payment_method: paymentMethod,
-        ...(paymentMethod === "bkash" && bkashTxnId.trim()
+        payment_method: isBkashPayment ? "bkash" : "cod",
+        ...(isBkashPayment && bkashTxnId.trim()
           ? { bkash_txn_id: bkashTxnId.trim().toUpperCase() }
           : {}),
       }),
@@ -1491,7 +1494,7 @@ function OrderModal({ open, onClose, product, qty, discount, setDiscount, coupon
     setIsBusy(true); setErrorMsg("");
     try {
       // PAYMENT — validation
-      if (paymentMethod === "bkash") {
+      if (isBkashPayment) {
         if (!bkashTxnId.trim()) {
           setBkashTxnError("Please enter your bKash transaction ID.");
           setIsBusy(false);
@@ -1579,7 +1582,7 @@ function OrderModal({ open, onClose, product, qty, discount, setDiscount, coupon
   const hasAddress = Boolean(city && area && street.trim());
   const needsNameEntry = !activeUser?.name;
   const canSubmitPhone = isValidBdMobile(phone) && !isBusy && !phoneChecking;
-  const bkashValid = paymentMethod !== "bkash" || (BKASH_TXN_ID_PATTERN.test(bkashTxnId.trim().toUpperCase()) && !bkashTxnError && !bkashTxnChecking);
+  const bkashValid = !isBkashPayment || (BKASH_TXN_ID_PATTERN.test(bkashTxnId.trim().toUpperCase()) && !bkashTxnError && !bkashTxnChecking);
   const canSubmitDetails = (!needsNameEntry || name.trim()) && hasAddress && !isBusy && bkashValid;
 
   return (
@@ -1706,18 +1709,20 @@ function OrderModal({ open, onClose, product, qty, discount, setDiscount, coupon
                 </div>
               )}
 
-              {/* PAYMENT — selector UI */}
-              <div style={{
-                fontSize: 10, fontWeight: 700, letterSpacing: "0.08em",
-                textTransform: "uppercase", color: "#999",
-                marginBottom: 8, fontFamily: "var(--font-display)"
-              }}>
-                Payment Method
-              </div>
-              <div style={{
-                display: "grid", gridTemplateColumns: "1fr 1fr",
-                gap: 10, marginBottom: 16
-              }}>
+              {/* TODO: Enable payment selector after bKash merchant approval. */}
+              {ENABLE_BKASH_PAYMENT && (
+              <>
+                <div style={{
+                  fontSize: 10, fontWeight: 700, letterSpacing: "0.08em",
+                  textTransform: "uppercase", color: "#999",
+                  marginBottom: 8, fontFamily: "var(--font-display)"
+                }}>
+                  Payment Method
+                </div>
+                <div style={{
+                  display: "grid", gridTemplateColumns: "1fr 1fr",
+                  gap: 10, marginBottom: 16
+                }}>
                 <button
                   type="button"
                   onClick={() => {
@@ -1864,10 +1869,12 @@ function OrderModal({ open, onClose, product, qty, discount, setDiscount, coupon
                     <div style={{ width: 18, height: 18, marginTop: 2 }} aria-hidden="true" />
                   )}
                 </button>
-              </div>
+                </div>
+              </>
+              )}
 
               {/* PAYMENT — bKash panel */}
-              {paymentMethod === "bkash" && (
+              {isBkashPayment && (
                 <div style={{
                   background: "#FDE8F2",
                   border: "1.5px solid rgba(226,19,110,0.25)",
@@ -2384,7 +2391,7 @@ function OrderModal({ open, onClose, product, qty, discount, setDiscount, coupon
             type="submit"
             disabled={step === "details" ? !canSubmitDetails : !canSubmitPhone}
             style={primBtn(step === "details" ? !canSubmitDetails : !canSubmitPhone)}
-            aria-label={step === "details" ? `${paymentMethod === "bkash" ? "Confirm bKash order" : "Place order"} for ৳${effectiveFinalTotal.toLocaleString()}` : undefined}
+            aria-label={step === "details" ? `${isBkashPayment ? "Confirm bKash order" : "Place order"} for ৳${effectiveFinalTotal.toLocaleString()}` : undefined}
           >
             {isBusy
               ? <><i className="fa-solid fa-spinner fa-spin" aria-hidden="true" /> {step === "details" ? "Placing Order…" : "Checking…"}</>
@@ -2394,7 +2401,7 @@ function OrderModal({ open, onClose, product, qty, discount, setDiscount, coupon
                       <path d="M16.5 5.5 8.1 13.9 3.8 9.6" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
                     </svg>
                     {/* PAYMENT — validation */}
-                    {paymentMethod === "bkash"
+                    {isBkashPayment
                       ? `Confirm bKash Order — ৳${effectiveFinalTotal.toLocaleString()}`
                       : `Place Order — ৳${effectiveFinalTotal.toLocaleString()}`
                     }
@@ -2410,7 +2417,7 @@ function OrderModal({ open, onClose, product, qty, discount, setDiscount, coupon
           </button>
           <p style={{ margin: "0", fontSize: 11.5, color: "#999", fontFamily: "var(--font-body)", textAlign: "center" }}>
             {step === "details"
-              ? paymentMethod === "bkash"
+              ? isBkashPayment
                 ? "bKash payment · No COD charge · Order confirmed after verification"
                 : "Cash on delivery · Delivery and 1% COD charge included"
               : phoneChecking

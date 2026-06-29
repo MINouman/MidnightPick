@@ -55,6 +55,7 @@ var BKASH_TXN_ID_PATTERN = /^[A-Z0-9]{10}$/;
 var BKASH_TXN_ID_PATTERN_MESSAGE = "bKash transaction ID must be exactly 10 letters or numbers.";
 var BKASH_MERCHANT_NUMBER = "01XXXXXXXXX";
 var BKASH_QR_IMAGE_PATH = "/bkash-qr.png";
+var ENABLE_BKASH_PAYMENT = false;
 var mpSheetStyleInjected = false;
 function injectMpSheetStyle() {
   if (mpSheetStyleInjected) return;
@@ -510,7 +511,8 @@ function OrderModal({
     city,
     area
   }, totalPrice);
-  var effectiveCodFee = paymentMethod === "bkash" ? 0 : checkoutCharges.codFee;
+  var isBkashPayment = ENABLE_BKASH_PAYMENT && paymentMethod === "bkash";
+  var effectiveCodFee = isBkashPayment ? 0 : checkoutCharges.codFee;
   var effectiveFinalTotal = checkoutCharges.shippingCost + effectiveCodFee + totalPrice;
   var discountCapMessage = getDiscountCapMessage(effectiveProduct, qty);
   useEffect(() => {
@@ -763,7 +765,7 @@ function OrderModal({
     };
   }, [step, timerKey]);
   useEffect(() => {
-    if (!open || paymentMethod !== "bkash") {
+    if (!ENABLE_BKASH_PAYMENT || !open || !isBkashPayment) {
       setBkashTxnChecking(false);
       return;
     }
@@ -790,7 +792,7 @@ function OrderModal({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [open, paymentMethod, bkashTxnId]);
+  }, [open, isBkashPayment, bkashTxnId]);
   var fmtTime = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
   if (!open) return null;
   var composedAddress = street.trim();
@@ -918,7 +920,7 @@ function OrderModal({
       className: "checkout-summary-divider"
     }), React.createElement("div", {
       className: "checkout-summary-breakdown"
-    }, React.createElement("div", null, React.createElement("span", null, "Delivery"), React.createElement("strong", null, "\u09F3", checkoutCharges.shippingCost.toLocaleString())), paymentMethod === "cod" && React.createElement("div", null, React.createElement("span", null, "COD charge (1%)"), React.createElement("strong", null, "\u09F3", effectiveCodFee.toLocaleString())), paymentMethod === "bkash" && React.createElement("div", {
+    }, React.createElement("div", null, React.createElement("span", null, "Delivery"), React.createElement("strong", null, "\u09F3", checkoutCharges.shippingCost.toLocaleString())), paymentMethod === "cod" && React.createElement("div", null, React.createElement("span", null, "COD charge (1%)"), React.createElement("strong", null, "\u09F3", effectiveCodFee.toLocaleString())), isBkashPayment && React.createElement("div", {
       style: {
         display: "flex",
         justifyContent: "space-between"
@@ -986,7 +988,7 @@ function OrderModal({
       color: "#FF9100",
       margin: "0 0 10px"
     }
-  }, "#", orderRef), paymentMethod === "bkash" ? React.createElement("p", {
+  }, "#", orderRef), isBkashPayment ? React.createElement("p", {
     style: {
       fontFamily: "var(--font-body)",
       fontSize: 13.5,
@@ -1525,8 +1527,8 @@ function OrderModal({
         ...(product?.id ? {
           product_id: product.id
         } : {}),
-        payment_method: paymentMethod,
-        ...(paymentMethod === "bkash" && bkashTxnId.trim() ? {
+        payment_method: isBkashPayment ? "bkash" : "cod",
+        ...(isBkashPayment && bkashTxnId.trim() ? {
           bkash_txn_id: bkashTxnId.trim().toUpperCase()
         } : {})
       })
@@ -1546,7 +1548,7 @@ function OrderModal({
     setIsBusy(true);
     setErrorMsg("");
     try {
-      if (paymentMethod === "bkash") {
+      if (isBkashPayment) {
         if (!bkashTxnId.trim()) {
           setBkashTxnError("Please enter your bKash transaction ID.");
           setIsBusy(false);
@@ -1644,7 +1646,7 @@ function OrderModal({
   var hasAddress = Boolean(city && area && street.trim());
   var needsNameEntry = !activeUser?.name;
   var canSubmitPhone = isValidBdMobile(phone) && !isBusy && !phoneChecking;
-  var bkashValid = paymentMethod !== "bkash" || BKASH_TXN_ID_PATTERN.test(bkashTxnId.trim().toUpperCase()) && !bkashTxnError && !bkashTxnChecking;
+  var bkashValid = !isBkashPayment || BKASH_TXN_ID_PATTERN.test(bkashTxnId.trim().toUpperCase()) && !bkashTxnError && !bkashTxnChecking;
   var canSubmitDetails = (!needsNameEntry || name.trim()) && hasAddress && !isBusy && bkashValid;
   return React.createElement("div", {
     style: overlay,
@@ -1823,7 +1825,7 @@ function OrderModal({
   }, React.createElement("i", {
     className: "fa-solid fa-circle-xmark",
     "aria-hidden": "true"
-  }), " ", couponError))), React.createElement("div", {
+  }), " ", couponError))), ENABLE_BKASH_PAYMENT && React.createElement(React.Fragment, null, React.createElement("div", {
     style: {
       fontSize: 10,
       fontWeight: 700,
@@ -2006,7 +2008,7 @@ function OrderModal({
       marginTop: 2
     },
     "aria-hidden": "true"
-  }))), paymentMethod === "bkash" && React.createElement("div", {
+  })))), isBkashPayment && React.createElement("div", {
     style: {
       background: "#FDE8F2",
       border: "1.5px solid rgba(226,19,110,0.25)",
@@ -2763,7 +2765,7 @@ function OrderModal({
     type: "submit",
     disabled: step === "details" ? !canSubmitDetails : !canSubmitPhone,
     style: primBtn(step === "details" ? !canSubmitDetails : !canSubmitPhone),
-    "aria-label": step === "details" ? `${paymentMethod === "bkash" ? "Confirm bKash order" : "Place order"} for ৳${effectiveFinalTotal.toLocaleString()}` : undefined
+    "aria-label": step === "details" ? `${isBkashPayment ? "Confirm bKash order" : "Place order"} for ৳${effectiveFinalTotal.toLocaleString()}` : undefined
   }, isBusy ? React.createElement(React.Fragment, null, React.createElement("i", {
     className: "fa-solid fa-spinner fa-spin",
     "aria-hidden": "true"
@@ -2779,7 +2781,7 @@ function OrderModal({
     strokeWidth: "2.4",
     strokeLinecap: "round",
     strokeLinejoin: "round"
-  })), paymentMethod === "bkash" ? `Confirm bKash Order — ৳${effectiveFinalTotal.toLocaleString()}` : `Place Order — ৳${effectiveFinalTotal.toLocaleString()}`) : guestTrustedDevice ? React.createElement(React.Fragment, null, React.createElement("i", {
+  })), isBkashPayment ? `Confirm bKash Order — ৳${effectiveFinalTotal.toLocaleString()}` : `Place Order — ৳${effectiveFinalTotal.toLocaleString()}`) : guestTrustedDevice ? React.createElement(React.Fragment, null, React.createElement("i", {
     className: "fa-solid fa-arrow-right-long",
     "aria-hidden": "true"
   }), " Continue") : phoneChecking ? React.createElement(React.Fragment, null, React.createElement("i", {
@@ -2799,7 +2801,7 @@ function OrderModal({
       fontFamily: "var(--font-body)",
       textAlign: "center"
     }
-  }, step === "details" ? paymentMethod === "bkash" ? "bKash payment · No COD charge · Order confirmed after verification" : "Cash on delivery · Delivery and 1% COD charge included" : phoneChecking ? "Cash on delivery · Checking this phone number" : guestNeedsOtp ? "Cash on delivery · A code will be sent to your number" : "Cash on delivery · Enter your phone number to continue"))));
+  }, step === "details" ? isBkashPayment ? "bKash payment · No COD charge · Order confirmed after verification" : "Cash on delivery · Delivery and 1% COD charge included" : phoneChecking ? "Cash on delivery · Checking this phone number" : guestNeedsOtp ? "Cash on delivery · A code will be sent to your number" : "Cash on delivery · Enter your phone number to continue"))));
 }
 function BuySheet({
   open,

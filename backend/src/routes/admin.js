@@ -1,8 +1,10 @@
 'use strict'
 
 const crypto = require('crypto')
+const bcrypt = require('bcrypt')
 const { redis } = require('../config/redis')
 const { query, withTransaction } = require('../config/db')
+const { auditLog, hasPermission } = require('../services/rbac')
 const { sendOrderConfirmation }  = require('../services/sms')
 const { getRateLimitConfig } = require('../config/rate-limits')
 const { awardPointsForDeliveredOrder, reversePoints, adjustPoints } = require('../services/points')
@@ -24,17 +26,347 @@ const {
 const PRODUCT_PRICE_RETURNING = `
   id, sku, name, description, category, badge, status, price,
   discount_enabled, discount_type, discount_value, discount_max_qty, discount_max_orders, discount_label,
-  stock, qty, unit, roast, origin, blend, process, images, created_at
+  stock, low_stock_threshold, cost_per_unit, qty, unit, roast, origin, blend, process, images, created_at
 `
 
 module.exports = async function adminRoutes(app) {
 
-  // Ensure requester is an admin on every route in this plugin
-  app.addHook('onRequest', async (req, reply) => {
-    if (req.user?.role !== 'admin') {
-      return reply.code(403).send({ ok: false, error: { code: 'FORBIDDEN', message: 'Admin access required.' } })
-    }
+  // Ensure requester is an admin and has the route-level permission.
+  app.addHook('preHandler', app.requireAdminPermission())
+
+  app.get('/me/permissions', async (req) => {
+    return { ok: true, data: { admin_role: req.admin.admin_role, permissions: req.admin.permissions } }
   })
+
+  app.get('/roles', async () => {
+    const { rows } = await query(
+      `SELECT r.id, r.key, r.name, r.description,
+              COALESCE(json_agg(p.name ORDER BY p.name) FILTER (WHERE p.name IS NOT NULL), '[]') AS permissions
+       FROM admin_roles r
+       LEFT JOIN admin_role_permissions rp ON rp.role_id = r.id
+       LEFT JOIN admin_permissions p ON p.id = rp.permission_id
+       GROUP BY r.id
+       ORDER BY r.created_at`
+    )
+    return { ok: true, data: { roles: rows } }
+  })
+
+  app.get('/admins', {
+    schema: {
+      querystring: {
+        type: 'object',
+        properties: {
+          search: { type: 'string', maxLength: 80 },
+          page: { type: 'integer', minimum: 1, default: 1 },
+          limit: { type: 'integer', minimum: 1, maximum: 100, default: 50 },
+        },
+      },
+    },
+  }, async (req) => {
+    const page = req.query.page || 1
+    const limit = req.query.limit || 50
+    const offset = (page - 1) * limit
+    const params = []
+    const where = [`u.role = 'admin'`]
+    if (req.query.search) {
+      params.push(`%${req.query.search}%`)
+      where.push(`(u.name ILIKE $${params.length} OR u.email ILIKE $${params.length} OR u.phone ILIKE $${params.length})`)
+    }
+    const whereSql = `WHERE ${where.join(' AND ')}`
+    const count = await query(`SELECT COUNT(*)::int AS total FROM users u ${whereSql}`, params)
+    const { rows } = await query(
+      `SELECT u.id, u.name, u.email, u.phone, u.is_active, u.created_at,
+              ar.id AS admin_role_id, ar.key AS admin_role_key, ar.name AS admin_role_name,
+              MAX(rt.created_at) AS last_login_at,
+              COUNT(rt.id) FILTER (WHERE rt.revoked_at IS NULL AND rt.expires_at > NOW())::int AS active_sessions,
+              false AS two_factor_enabled
+       FROM users u
+       LEFT JOIN admin_user_roles aur ON aur.user_id = u.id
+       LEFT JOIN admin_roles ar ON ar.id = aur.role_id
+       LEFT JOIN refresh_tokens rt ON rt.user_id = u.id
+       ${whereSql}
+       GROUP BY u.id, ar.id
+       ORDER BY u.created_at DESC
+       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, limit, offset]
+    )
+    return { ok: true, data: { admins: rows, total: count.rows[0].total, page, limit } }
+  })
+
+  app.post('/admins', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['name', 'email', 'role_id'],
+        properties: {
+          name: { type: 'string', minLength: 1, maxLength: 100 },
+          email: { type: 'string', format: 'email', maxLength: 255 },
+          phone: { type: 'string', maxLength: 20 },
+          role_id: { type: 'string', format: 'uuid' },
+          temporary_password: { type: 'string', minLength: 6, maxLength: 100 },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req, reply) => {
+    const { name, email, phone, role_id, temporary_password } = req.body
+    const passwordHash = await bcrypt.hash(temporary_password || crypto.randomBytes(12).toString('hex'), 10)
+    const admin = await withTransaction(async (client) => {
+      const role = await client.query(`SELECT id FROM admin_roles WHERE id = $1`, [role_id])
+      if (!role.rows.length) throw { code: 'VALIDATION_ERROR', message: 'Admin role not found.' }
+      const { rows } = await client.query(
+        `INSERT INTO users (name, email, phone, password_hash, role, is_active, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, 'admin', true, NOW(), NOW())
+         ON CONFLICT (email) WHERE email IS NOT NULL
+         DO UPDATE SET name = EXCLUDED.name, phone = COALESCE(EXCLUDED.phone, users.phone),
+                       password_hash = EXCLUDED.password_hash, role = 'admin', is_active = true, updated_at = NOW()
+         RETURNING id, name, email, phone, is_active`,
+        [name.trim(), email.trim().toLowerCase(), phone || null, passwordHash]
+      )
+      await client.query(
+        `INSERT INTO admin_user_roles (user_id, role_id, assigned_by)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (user_id) DO UPDATE SET role_id = EXCLUDED.role_id, assigned_by = EXCLUDED.assigned_by, assigned_at = NOW()`,
+        [rows[0].id, role_id, req.admin.id]
+      )
+      await auditLog(client, req, {
+        action: 'admins.invite',
+        section: 'admins',
+        entity_type: 'admin_user',
+        entity_id: rows[0].id,
+        summary: `Admin ${rows[0].email} invited or reactivated.`,
+      })
+      return rows[0]
+    })
+    return reply.code(201).send({ ok: true, data: admin })
+  })
+
+  app.patch('/admins/:id/role', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+      body: {
+        type: 'object',
+        required: ['role_id'],
+        properties: { role_id: { type: 'string', format: 'uuid' } },
+        additionalProperties: false,
+      },
+    },
+  }, async (req) => {
+    await withTransaction(async (client) => {
+      const role = await client.query(`SELECT id, name FROM admin_roles WHERE id = $1`, [req.body.role_id])
+      if (!role.rows.length) throw { code: 'VALIDATION_ERROR', message: 'Admin role not found.' }
+      const target = await client.query(`SELECT id, email FROM users WHERE id = $1 AND role = 'admin'`, [req.params.id])
+      if (!target.rows.length) throw { code: 'NOT_FOUND', message: 'Admin not found.' }
+      await client.query(
+        `INSERT INTO admin_user_roles (user_id, role_id, assigned_by)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (user_id) DO UPDATE SET role_id = EXCLUDED.role_id, assigned_by = EXCLUDED.assigned_by, assigned_at = NOW()`,
+        [req.params.id, req.body.role_id, req.admin.id]
+      )
+      await auditLog(client, req, {
+        action: 'admins.edit_role',
+        section: 'admins',
+        entity_type: 'admin_user',
+        entity_id: req.params.id,
+        summary: `Changed ${target.rows[0].email} to ${role.rows[0].name}.`,
+      })
+    })
+    return { ok: true }
+  })
+
+  app.patch('/admins/:id/deactivate', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+    },
+  }, async (req) => {
+    if (req.params.id === req.admin.id) throw { code: 'VALIDATION_ERROR', message: 'You cannot deactivate your own admin account.' }
+    await withTransaction(async (client) => {
+      const { rows } = await client.query(`UPDATE users SET is_active = false, updated_at = NOW() WHERE id = $1 AND role = 'admin' RETURNING id, email`, [req.params.id])
+      if (!rows.length) throw { code: 'NOT_FOUND', message: 'Admin not found.' }
+      await client.query(`UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL`, [req.params.id])
+      await auditLog(client, req, {
+        action: 'admins.disable',
+        section: 'admins',
+        entity_type: 'admin_user',
+        entity_id: req.params.id,
+        summary: `Admin ${rows[0].email} deactivated and sessions revoked.`,
+      })
+    })
+    return { ok: true }
+  })
+
+  app.post('/admins/:id/revoke-sessions', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+    },
+  }, async (req) => {
+    await query(`UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL`, [req.params.id])
+    await auditLog(null, req, {
+      action: 'admins.revoke_sessions',
+      section: 'admins',
+      entity_type: 'admin_user',
+      entity_id: req.params.id,
+      summary: 'Admin sessions revoked.',
+    })
+    return { ok: true }
+  })
+
+  app.get('/audit-logs', {
+    schema: {
+      querystring: {
+        type: 'object',
+        properties: {
+          admin_id: { type: 'string', format: 'uuid' },
+          section: { type: 'string', maxLength: 80 },
+          action: { type: 'string', maxLength: 120 },
+          from: { type: 'string', maxLength: 20 },
+          to: { type: 'string', maxLength: 20 },
+          search: { type: 'string', maxLength: 120 },
+          page: { type: 'integer', minimum: 1, default: 1 },
+          limit: { type: 'integer', minimum: 1, maximum: 100, default: 50 },
+        },
+      },
+    },
+  }, async (req) => {
+    const page = req.query.page || 1
+    const limit = req.query.limit || 50
+    const offset = (page - 1) * limit
+    const params = []
+    const where = []
+    for (const [key, column] of [['admin_id', 'l.admin_id'], ['section', 'l.section'], ['action', 'l.action']]) {
+      if (req.query[key]) { params.push(req.query[key]); where.push(`${column} = $${params.length}`) }
+    }
+    if (req.query.from) { params.push(req.query.from); where.push(`l.created_at >= $${params.length}::date`) }
+    if (req.query.to) { params.push(req.query.to); where.push(`l.created_at < ($${params.length}::date + INTERVAL '1 day')`) }
+    if (req.query.search) {
+      params.push(`%${req.query.search}%`)
+      where.push(`(l.summary ILIKE $${params.length} OR l.entity_id ILIKE $${params.length} OR l.action ILIKE $${params.length})`)
+    }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
+    const count = await query(`SELECT COUNT(*)::int AS total FROM admin_audit_logs l ${whereSql}`, params)
+    const { rows } = await query(
+      `SELECT l.*, u.name AS admin_name, u.email AS admin_email
+       FROM admin_audit_logs l
+       LEFT JOIN users u ON u.id = l.admin_id
+       ${whereSql}
+       ORDER BY l.created_at DESC
+       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, limit, offset]
+    )
+    return { ok: true, data: { logs: rows, total: count.rows[0].total, page, limit } }
+  })
+
+  app.get('/settings', async () => {
+    const { rows } = await query(`SELECT key, value, updated_at FROM admin_settings ORDER BY key`)
+    return { ok: true, data: rows.reduce((acc, row) => ({ ...acc, [row.key]: row.value }), {}) }
+  })
+
+  app.patch('/settings/store', {
+    schema: {
+      body: {
+        type: 'object',
+        properties: {
+          store_name: { type: 'string', maxLength: 120 },
+          support_whatsapp: { type: 'string', maxLength: 30 },
+          support_email: { type: 'string', maxLength: 255 },
+          default_city: { type: 'string', maxLength: 100 },
+          business_address: { type: 'string', maxLength: 500 },
+          order_prefix: { type: 'string', maxLength: 20 },
+          invoice_footer: { type: 'string', maxLength: 500 },
+          timezone: { type: 'string', maxLength: 80 },
+          free_delivery_threshold: { type: ['string', 'number', 'null'] },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req) => {
+    const updated = await withTransaction(async (client) => {
+      const current = await client.query(`SELECT value FROM admin_settings WHERE key = 'store' FOR UPDATE`)
+      const merged = { ...(current.rows[0]?.value || {}), ...req.body }
+      const { rows } = await client.query(
+        `INSERT INTO admin_settings (key, value, updated_by, updated_at)
+         VALUES ('store', $1::jsonb, $2, NOW())
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = NOW()
+         RETURNING value`,
+        [JSON.stringify(merged), req.admin.id]
+      )
+      await auditLog(client, req, {
+        action: 'settings.update_store',
+        section: 'settings',
+        entity_type: 'admin_settings',
+        entity_id: 'store',
+        summary: 'Store settings updated.',
+        metadata: { fields: Object.keys(req.body) },
+      })
+      return rows[0].value
+    })
+    return { ok: true, data: updated }
+  })
+
+  async function addOrderTimeline(client, req, orderId, eventType, note, metadata = {}) {
+    await client.query(
+      `INSERT INTO order_timeline_events (order_id, event_type, actor_type, admin_id, note, metadata)
+       VALUES ($1, $2, 'admin', $3, $4, $5::jsonb)`,
+      [orderId, eventType, req.admin.id, note || null, JSON.stringify(metadata || {})]
+    )
+  }
+
+  function normalizePaymentStatus(value) {
+    const allowed = ['pending', 'verified', 'mismatch', 'failed', 'refunded']
+    const v = String(value || '').toLowerCase()
+    if (!allowed.includes(v)) throw { code: 'VALIDATION_ERROR', message: 'Invalid payment status.' }
+    return v
+  }
+
+  function normalizeReturnStatus(value) {
+    const allowed = ['none', 'requested', 'approved', 'rejected', 'received', 'refunded']
+    const v = String(value || '').toLowerCase()
+    if (!allowed.includes(v)) throw { code: 'VALIDATION_ERROR', message: 'Invalid return/refund status.' }
+    return v
+  }
+
+  function maskCustomerPhone(phone) {
+    if (!phone) return null
+    return `${String(phone).slice(0, 3)}••••${String(phone).slice(-2)}`
+  }
+
+  function sanitizeCustomerForAdmin(req, customer) {
+    if (hasPermission(req.admin, 'customers.view_pii')) return customer
+    return {
+      ...customer,
+      phone: maskCustomerPhone(customer.phone),
+      email: null,
+      default_address: null,
+      last_address: null,
+    }
+  }
+
+  function nextSubscriptionDeliveryDate(billingDay) {
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const day = Math.min(Number(billingDay) || 1, 28)
+    const thisMonth = new Date(today.getFullYear(), today.getMonth(), day)
+    const date = thisMonth > today ? thisMonth : new Date(today.getFullYear(), today.getMonth() + 1, day)
+    return date.toISOString().slice(0, 10)
+  }
+
+  function addMonthsToDate(dateStr, months) {
+    const d = new Date(dateStr)
+    d.setMonth(d.getMonth() + Number(months || 1))
+    return d.toISOString().slice(0, 10)
+  }
+
+  function subscriptionUnitPrice(price) {
+    return Math.round(Number(price || 0) * 0.95)
+  }
+
+  async function addSubscriptionEvent(client, req, subscriptionId, eventType, note, metadata = {}) {
+    await client.query(
+      `INSERT INTO subscription_events (subscription_id, admin_id, event_type, note, metadata)
+       VALUES ($1, $2, $3, $4, $5::jsonb)`,
+      [subscriptionId, req.admin.id, eventType, note || null, JSON.stringify(metadata || {})]
+    )
+  }
 
   // GET /admin/orders
   app.get('/orders', {
@@ -46,16 +378,19 @@ module.exports = async function adminRoutes(app) {
           limit:  { type: 'integer', minimum: 1, maximum: 100, default: 20 },
           status: { type: 'string' },
           search: { type: 'string', maxLength: 50 },
+          flagged: { type: 'boolean' },
         },
       },
     },
   }, async (req) => {
-    const { page = 1, limit = 20, status, search } = req.query
+    const { page = 1, limit = 20, status, search, flagged } = req.query
     const offset = (page - 1) * limit
     const conditions = []
     const params = []
 
     if (status) { params.push(status); conditions.push(`o.status = $${params.length}`) }
+    if (flagged === true) { conditions.push(`o.is_flagged = true`) }
+    if (flagged === false) { conditions.push(`o.is_flagged = false`) }
     if (search) { params.push(`%${search}%`); conditions.push(`(o.order_ref ILIKE $${params.length} OR COALESCE(o.customer_phone, u.phone) ILIKE $${params.length} OR COALESCE(o.customer_name, u.name) ILIKE $${params.length})`) }
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
@@ -71,6 +406,9 @@ module.exports = async function adminRoutes(app) {
               o.discount_amount, o.delivery_fee, o.coupon_code, o.payment_type,
               o.payment_number, o.bkash_txn_id, o.address_snapshot,
               o.points_earned, o.steadfast_consignment_id, o.created_at,
+              o.payment_status, o.payment_sender_number, o.payment_amount, o.payment_trx_id,
+              o.return_status, o.refund_amount, o.refund_method, o.refund_transaction_id,
+              o.is_flagged, o.flag_reason, o.flag_note, o.flagged_at,
               COALESCE(o.customer_name, u.name)  AS customer_name,
               COALESCE(o.customer_phone, u.phone) AS customer_phone,
               (SELECT json_agg(json_build_object('name', oi.name_snapshot, 'qty', oi.qty, 'unit_price', oi.unit_price))
@@ -83,6 +421,343 @@ module.exports = async function adminRoutes(app) {
       dataParams
     )
     return { ok: true, data: { orders: rows, total, page, limit } }
+  })
+
+  app.get('/orders/:id/operations', {
+    schema: {
+      params: { type: 'object', properties: { id: { type: 'string', format: 'uuid' } }, required: ['id'] },
+    },
+  }, async (req) => {
+    const orderId = req.params.id
+    const order = await query(`SELECT id, order_ref, created_at FROM orders WHERE id = $1`, [orderId])
+    if (!order.rows.length) throw { code: 'NOT_FOUND', message: 'Order not found.' }
+
+    const [notes, timeline, payments, refunds] = await Promise.all([
+      query(
+        `SELECT n.id, n.note_type, n.note, n.created_at, u.name AS admin_name, u.email AS admin_email
+         FROM order_admin_notes n
+         LEFT JOIN users u ON u.id = n.admin_id
+         WHERE n.order_id = $1
+         ORDER BY n.created_at DESC`,
+        [orderId]
+      ),
+      query(
+        `SELECT *
+         FROM (
+           SELECT o.id::text AS id, 'created' AS event_type, 'system' AS actor_type, NULL::uuid AS admin_id,
+                  'Order created' AS note, '{}'::jsonb AS metadata, o.created_at
+           FROM orders o WHERE o.id = $1
+           UNION ALL
+           SELECT ot.id::text AS id, ot.step::text AS event_type, COALESCE(ot.source, 'system') AS actor_type,
+                  ot.created_by AS admin_id, ot.detail AS note,
+                  jsonb_build_object('steadfast_status', ot.steadfast_status) AS metadata, ot.created_at
+           FROM order_tracking ot WHERE ot.order_id = $1
+           UNION ALL
+           SELECT e.id::text AS id, e.event_type, e.actor_type, e.admin_id, e.note, e.metadata, e.created_at
+           FROM order_timeline_events e WHERE e.order_id = $1
+         ) events
+         LEFT JOIN users u ON u.id = events.admin_id
+         ORDER BY events.created_at DESC`,
+        [orderId]
+      ),
+      query(
+        `SELECT p.id, p.payment_method, p.payment_status, p.trx_id, p.sender_number, p.amount,
+                p.note, p.screenshot_url, p.created_at, u.name AS admin_name
+         FROM order_payment_events p
+         LEFT JOIN users u ON u.id = p.admin_id
+         WHERE p.order_id = $1
+         ORDER BY p.created_at DESC`,
+        [orderId]
+      ),
+      query(
+        `SELECT r.id, r.status, r.amount, r.method, r.transaction_id, r.reason, r.created_at,
+                u.name AS admin_name
+         FROM order_refunds r
+         LEFT JOIN users u ON u.id = r.admin_id
+         WHERE r.order_id = $1
+         ORDER BY r.created_at DESC`,
+        [orderId]
+      ),
+    ])
+
+    return { ok: true, data: { notes: notes.rows, timeline: timeline.rows, payment_history: payments.rows, refunds: refunds.rows } }
+  })
+
+  app.post('/orders/:id/notes', {
+    schema: {
+      params: { type: 'object', properties: { id: { type: 'string', format: 'uuid' } }, required: ['id'] },
+      body: {
+        type: 'object',
+        required: ['note'],
+        properties: {
+          note_type: { type: 'string', enum: ['general', 'customer_request', 'payment_issue', 'delivery_issue', 'refund_return'], default: 'general' },
+          note: { type: 'string', minLength: 1, maxLength: 2000 },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req, reply) => {
+    const note = await withTransaction(async (client) => {
+      const order = await client.query(`SELECT id, order_ref FROM orders WHERE id = $1`, [req.params.id])
+      if (!order.rows.length) throw { code: 'NOT_FOUND', message: 'Order not found.' }
+      const { rows } = await client.query(
+        `INSERT INTO order_admin_notes (order_id, admin_id, note_type, note)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, note_type, note, created_at`,
+        [req.params.id, req.admin.id, req.body.note_type || 'general', req.body.note.trim()]
+      )
+      await addOrderTimeline(client, req, req.params.id, 'admin_note', `${req.body.note_type || 'general'} note added.`)
+      await auditLog(client, req, {
+        action: 'orders.add_note',
+        section: 'orders',
+        entity_type: 'order',
+        entity_id: req.params.id,
+        summary: `Internal note added to ${order.rows[0].order_ref}.`,
+      })
+      return rows[0]
+    })
+    return reply.code(201).send({ ok: true, data: note })
+  })
+
+  app.patch('/orders/:id', {
+    schema: {
+      params: { type: 'object', properties: { id: { type: 'string', format: 'uuid' } }, required: ['id'] },
+      body: {
+        type: 'object',
+        required: ['reason'],
+        properties: {
+          customer_name: { type: 'string', minLength: 1, maxLength: 100 },
+          customer_phone: { type: 'string', maxLength: 25 },
+          address: { type: 'string', maxLength: 500 },
+          payment_type: { type: 'string', enum: ['bkash', 'nagad', 'rocket', 'card', 'cod'] },
+          delivery_fee: { type: 'integer', minimum: 0 },
+          notes: { type: 'string', maxLength: 1000 },
+          reason: { type: 'string', minLength: 3, maxLength: 500 },
+          items: {
+            type: 'array', minItems: 1,
+            items: {
+              type: 'object', required: ['id', 'name', 'qty', 'unit_price'],
+              properties: {
+                id: { type: 'string', format: 'uuid' },
+                name: { type: 'string', maxLength: 255 },
+                qty: { type: 'integer', minimum: 1 },
+                unit_price: { type: 'number', minimum: 0 },
+              },
+            },
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req) => {
+    const result = await withTransaction(async (client) => {
+      const locked = await client.query(
+        `SELECT id, order_ref, status, discount_amount, delivery_fee, address_snapshot
+         FROM orders WHERE id = $1 FOR UPDATE`,
+        [req.params.id]
+      )
+      if (!locked.rows.length) throw { code: 'NOT_FOUND', message: 'Order not found.' }
+      const order = locked.rows[0]
+      if (!['processing', 'confirmed', 'packed'].includes(order.status)) {
+        throw { code: 'VALIDATION_ERROR', message: 'Only pre-shipment orders can be edited.' }
+      }
+
+      let subtotal = null
+      if (req.body.items) {
+        const previous = await client.query(`SELECT product_id, variant_id, qty FROM order_items WHERE order_id = $1`, [req.params.id])
+        for (const item of previous.rows) {
+          if (item.variant_id) {
+            await client.query(`UPDATE product_variants SET stock = stock + $2 WHERE id = $1`, [item.variant_id, item.qty])
+          } else if (item.product_id) {
+            await client.query(`UPDATE products SET stock = stock + $2 WHERE id = $1`, [item.product_id, item.qty])
+          }
+        }
+
+        subtotal = req.body.items.reduce((sum, item) => sum + Math.round(Number(item.unit_price) * Number(item.qty)), 0)
+        for (const item of req.body.items) {
+          const product = await client.query(`SELECT stock FROM products WHERE id = $1 FOR UPDATE`, [item.id])
+          if (!product.rows.length) throw { code: 'VALIDATION_ERROR', message: `Product not found for "${item.name}".` }
+          if (Number(product.rows[0].stock) < Number(item.qty)) {
+            throw { code: 'INSUFFICIENT_STOCK', message: `Not enough stock for "${item.name}".` }
+          }
+          await client.query(`UPDATE products SET stock = stock - $2 WHERE id = $1`, [item.id, item.qty])
+        }
+
+        await client.query(`DELETE FROM order_items WHERE order_id = $1`, [req.params.id])
+        for (const item of req.body.items) {
+          await client.query(
+            `INSERT INTO order_items (order_id, product_id, name_snapshot, qty, unit_price, subtotal)
+             VALUES ($1, $2, $3, $4, $5, $6)`,
+            [req.params.id, item.id, item.name, item.qty, Math.round(item.unit_price), Math.round(item.unit_price * item.qty)]
+          )
+        }
+      }
+
+      const currentAddress = typeof order.address_snapshot === 'string' ? JSON.parse(order.address_snapshot) : (order.address_snapshot || {})
+      const addressSnapshot = req.body.address
+        ? JSON.stringify({ ...currentAddress, address: req.body.address, line1: req.body.address })
+        : JSON.stringify(currentAddress)
+      const nextSubtotal = subtotal == null ? null : subtotal
+      const deliveryFee = req.body.delivery_fee != null ? req.body.delivery_fee : Number(order.delivery_fee || 0)
+      const { rows: updated } = await client.query(
+        `UPDATE orders
+         SET customer_name = COALESCE($2, customer_name),
+             customer_phone = COALESCE($3, customer_phone),
+             address_snapshot = $4::jsonb,
+             payment_type = COALESCE($5::payment_type, payment_type),
+             delivery_fee = COALESCE($6, delivery_fee),
+             notes = COALESCE($7, notes),
+             subtotal = COALESCE($9, subtotal),
+             total = GREATEST(0, COALESCE($9, subtotal) - discount_amount + COALESCE($10, delivery_fee)),
+             updated_at = NOW()
+         WHERE id = $1
+         RETURNING id, order_ref, status, total, subtotal, discount_amount, delivery_fee,
+                   coupon_code, payment_type, payment_number, address_snapshot, points_earned,
+                   steadfast_consignment_id, created_at, customer_name, customer_phone,
+                   payment_status, payment_sender_number, payment_amount, payment_trx_id,
+                   return_status, refund_amount, refund_method, refund_transaction_id,
+                   is_flagged, flag_reason, flag_note, flagged_at`,
+        [
+          req.params.id,
+          req.body.customer_name || null,
+          req.body.customer_phone || null,
+          addressSnapshot,
+          req.body.payment_type || null,
+          req.body.delivery_fee != null ? req.body.delivery_fee : null,
+          req.body.notes != null ? req.body.notes : null,
+          req.body.reason,
+          nextSubtotal,
+          deliveryFee,
+        ]
+      )
+      await addOrderTimeline(client, req, req.params.id, 'order_edited', req.body.reason, { fields: Object.keys(req.body).filter(k => k !== 'reason') })
+      await auditLog(client, req, {
+        action: 'orders.edit',
+        section: 'orders',
+        entity_type: 'order',
+        entity_id: req.params.id,
+        summary: `Order ${order.order_ref} edited: ${req.body.reason}`,
+        metadata: { fields: Object.keys(req.body).filter(k => k !== 'reason') },
+      })
+      updated[0].items = req.body.items
+        ? req.body.items.map(it => ({ name: it.name, qty: it.qty, unit_price: Math.round(it.unit_price) }))
+        : (await client.query(
+            `SELECT name_snapshot AS name, qty, unit_price FROM order_items WHERE order_id = $1 ORDER BY id`,
+            [req.params.id]
+          )).rows
+      return updated[0]
+    })
+    return { ok: true, data: result }
+  })
+
+  app.post('/orders/:id/payment-events', {
+    schema: {
+      params: { type: 'object', properties: { id: { type: 'string', format: 'uuid' } }, required: ['id'] },
+      body: {
+        type: 'object',
+        required: ['payment_status'],
+        properties: {
+          payment_status: { type: 'string', enum: ['pending', 'verified', 'mismatch', 'failed', 'refunded'] },
+          trx_id: { type: 'string', maxLength: 80 },
+          sender_number: { type: 'string', maxLength: 25 },
+          amount: { type: 'integer', minimum: 0 },
+          note: { type: 'string', maxLength: 1000 },
+          screenshot_url: { type: 'string', maxLength: 1000 },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req, reply) => {
+    const event = await withTransaction(async (client) => {
+      const order = await client.query(`SELECT id, order_ref, payment_type FROM orders WHERE id = $1 FOR UPDATE`, [req.params.id])
+      if (!order.rows.length) throw { code: 'NOT_FOUND', message: 'Order not found.' }
+      const status = normalizePaymentStatus(req.body.payment_status)
+      const { rows } = await client.query(
+        `INSERT INTO order_payment_events
+           (order_id, admin_id, payment_method, payment_status, trx_id, sender_number, amount, note, screenshot_url)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING id, payment_method, payment_status, trx_id, sender_number, amount, note, screenshot_url, created_at`,
+        [req.params.id, req.admin.id, order.rows[0].payment_type, status, req.body.trx_id || null, req.body.sender_number || null, req.body.amount || null, req.body.note || null, req.body.screenshot_url || null]
+      )
+      await client.query(
+        `UPDATE orders
+         SET payment_status = $2,
+             payment_trx_id = COALESCE($3, payment_trx_id),
+             payment_sender_number = COALESCE($4, payment_sender_number),
+             payment_amount = COALESCE($5, payment_amount),
+             payment_note = COALESCE($6, payment_note),
+             updated_at = NOW()
+         WHERE id = $1`,
+        [req.params.id, status, req.body.trx_id || null, req.body.sender_number || null, req.body.amount || null, req.body.note || null]
+      )
+      await addOrderTimeline(client, req, req.params.id, `payment_${status}`, req.body.note || `Payment marked ${status}.`, { amount: req.body.amount || null, trx_id: req.body.trx_id || null })
+      await auditLog(client, req, {
+        action: 'financials.reconcile_payments',
+        section: 'orders',
+        entity_type: 'order',
+        entity_id: req.params.id,
+        summary: `Payment for ${order.rows[0].order_ref} marked ${status}.`,
+      })
+      return rows[0]
+    })
+    return reply.code(201).send({ ok: true, data: event })
+  })
+
+  app.post('/orders/:id/refund', {
+    schema: {
+      params: { type: 'object', properties: { id: { type: 'string', format: 'uuid' } }, required: ['id'] },
+      body: {
+        type: 'object',
+        required: ['status', 'reason'],
+        properties: {
+          status: { type: 'string', enum: ['none', 'requested', 'approved', 'rejected', 'received', 'refunded'] },
+          amount: { type: 'integer', minimum: 0, default: 0 },
+          method: { type: 'string', maxLength: 30 },
+          transaction_id: { type: 'string', maxLength: 80 },
+          reason: { type: 'string', minLength: 3, maxLength: 1000 },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req, reply) => {
+    const refund = await withTransaction(async (client) => {
+      const order = await client.query(`SELECT id, order_ref, total FROM orders WHERE id = $1 FOR UPDATE`, [req.params.id])
+      if (!order.rows.length) throw { code: 'NOT_FOUND', message: 'Order not found.' }
+      const status = normalizeReturnStatus(req.body.status)
+      const amount = Number(req.body.amount || 0)
+      if (status === 'refunded' && amount <= 0) throw { code: 'VALIDATION_ERROR', message: 'Refund amount is required when marking refunded.' }
+      if (amount > Number(order.rows[0].total || 0)) throw { code: 'VALIDATION_ERROR', message: 'Refund amount cannot exceed order total.' }
+      const { rows } = await client.query(
+        `INSERT INTO order_refunds (order_id, admin_id, status, amount, method, transaction_id, reason)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, status, amount, method, transaction_id, reason, created_at`,
+        [req.params.id, req.admin.id, status, amount, req.body.method || null, req.body.transaction_id || null, req.body.reason]
+      )
+      await client.query(
+        `UPDATE orders
+         SET return_status = $2,
+             refund_amount = CASE WHEN $2 = 'refunded' THEN $3 ELSE refund_amount END,
+             refund_method = COALESCE($4, refund_method),
+             refund_transaction_id = COALESCE($5, refund_transaction_id),
+             refund_reason = $6,
+             refunded_at = CASE WHEN $2 = 'refunded' THEN NOW() ELSE refunded_at END,
+             payment_status = CASE WHEN $2 = 'refunded' THEN 'refunded' ELSE payment_status END,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [req.params.id, status, amount, req.body.method || null, req.body.transaction_id || null, req.body.reason]
+      )
+      await addOrderTimeline(client, req, req.params.id, `return_${status}`, req.body.reason, { amount, method: req.body.method || null })
+      await auditLog(client, req, {
+        action: status === 'refunded' ? 'orders.refund' : 'orders.return_update',
+        section: 'orders',
+        entity_type: 'order',
+        entity_id: req.params.id,
+        summary: `Return/refund for ${order.rows[0].order_ref} set to ${status}.`,
+        metadata: { amount, method: req.body.method || null },
+      })
+      return rows[0]
+    })
+    return reply.code(201).send({ ok: true, data: refund })
   })
 
   // PATCH /admin/orders/:id/status
@@ -164,6 +839,16 @@ module.exports = async function adminRoutes(app) {
         }
       }
 
+      await addOrderTimeline(client, req, orderId, `status_${newStatus}`, `Status changed from ${order.status} to ${newStatus}.`)
+      await auditLog(client, req, {
+        action: newStatus === 'cancelled' ? 'orders.cancel' : 'orders.update_status',
+        section: 'orders',
+        entity_type: 'order',
+        entity_id: orderId,
+        summary: `Order ${order.order_ref} status changed from ${order.status} to ${newStatus}.`,
+        metadata: { from: order.status, to: newStatus },
+      })
+
       return updated[0]
     })
 
@@ -188,8 +873,57 @@ module.exports = async function adminRoutes(app) {
       if (Number(order.total) <= 0) throw { code: 'VALIDATION_ERROR', message: 'Order total is 0.' }
       const result = await awardPointsForDeliveredOrder(client, order.id)
       if (result.awarded <= 0) throw { code: 'VALIDATION_ERROR', message: 'Calculated 0 points. Check the points rate and minimum order amount in Settings → Points.' }
+      await addOrderTimeline(client, req, order.id, 'points_awarded', `${result.awarded} points awarded.`)
+      await auditLog(client, req, {
+        action: 'orders.award_points',
+        section: 'orders',
+        entity_type: 'order',
+        entity_id: order.id,
+        summary: `${result.awarded} points awarded for ${order.order_ref}.`,
+      })
       return { ok: true, data: { pts_awarded: result.awarded, order_ref: order.order_ref } }
     })
+  })
+
+  app.post('/orders/:id/flag-review', {
+    schema: {
+      params: { type: 'object', properties: { id: { type: 'string', format: 'uuid' } }, required: ['id'] },
+      body: {
+        type: 'object',
+        required: ['reason'],
+        properties: {
+          reason: {
+            type: 'string',
+            enum: ['Payment mismatch', 'Suspicious order', 'Duplicate order', 'Customer complaint', 'Delivery issue', 'Coupon abuse', 'Manual review'],
+          },
+          note: { type: 'string', maxLength: 1000 },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req) => {
+    const { rows } = await query(
+      `UPDATE orders
+       SET is_flagged = true,
+           flag_reason = $2,
+           flag_note = $3,
+           flagged_by_admin_id = $4,
+           flagged_at = NOW(),
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, order_ref, is_flagged, flag_reason, flag_note, flagged_at`,
+      [req.params.id, req.body.reason, req.body.note || null, req.admin.id]
+    )
+    if (!rows.length) throw { code: 'NOT_FOUND', message: 'Order not found.' }
+    await auditLog(null, req, {
+      action: 'orders.flag_review',
+      section: 'orders',
+      entity_type: 'order',
+      entity_id: req.params.id,
+      summary: `Order ${rows[0].order_ref} flagged: ${req.body.reason}.`,
+      metadata: { reason: req.body.reason, note: req.body.note || null },
+    })
+    return { ok: true, data: rows[0] }
   })
 
   // POST /admin/send-order-otp — send OTP without creating order (for pre-verification)
@@ -489,6 +1223,16 @@ module.exports = async function adminRoutes(app) {
         [orderId, `Steadfast consignment #${steadfastResponse.consignmentId}`]
       )
 
+      await addOrderTimeline(client, req, orderId, 'courier_handoff', `Steadfast consignment #${steadfastResponse.consignmentId}`)
+      await auditLog(client, req, {
+        action: 'orders.handoff_courier',
+        section: 'orders',
+        entity_type: 'order',
+        entity_id: orderId,
+        summary: `Order ${order.order_ref} handed off to Steadfast.`,
+        metadata: { consignment_id: steadfastResponse.consignmentId },
+      })
+
       return updated[0]
     })
 
@@ -588,13 +1332,323 @@ module.exports = async function adminRoutes(app) {
 
     const dataParams = [...params, limit, offset]
     const { rows } = await query(
-      `SELECT id, phone, name, last_address, order_count, total_spent, first_seen, last_seen
-       FROM   customers WHERE 1=1 ${searchClause}
+      `SELECT c.id, c.phone, c.name, c.email, c.default_address, c.last_address,
+              c.order_count, c.total_spent, c.first_seen, c.last_seen,
+              c.admin_notes, c.risk_status, c.segment, c.is_blocked, c.blocked_reason,
+              COALESCE(json_agg(ct.tag ORDER BY ct.tag) FILTER (WHERE ct.tag IS NOT NULL), '[]') AS tags
+       FROM   customers c
+       LEFT JOIN customer_tags ct ON ct.customer_id = c.id
+       WHERE  1=1 ${searchClause}
+       GROUP BY c.id
        ORDER  BY last_seen DESC
        LIMIT  $${dataParams.length - 1} OFFSET $${dataParams.length}`,
       dataParams
     )
-    return { ok: true, data: { customers: rows, total, page, limit } }
+    return { ok: true, data: { customers: rows.map(row => sanitizeCustomerForAdmin(req, row)), total, page, limit } }
+  })
+
+  async function addCustomerTimeline(client, req, customerId, eventType, note, metadata = {}, entity = {}) {
+    await client.query(
+      `INSERT INTO customer_timeline_events
+         (customer_id, event_type, actor_type, admin_id, entity_type, entity_id, note, metadata)
+       VALUES ($1, $2, 'admin', $3, $4, $5, $6, $7::jsonb)`,
+      [
+        customerId,
+        eventType,
+        req.admin.id,
+        entity.entity_type || null,
+        entity.entity_id != null ? String(entity.entity_id) : null,
+        note || null,
+        JSON.stringify(metadata || {}),
+      ]
+    )
+  }
+
+  app.get('/customers/:id', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+    },
+  }, async (req) => {
+    const { rows } = await query(
+      `SELECT c.*,
+              COALESCE(json_agg(ct.tag ORDER BY ct.tag) FILTER (WHERE ct.tag IS NOT NULL), '[]') AS tags
+       FROM customers c
+       LEFT JOIN customer_tags ct ON ct.customer_id = c.id
+       WHERE c.id = $1
+       GROUP BY c.id`,
+      [req.params.id]
+    )
+    if (!rows.length) throw { code: 'NOT_FOUND', message: 'Customer not found.' }
+    return { ok: true, data: sanitizeCustomerForAdmin(req, rows[0]) }
+  })
+
+  app.patch('/customers/:id', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+      body: {
+        type: 'object',
+        properties: {
+          name: { type: ['string', 'null'], maxLength: 100 },
+          phone: { type: 'string', maxLength: 25 },
+          email: { type: ['string', 'null'], maxLength: 255 },
+          default_address: { type: ['string', 'null'], maxLength: 1000 },
+          admin_notes: { type: ['string', 'null'], maxLength: 5000 },
+          risk_status: { type: 'string', enum: ['normal', 'vip', 'watch', 'cod_risk', 'blocked'] },
+          segment: { type: ['string', 'null'], enum: ['new_customer', 'repeat_customer', 'vip', 'subscription_customer', 'inactive', 'high_complaint', 'coupon_sensitive', 'cod_risk', null] },
+        },
+        additionalProperties: false,
+        minProperties: 1,
+      },
+    },
+  }, async (req) => {
+    if (!hasPermission(req.admin, 'customers.view_pii')) {
+      const piiFields = ['phone', 'email', 'default_address']
+      const touched = Object.keys(req.body || {}).filter(key => piiFields.includes(key))
+      if (touched.length) throw { code: 'FORBIDDEN', message: 'Missing admin permission: customers.view_pii.' }
+    }
+    const updated = await withTransaction(async (client) => {
+      const current = await client.query(`SELECT id, phone, name FROM customers WHERE id = $1 FOR UPDATE`, [req.params.id])
+      if (!current.rows.length) throw { code: 'NOT_FOUND', message: 'Customer not found.' }
+      const allowed = ['name', 'phone', 'email', 'default_address', 'admin_notes', 'risk_status', 'segment']
+      const entries = Object.entries(req.body).filter(([key]) => allowed.includes(key))
+      const sets = entries.map(([key], index) => `${key} = $${index + 2}`)
+      const values = entries.map(([, value]) => value === '' ? null : value)
+      const { rows } = await client.query(
+        `UPDATE customers
+         SET ${sets.join(', ')}, updated_by_admin_id = $${values.length + 2}, updated_at = NOW()
+         WHERE id = $1
+         RETURNING *`,
+        [req.params.id, ...values, req.admin.id]
+      )
+      await addCustomerTimeline(client, req, req.params.id, 'profile_updated', 'Customer profile updated.', { fields: entries.map(([key]) => key) })
+      await auditLog(client, req, {
+        action: 'customers.edit',
+        section: 'customers',
+        entity_type: 'customer',
+        entity_id: req.params.id,
+        summary: `Customer ${rows[0].phone || rows[0].name || req.params.id} profile updated.`,
+        metadata: { fields: entries.map(([key]) => key) },
+      })
+      return rows[0]
+    })
+    return { ok: true, data: sanitizeCustomerForAdmin(req, updated) }
+  })
+
+  app.post('/customers/:id/notes', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+      body: {
+        type: 'object',
+        required: ['note'],
+        properties: {
+          note_type: { type: 'string', enum: ['general', 'support', 'complaint', 'payment', 'delivery', 'refund_return'], default: 'general' },
+          note: { type: 'string', minLength: 1, maxLength: 3000 },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req, reply) => {
+    const note = await withTransaction(async (client) => {
+      const customer = await client.query(`SELECT id, phone, name FROM customers WHERE id = $1`, [req.params.id])
+      if (!customer.rows.length) throw { code: 'NOT_FOUND', message: 'Customer not found.' }
+      const { rows } = await client.query(
+        `INSERT INTO customer_admin_notes (customer_id, admin_id, note_type, note)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, note_type, note, created_at`,
+        [req.params.id, req.admin.id, req.body.note_type || 'general', req.body.note.trim()]
+      )
+      await addCustomerTimeline(client, req, req.params.id, 'support_note', req.body.note.trim(), { note_type: req.body.note_type || 'general' })
+      await auditLog(client, req, {
+        action: 'customers.add_note',
+        section: 'customers',
+        entity_type: 'customer',
+        entity_id: req.params.id,
+        summary: `CRM note added for ${customer.rows[0].phone || customer.rows[0].name}.`,
+      })
+      return rows[0]
+    })
+    return reply.code(201).send({ ok: true, data: note })
+  })
+
+  app.post('/customers/:id/tags', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+      body: {
+        type: 'object',
+        required: ['tag'],
+        properties: { tag: { type: 'string', minLength: 1, maxLength: 50 } },
+        additionalProperties: false,
+      },
+    },
+  }, async (req, reply) => {
+    const tag = req.body.tag.trim().toLowerCase().replace(/\s+/g, '_')
+    const result = await withTransaction(async (client) => {
+      const customer = await client.query(`SELECT id FROM customers WHERE id = $1`, [req.params.id])
+      if (!customer.rows.length) throw { code: 'NOT_FOUND', message: 'Customer not found.' }
+      const { rows } = await client.query(
+        `INSERT INTO customer_tags (customer_id, tag, created_by_admin_id)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (customer_id, tag) DO UPDATE SET tag = EXCLUDED.tag
+         RETURNING id, tag, created_at`,
+        [req.params.id, tag, req.admin.id]
+      )
+      await addCustomerTimeline(client, req, req.params.id, 'tag_added', `Tag added: ${tag}.`)
+      await auditLog(client, req, { action: 'customers.add_tag', section: 'customers', entity_type: 'customer', entity_id: req.params.id, summary: `Customer tag added: ${tag}.` })
+      return rows[0]
+    })
+    return reply.code(201).send({ ok: true, data: result })
+  })
+
+  app.delete('/customers/:id/tags/:tag', {
+    schema: {
+      params: {
+        type: 'object',
+        required: ['id', 'tag'],
+        properties: { id: { type: 'string', format: 'uuid' }, tag: { type: 'string', maxLength: 50 } },
+      },
+    },
+  }, async (req) => {
+    const tag = req.params.tag.trim().toLowerCase().replace(/\s+/g, '_')
+    await withTransaction(async (client) => {
+      await client.query(`DELETE FROM customer_tags WHERE customer_id = $1 AND tag = $2`, [req.params.id, tag])
+      await addCustomerTimeline(client, req, req.params.id, 'tag_removed', `Tag removed: ${tag}.`)
+      await auditLog(client, req, { action: 'customers.remove_tag', section: 'customers', entity_type: 'customer', entity_id: req.params.id, summary: `Customer tag removed: ${tag}.` })
+    })
+    return { ok: true, data: { tag } }
+  })
+
+  app.post('/customers/:id/risk', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+      body: {
+        type: 'object',
+        required: ['risk_status'],
+        properties: {
+          risk_status: { type: 'string', enum: ['normal', 'vip', 'watch', 'cod_risk', 'blocked'] },
+          blocked_reason: { type: ['string', 'null'], maxLength: 1000 },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req) => {
+    const updated = await withTransaction(async (client) => {
+      const { rows } = await client.query(
+        `UPDATE customers
+         SET risk_status = $2,
+             is_blocked = ($2 = 'blocked'),
+             blocked_reason = CASE WHEN $2 = 'blocked' THEN $3 ELSE NULL END,
+             updated_by_admin_id = $4,
+             updated_at = NOW()
+         WHERE id = $1
+         RETURNING *`,
+        [req.params.id, req.body.risk_status, req.body.blocked_reason || null, req.admin.id]
+      )
+      if (!rows.length) throw { code: 'NOT_FOUND', message: 'Customer not found.' }
+      await addCustomerTimeline(client, req, req.params.id, 'risk_updated', req.body.blocked_reason || `Risk status set to ${req.body.risk_status}.`, { risk_status: req.body.risk_status })
+      await auditLog(client, req, {
+        action: req.body.risk_status === 'blocked' ? 'customers.block' : 'customers.update_risk',
+        section: 'customers',
+        entity_type: 'customer',
+        entity_id: req.params.id,
+        summary: `Customer risk status set to ${req.body.risk_status}.`,
+      })
+      return rows[0]
+    })
+    return { ok: true, data: sanitizeCustomerForAdmin(req, updated) }
+  })
+
+  app.get('/customers/:id/timeline', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+    },
+  }, async (req) => {
+    const customer = await query(`SELECT id, phone FROM customers WHERE id = $1`, [req.params.id])
+    if (!customer.rows.length) throw { code: 'NOT_FOUND', message: 'Customer not found.' }
+    const phone = customer.rows[0].phone
+
+    const [notes, events, orders, feedback, reviews, points, subs] = await Promise.all([
+      query(
+        `SELECT n.id::text, 'support_note' AS event_type, n.note, n.note_type AS detail,
+                n.created_at, u.name AS actor_name, 'customer_note' AS entity_type, n.id::text AS entity_id
+         FROM customer_admin_notes n
+         LEFT JOIN users u ON u.id = n.admin_id
+         WHERE n.customer_id = $1
+         ORDER BY n.created_at DESC
+         LIMIT 50`,
+        [req.params.id]
+      ),
+      query(
+        `SELECT e.id::text, e.event_type, e.note, e.entity_type, e.entity_id, e.created_at,
+                u.name AS actor_name, e.metadata::text AS detail
+         FROM customer_timeline_events e
+         LEFT JOIN users u ON u.id = e.admin_id
+         WHERE e.customer_id = $1
+         ORDER BY e.created_at DESC
+         LIMIT 50`,
+        [req.params.id]
+      ),
+      query(
+        `SELECT o.id::text, 'order' AS event_type,
+                o.order_ref || ' · ' || o.status || ' · ৳' || o.total AS note,
+                o.status AS detail, o.created_at, NULL::text AS actor_name,
+                'order' AS entity_type, o.id::text AS entity_id
+         FROM orders o
+         WHERE o.customer_phone = $1
+         ORDER BY o.created_at DESC
+         LIMIT 50`,
+        [phone]
+      ),
+      query(
+        `SELECT f.id::text, 'feedback' AS event_type,
+                COALESCE(f.comment, 'Feedback submitted') AS note,
+                COALESCE(f.emotion::text, '') AS detail,
+                f.created_at, NULL::text AS actor_name, 'feedback' AS entity_type, f.id::text AS entity_id
+         FROM feedbacks f
+         WHERE f.customer_phone = $1
+         ORDER BY f.created_at DESC
+         LIMIT 20`,
+        [phone]
+      ).catch(() => ({ rows: [] })),
+      query(
+        `SELECT r.id::text, 'review' AS event_type,
+                COALESCE(r.comment, 'Review submitted') AS note,
+                COALESCE(r.rating::text, '') AS detail,
+                r.created_at, NULL::text AS actor_name, 'review' AS entity_type, r.id::text AS entity_id
+         FROM reviews r
+         WHERE r.reviewer_phone = $1
+         ORDER BY r.created_at DESC
+         LIMIT 20`,
+        [phone]
+      ).catch(() => ({ rows: [] })),
+      query(
+        `SELECT pt.id::text, 'points' AS event_type,
+                pt.description AS note, pt.points::text AS detail,
+                pt.created_at, NULL::text AS actor_name, 'points_transaction' AS entity_type, pt.id::text AS entity_id
+         FROM points_transactions pt
+         JOIN users u ON u.id = pt.user_id
+         WHERE u.phone = $1
+         ORDER BY pt.created_at DESC
+         LIMIT 30`,
+        [phone]
+      ).catch(() => ({ rows: [] })),
+      query(
+        `SELECT s.id::text, 'subscription' AS event_type,
+                s.product_name || ' ×' || s.qty || ' · ' || s.status AS note,
+                s.next_delivery_date::text AS detail,
+                s.created_at, NULL::text AS actor_name, 'subscription' AS entity_type, s.id::text AS entity_id
+         FROM subscriptions s
+         JOIN users u ON u.id = s.user_id
+         WHERE u.phone = $1
+         ORDER BY s.created_at DESC
+         LIMIT 20`,
+        [phone]
+      ).catch(() => ({ rows: [] })),
+    ])
+
+    const timeline = [...notes.rows, ...events.rows, ...orders.rows, ...feedback.rows, ...reviews.rows, ...points.rows, ...subs.rows]
+      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+      .slice(0, 100)
+    return { ok: true, data: { timeline } }
   })
 
   // GET /admin/stats  — dashboard KPIs
@@ -639,7 +1693,7 @@ module.exports = async function adminRoutes(app) {
       querystring: {
         type: 'object',
         properties: {
-          status: { type: 'string', enum: ['active', 'paused', 'cancelled'] },
+          status: { type: 'string', enum: ['active', 'paused', 'cancelled', 'upcoming_7', 'payment_issue', 'delivery_due'] },
           page:   { type: 'integer', minimum: 1, default: 1 },
           limit:  { type: 'integer', minimum: 1, maximum: 100, default: 20 },
         },
@@ -649,9 +1703,17 @@ module.exports = async function adminRoutes(app) {
     const { status, page = 1, limit = 20 } = req.query
     const offset = (page - 1) * limit
     const params = []
-    const where  = status
-      ? (params.push(status), `WHERE s.status = $1`)
-      : `WHERE s.status != 'cancelled'`
+    let where = `WHERE s.status != 'cancelled'`
+    if (['active', 'paused', 'cancelled'].includes(status)) {
+      params.push(status)
+      where = `WHERE s.status = $1`
+    } else if (status === 'upcoming_7') {
+      where = `WHERE s.status = 'active' AND s.next_delivery_date <= CURRENT_DATE + INTERVAL '7 days'`
+    } else if (status === 'payment_issue') {
+      where = `WHERE s.status != 'cancelled' AND s.payment_status != 'ok'`
+    } else if (status === 'delivery_due') {
+      where = `WHERE s.status = 'active' AND s.next_delivery_date <= CURRENT_DATE`
+    }
 
     const { rows: countRows } = await query(
       `SELECT COUNT(*) FROM subscriptions s ${where}`,
@@ -661,8 +1723,9 @@ module.exports = async function adminRoutes(app) {
 
     const dataParams = [...params, limit, offset]
     const { rows } = await query(
-      `SELECT s.id, s.product_name, s.qty, s.unit_price, s.address,
-              s.billing_day, s.status, s.pause_until, s.next_delivery_date,
+      `SELECT s.id, s.user_id, s.product_id, s.product_name, s.qty, s.unit_price, s.address,
+              s.billing_day, s.status, s.pause_until, s.next_delivery_date, s.admin_note,
+              s.payment_status, s.cancel_reason, s.cancelled_at,
               s.created_at, s.updated_at,
               u.name AS user_name, u.phone AS user_phone, u.email AS user_email
        FROM   subscriptions s
@@ -673,6 +1736,282 @@ module.exports = async function adminRoutes(app) {
       dataParams
     )
     return { ok: true, data: { subscriptions: rows, total, page, limit } }
+  })
+
+  app.get('/subscriptions/:id/events', {
+    schema: { params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } } },
+  }, async (req) => {
+    const { rows } = await query(
+      `SELECT e.id, e.event_type, e.note, e.metadata, e.created_at, u.name AS admin_name
+       FROM subscription_events e
+       LEFT JOIN users u ON u.id = e.admin_id
+       WHERE e.subscription_id = $1
+       ORDER BY e.created_at DESC`,
+      [req.params.id]
+    )
+    return { ok: true, data: { events: rows } }
+  })
+
+  app.post('/subscriptions', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['qty', 'address', 'billing_day'],
+        properties: {
+          user_id: { type: 'string', format: 'uuid' },
+          phone: { type: 'string', maxLength: 25 },
+          product_id: { type: 'string', format: 'uuid' },
+          product_name: { type: 'string', maxLength: 255 },
+          qty: { type: 'integer', minimum: 1, maximum: 20 },
+          unit_price: { type: 'integer', minimum: 0 },
+          address: { type: 'string', minLength: 5, maxLength: 500 },
+          billing_day: { type: 'integer', minimum: 1, maximum: 28 },
+          next_delivery_date: { type: 'string', maxLength: 20 },
+          admin_note: { type: 'string', maxLength: 1000 },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req, reply) => {
+    const created = await withTransaction(async (client) => {
+      let userId = req.body.user_id || null
+      if (!userId && req.body.phone) {
+        const user = await client.query(`SELECT id FROM users WHERE phone = $1 AND is_active = true LIMIT 1`, [req.body.phone])
+        if (!user.rows.length) throw { code: 'NOT_FOUND', message: 'No active user found for this phone number.' }
+        userId = user.rows[0].id
+      }
+      if (!userId) throw { code: 'VALIDATION_ERROR', message: 'Customer user or phone is required.' }
+      const existing = await client.query(`SELECT id FROM subscriptions WHERE user_id = $1 AND status != 'cancelled' LIMIT 1`, [userId])
+      if (existing.rows.length) throw { code: 'SUBSCRIPTION_EXISTS', message: 'Customer already has an active or paused subscription.' }
+
+      let productName = req.body.product_name || 'Midnight Blend — 95g Pouch'
+      let unitPrice = req.body.unit_price || subscriptionUnitPrice(699)
+      if (req.body.product_id) {
+        const product = await client.query(`SELECT name, price FROM products WHERE id = $1`, [req.body.product_id])
+        if (!product.rows.length) throw { code: 'NOT_FOUND', message: 'Product not found.' }
+        productName = product.rows[0].name
+        unitPrice = req.body.unit_price || subscriptionUnitPrice(product.rows[0].price)
+      }
+      const deliveryDate = req.body.next_delivery_date || nextSubscriptionDeliveryDate(req.body.billing_day)
+      const { rows } = await client.query(
+        `INSERT INTO subscriptions
+           (user_id, product_id, product_name, qty, unit_price, address, billing_day, next_delivery_date, admin_note, updated_by_admin_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         RETURNING *`,
+        [userId, req.body.product_id || null, productName, req.body.qty, unitPrice, req.body.address.trim(), req.body.billing_day, deliveryDate, req.body.admin_note || null, req.admin.id]
+      )
+      await addSubscriptionEvent(client, req, rows[0].id, 'created', req.body.admin_note || 'Subscription created by admin.')
+      await auditLog(client, req, { action: 'subscriptions.create', section: 'subscriptions', entity_type: 'subscription', entity_id: rows[0].id, summary: `Subscription created for ${productName}.` })
+      return rows[0]
+    })
+    return reply.code(201).send({ ok: true, data: created })
+  })
+
+  app.patch('/subscriptions/:id', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+      body: {
+        type: 'object',
+        properties: {
+          product_id: { type: ['string', 'null'], format: 'uuid' },
+          qty: { type: 'integer', minimum: 1, maximum: 20 },
+          address: { type: 'string', minLength: 5, maxLength: 500 },
+          billing_day: { type: 'integer', minimum: 1, maximum: 28 },
+          next_delivery_date: { type: 'string', maxLength: 20 },
+          admin_note: { type: ['string', 'null'], maxLength: 1000 },
+          payment_status: { type: 'string', enum: ['ok', 'payment_issue', 'failed', 'pending'] },
+        },
+        additionalProperties: false,
+        minProperties: 1,
+      },
+    },
+  }, async (req) => {
+    const updated = await withTransaction(async (client) => {
+      const cur = await client.query(`SELECT * FROM subscriptions WHERE id = $1 FOR UPDATE`, [req.params.id])
+      if (!cur.rows.length) throw { code: 'NOT_FOUND', message: 'Subscription not found.' }
+      const sub = cur.rows[0]
+      let productName = sub.product_name
+      let unitPrice = sub.unit_price
+      if (req.body.product_id && req.body.product_id !== sub.product_id) {
+        const product = await client.query(`SELECT name, price FROM products WHERE id = $1`, [req.body.product_id])
+        if (!product.rows.length) throw { code: 'NOT_FOUND', message: 'Product not found.' }
+        productName = product.rows[0].name
+        unitPrice = subscriptionUnitPrice(product.rows[0].price)
+      }
+      const billingDay = req.body.billing_day || sub.billing_day
+      const nextDelivery = req.body.next_delivery_date || (req.body.billing_day ? nextSubscriptionDeliveryDate(billingDay) : sub.next_delivery_date)
+      const { rows } = await client.query(
+        `UPDATE subscriptions
+         SET product_id = COALESCE($2, product_id),
+             product_name = $3,
+             unit_price = $4,
+             qty = COALESCE($5, qty),
+             address = COALESCE($6, address),
+             billing_day = $7,
+             next_delivery_date = $8,
+             admin_note = COALESCE($9, admin_note),
+             payment_status = COALESCE($10, payment_status),
+             updated_by_admin_id = $11,
+             updated_at = NOW()
+         WHERE id = $1
+         RETURNING *`,
+        [req.params.id, req.body.product_id || null, productName, unitPrice, req.body.qty || null, req.body.address?.trim() || null,
+         billingDay, nextDelivery, req.body.admin_note ?? null, req.body.payment_status || null, req.admin.id]
+      )
+      await addSubscriptionEvent(client, req, req.params.id, 'updated', req.body.admin_note || 'Subscription updated.', { fields: Object.keys(req.body) })
+      await auditLog(client, req, { action: 'subscriptions.edit', section: 'subscriptions', entity_type: 'subscription', entity_id: req.params.id, summary: 'Subscription updated.', metadata: { fields: Object.keys(req.body) } })
+      return rows[0]
+    })
+    return { ok: true, data: updated }
+  })
+
+  app.post('/subscriptions/:id/pause', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+      body: {
+        type: 'object',
+        properties: {
+          months: { type: 'integer', minimum: 1, maximum: 6 },
+          pause_until: { type: 'string', maxLength: 20 },
+          note: { type: 'string', maxLength: 1000 },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req) => {
+    const result = await withTransaction(async (client) => {
+      const cur = await client.query(`SELECT * FROM subscriptions WHERE id = $1 AND status = 'active' FOR UPDATE`, [req.params.id])
+      if (!cur.rows.length) throw { code: 'NOT_FOUND', message: 'No active subscription to pause.' }
+      const pauseUntil = req.body.pause_until || addMonthsToDate(cur.rows[0].next_delivery_date, req.body.months || 1)
+      const { rows } = await client.query(
+        `UPDATE subscriptions
+         SET status = 'paused', pause_until = $2, next_delivery_date = $2, admin_note = COALESCE($3, admin_note),
+             updated_by_admin_id = $4, updated_at = NOW()
+         WHERE id = $1
+         RETURNING *`,
+        [req.params.id, pauseUntil, req.body.note || null, req.admin.id]
+      )
+      await addSubscriptionEvent(client, req, req.params.id, 'paused', req.body.note || `Paused until ${pauseUntil}.`, { pause_until: pauseUntil })
+      await auditLog(client, req, { action: 'subscriptions.pause', section: 'subscriptions', entity_type: 'subscription', entity_id: req.params.id, summary: `Subscription paused until ${pauseUntil}.` })
+      return rows[0]
+    })
+    return { ok: true, data: result }
+  })
+
+  app.post('/subscriptions/:id/resume', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+      body: { type: 'object', properties: { note: { type: 'string', maxLength: 1000 } }, additionalProperties: false },
+    },
+  }, async (req) => {
+    const result = await withTransaction(async (client) => {
+      const { rows } = await client.query(
+        `UPDATE subscriptions
+         SET status = 'active',
+             pause_until = NULL,
+             next_delivery_date = CASE
+               WHEN pause_until <= CURRENT_DATE
+               THEN CASE
+                 WHEN DATE_TRUNC('month', CURRENT_DATE)::date + ((billing_day - 1) || ' days')::interval > CURRENT_DATE
+                 THEN DATE_TRUNC('month', CURRENT_DATE)::date + ((billing_day - 1) || ' days')::interval
+                 ELSE DATE_TRUNC('month', CURRENT_DATE)::date + INTERVAL '1 month' + ((billing_day - 1) || ' days')::interval
+               END
+               ELSE pause_until
+             END,
+             admin_note = COALESCE($2, admin_note),
+             updated_by_admin_id = $3,
+             updated_at = NOW()
+         WHERE id = $1 AND status = 'paused'
+         RETURNING *`,
+        [req.params.id, req.body.note || null, req.admin.id]
+      )
+      if (!rows.length) throw { code: 'NOT_FOUND', message: 'No paused subscription found.' }
+      await addSubscriptionEvent(client, req, req.params.id, 'resumed', req.body.note || 'Subscription resumed.')
+      await auditLog(client, req, { action: 'subscriptions.resume', section: 'subscriptions', entity_type: 'subscription', entity_id: req.params.id, summary: 'Subscription resumed.' })
+      return rows[0]
+    })
+    return { ok: true, data: result }
+  })
+
+  app.post('/subscriptions/:id/cancel', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+      body: { type: 'object', properties: { reason: { type: 'string', maxLength: 1000 } }, additionalProperties: false },
+    },
+  }, async (req) => {
+    const result = await withTransaction(async (client) => {
+      const { rows } = await client.query(
+        `UPDATE subscriptions
+         SET status = 'cancelled',
+             cancel_reason = $2,
+             cancelled_by_admin_id = $3,
+             cancelled_at = NOW(),
+             updated_by_admin_id = $3,
+             updated_at = NOW()
+         WHERE id = $1 AND status != 'cancelled'
+         RETURNING *`,
+        [req.params.id, req.body.reason || null, req.admin.id]
+      )
+      if (!rows.length) throw { code: 'NOT_FOUND', message: 'Subscription not found or already cancelled.' }
+      await addSubscriptionEvent(client, req, req.params.id, 'cancelled', req.body.reason || 'Subscription cancelled by admin.')
+      await auditLog(client, req, { action: 'subscriptions.cancel', section: 'subscriptions', entity_type: 'subscription', entity_id: req.params.id, summary: 'Subscription cancelled.' })
+      return rows[0]
+    })
+    return { ok: true, data: result }
+  })
+
+  app.post('/subscriptions/:id/create-order', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+      body: { type: 'object', properties: { note: { type: 'string', maxLength: 1000 } }, additionalProperties: false },
+    },
+  }, async (req, reply) => {
+    const order = await withTransaction(async (client) => {
+      const subRes = await client.query(
+        `SELECT s.*, u.name AS user_name, u.phone AS user_phone
+         FROM subscriptions s
+         JOIN users u ON u.id = s.user_id
+         WHERE s.id = $1 AND s.status = 'active'
+         FOR UPDATE`,
+        [req.params.id]
+      )
+      if (!subRes.rows.length) throw { code: 'NOT_FOUND', message: 'Active subscription not found.' }
+      const sub = subRes.rows[0]
+      const subtotal = Number(sub.qty) * Number(sub.unit_price)
+      const orderRef = await generateOrderRef(client)
+      if (sub.product_id) {
+        const stock = await client.query(`SELECT stock FROM products WHERE id = $1 FOR UPDATE`, [sub.product_id])
+        if (stock.rows.length && Number(stock.rows[0].stock) < Number(sub.qty)) {
+          throw { code: 'INSUFFICIENT_STOCK', message: `Not enough stock for ${sub.product_name}.` }
+        }
+        if (stock.rows.length) await client.query(`UPDATE products SET stock = stock - $2 WHERE id = $1`, [sub.product_id, sub.qty])
+      }
+      const { rows } = await client.query(
+        `INSERT INTO orders
+           (order_ref, user_id, customer_name, customer_phone, address_snapshot, payment_type, payment_number,
+            subtotal, delivery_fee, total, status, notes)
+         VALUES ($1, $2, $3, $4, $5::jsonb, 'cod', $4, $6, 0, $6, 'processing', $7)
+         RETURNING id, order_ref, status, total, created_at`,
+        [orderRef, sub.user_id, sub.user_name, sub.user_phone, JSON.stringify({ address: sub.address, line1: sub.address }), subtotal, req.body.note || `Created from subscription ${sub.id}`]
+      )
+      await client.query(
+        `INSERT INTO order_items (order_id, product_id, name_snapshot, qty, unit_price, subtotal)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [rows[0].id, sub.product_id || null, sub.product_name, sub.qty, sub.unit_price, subtotal]
+      )
+      await client.query(
+        `UPDATE subscriptions
+         SET next_delivery_date = (next_delivery_date + INTERVAL '1 month')::date,
+             updated_by_admin_id = $2,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [req.params.id, req.admin.id]
+      )
+      await addSubscriptionEvent(client, req, req.params.id, 'order_created', req.body.note || `Order ${orderRef} created.`, { order_id: rows[0].id, order_ref: orderRef })
+      await auditLog(client, req, { action: 'subscriptions.create_order', section: 'subscriptions', entity_type: 'subscription', entity_id: req.params.id, summary: `Order ${orderRef} created from subscription.`, metadata: { order_id: rows[0].id } })
+      return rows[0]
+    })
+    return reply.code(201).send({ ok: true, data: order })
   })
 
   // GET /admin/financials?month=YYYY-MM — monthly financial summary
@@ -689,6 +2028,206 @@ module.exports = async function adminRoutes(app) {
     const month = req.query.month || new Date().toISOString().slice(0, 7)
     const data = await getFinancialSummary((sql, params) => query(sql, params), month)
     return { ok: true, data }
+  })
+
+  app.get('/financials/expenses', {
+    schema: {
+      querystring: {
+        type: 'object',
+        properties: {
+          month: { type: 'string', pattern: '^\\d{4}-\\d{2}$' },
+          category: { type: 'string', maxLength: 40 },
+          page: { type: 'integer', minimum: 1, default: 1 },
+          limit: { type: 'integer', minimum: 1, maximum: 100, default: 50 },
+        },
+      },
+    },
+  }, async (req) => {
+    const page = req.query.page || 1
+    const limit = req.query.limit || 50
+    const offset = (page - 1) * limit
+    const params = []
+    const where = []
+    if (req.query.month) { params.push(`${req.query.month}-01`); where.push(`e.expense_date >= $${params.length}::date AND e.expense_date < $${params.length}::date + INTERVAL '1 month'`) }
+    if (req.query.category) { params.push(req.query.category); where.push(`e.category = $${params.length}`) }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
+    const count = await query(`SELECT COUNT(*)::int AS total FROM financial_expenses e ${whereSql}`, params)
+    const { rows } = await query(
+      `SELECT e.*, u.name AS created_by_admin_name
+       FROM financial_expenses e
+       LEFT JOIN users u ON u.id = e.created_by_admin_id
+       ${whereSql}
+       ORDER BY e.expense_date DESC, e.created_at DESC
+       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, limit, offset]
+    )
+    return { ok: true, data: { expenses: rows, total: count.rows[0].total, page, limit } }
+  })
+
+  app.post('/financials/expenses', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['category', 'amount', 'expense_date'],
+        properties: {
+          category: { type: 'string', enum: ['product_purchase', 'packaging', 'delivery_courier', 'ads_marketing', 'commission', 'refund', 'operational', 'other'] },
+          amount: { type: 'integer', minimum: 0 },
+          expense_date: { type: 'string', maxLength: 20 },
+          note: { type: 'string', maxLength: 1000 },
+          attachment_url: { type: 'string', maxLength: 1000 },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req, reply) => {
+    const expense = await withTransaction(async (client) => {
+      const { rows } = await client.query(
+        `INSERT INTO financial_expenses
+           (category, amount, expense_date, note, attachment_url, created_by_admin_id, updated_by_admin_id)
+         VALUES ($1, $2, $3::date, $4, $5, $6, $6)
+         RETURNING *`,
+        [req.body.category, req.body.amount, req.body.expense_date, req.body.note || null, req.body.attachment_url || null, req.admin.id]
+      )
+      await auditLog(client, req, {
+        action: 'financials.manage_expenses',
+        section: 'financials',
+        entity_type: 'financial_expense',
+        entity_id: rows[0].id,
+        summary: `Expense added: ${req.body.category} ৳${req.body.amount}.`,
+      })
+      return rows[0]
+    })
+    return reply.code(201).send({ ok: true, data: expense })
+  })
+
+  app.patch('/financials/expenses/:id', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+      body: {
+        type: 'object',
+        properties: {
+          category: { type: 'string', enum: ['product_purchase', 'packaging', 'delivery_courier', 'ads_marketing', 'commission', 'refund', 'operational', 'other'] },
+          amount: { type: 'integer', minimum: 0 },
+          expense_date: { type: 'string', maxLength: 20 },
+          note: { type: ['string', 'null'], maxLength: 1000 },
+          attachment_url: { type: ['string', 'null'], maxLength: 1000 },
+        },
+        additionalProperties: false,
+        minProperties: 1,
+      },
+    },
+  }, async (req) => {
+    const updated = await withTransaction(async (client) => {
+      const allowed = ['category', 'amount', 'expense_date', 'note', 'attachment_url']
+      const entries = Object.entries(req.body).filter(([key]) => allowed.includes(key))
+      const sets = entries.map(([key], index) => `${key} = $${index + 2}${key === 'expense_date' ? '::date' : ''}`)
+      const values = entries.map(([, value]) => value === '' ? null : value)
+      const { rows } = await client.query(
+        `UPDATE financial_expenses
+         SET ${sets.join(', ')}, updated_by_admin_id = $${values.length + 2}, updated_at = NOW()
+         WHERE id = $1
+         RETURNING *`,
+        [req.params.id, ...values, req.admin.id]
+      )
+      if (!rows.length) throw { code: 'NOT_FOUND', message: 'Expense not found.' }
+      await auditLog(client, req, {
+        action: 'financials.manage_expenses',
+        section: 'financials',
+        entity_type: 'financial_expense',
+        entity_id: req.params.id,
+        summary: 'Expense updated.',
+        metadata: { fields: entries.map(([key]) => key) },
+      })
+      return rows[0]
+    })
+    return { ok: true, data: updated }
+  })
+
+  app.get('/financials/reconciliations', {
+    schema: {
+      querystring: {
+        type: 'object',
+        properties: {
+          month: { type: 'string', pattern: '^\\d{4}-\\d{2}$' },
+          status: { type: 'string', maxLength: 20 },
+          page: { type: 'integer', minimum: 1, default: 1 },
+          limit: { type: 'integer', minimum: 1, maximum: 100, default: 50 },
+        },
+      },
+    },
+  }, async (req) => {
+    const page = req.query.page || 1
+    const limit = req.query.limit || 50
+    const offset = (page - 1) * limit
+    const params = []
+    const where = []
+    if (req.query.month) { params.push(`${req.query.month}-01`); where.push(`pr.created_at >= $${params.length}::date AND pr.created_at < $${params.length}::date + INTERVAL '1 month'`) }
+    if (req.query.status) { params.push(req.query.status); where.push(`pr.status = $${params.length}`) }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
+    const count = await query(`SELECT COUNT(*)::int AS total FROM payment_reconciliations pr ${whereSql}`, params)
+    const { rows } = await query(
+      `SELECT pr.*, o.order_ref, u.name AS admin_name
+       FROM payment_reconciliations pr
+       LEFT JOIN orders o ON o.id = pr.order_id
+       LEFT JOIN users u ON u.id = pr.reconciled_by_admin_id
+       ${whereSql}
+       ORDER BY pr.created_at DESC
+       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, limit, offset]
+    )
+    return { ok: true, data: { reconciliations: rows, total: count.rows[0].total, page, limit } }
+  })
+
+  app.post('/financials/reconciliations', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['payment_method', 'expected_amount', 'received_amount', 'status'],
+        properties: {
+          order_id: { type: ['string', 'null'], format: 'uuid' },
+          payment_method: { type: 'string', enum: ['bkash', 'nagad', 'rocket', 'cod', 'card', 'bank_transfer', 'cash'] },
+          expected_amount: { type: 'integer', minimum: 0 },
+          received_amount: { type: 'integer', minimum: 0 },
+          status: { type: 'string', enum: ['pending', 'verified', 'mismatch', 'failed', 'refunded'] },
+          transaction_id: { type: 'string', maxLength: 80 },
+          note: { type: 'string', maxLength: 1000 },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req, reply) => {
+    const rec = await withTransaction(async (client) => {
+      const reconciledAt = ['verified', 'mismatch', 'failed', 'refunded'].includes(req.body.status) ? 'NOW()' : 'NULL'
+      const { rows } = await client.query(
+        `INSERT INTO payment_reconciliations
+           (order_id, payment_method, expected_amount, received_amount, status, transaction_id, note, reconciled_by_admin_id, reconciled_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, ${reconciledAt})
+         RETURNING *`,
+        [req.body.order_id || null, req.body.payment_method, req.body.expected_amount, req.body.received_amount, req.body.status, req.body.transaction_id || null, req.body.note || null, req.admin.id]
+      )
+      if (req.body.order_id) {
+        await client.query(
+          `UPDATE orders
+           SET payment_status = $2,
+               payment_trx_id = COALESCE($3, payment_trx_id),
+               payment_amount = COALESCE($4, payment_amount),
+               payment_note = COALESCE($5, payment_note),
+               updated_at = NOW()
+           WHERE id = $1`,
+          [req.body.order_id, req.body.status, req.body.transaction_id || null, req.body.received_amount || null, req.body.note || null]
+        )
+      }
+      await auditLog(client, req, {
+        action: 'financials.reconcile_payments',
+        section: 'financials',
+        entity_type: 'payment_reconciliation',
+        entity_id: rows[0].id,
+        summary: `Payment reconciliation recorded: ${req.body.status}.`,
+        metadata: { order_id: req.body.order_id || null },
+      })
+      return rows[0]
+    })
+    return reply.code(201).send({ ok: true, data: rec })
   })
 
   // GET /admin/coupons/validate?code=XXX&subtotal=YYY&phone=01XXXXXXXXX
@@ -975,6 +2514,315 @@ module.exports = async function adminRoutes(app) {
     return { ok: true, data: { products: rows } }
   })
 
+  async function loadPackages() {
+    const { rows } = await query(
+      `SELECT pp.*,
+              COALESCE(json_agg(json_build_object(
+                'product_id', ppi.product_id,
+                'qty', ppi.qty,
+                'name', p.name,
+                'price', p.price,
+                'stock', p.stock
+              ) ORDER BY p.name) FILTER (WHERE ppi.product_id IS NOT NULL), '[]') AS items
+       FROM product_packages pp
+       LEFT JOIN product_package_items ppi ON ppi.package_id = pp.id
+       LEFT JOIN products p ON p.id = ppi.product_id
+       GROUP BY pp.id
+       ORDER BY pp.sort_order ASC, pp.created_at DESC`
+    )
+    return rows.map(pkg => ({
+      ...pkg,
+      stock_available: (pkg.items || []).length
+        ? Math.min(...pkg.items.map(it => Math.floor(Number(it.stock || 0) / Math.max(1, Number(it.qty || 1)))))
+        : 0,
+    }))
+  }
+
+  app.get('/packages', async () => {
+    return { ok: true, data: { packages: await loadPackages() } }
+  })
+
+  app.get('/products/low-stock', async () => {
+    const { rows } = await query(
+      `SELECT ${PRODUCT_PRICE_RETURNING}
+       FROM products
+       WHERE stock <= low_stock_threshold
+       ORDER BY stock ASC, name ASC`
+    )
+    return { ok: true, data: { products: rows } }
+  })
+
+  app.get('/products/:id/inventory', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+      querystring: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 100, default: 50 } } },
+    },
+  }, async (req) => {
+    const limit = req.query.limit || 50
+    const [movements, batches] = await Promise.all([
+      query(
+        `SELECT m.*, u.name AS admin_name
+         FROM inventory_stock_movements m
+         LEFT JOIN users u ON u.id = m.created_by_admin_id
+         WHERE m.product_id = $1
+         ORDER BY m.created_at DESC
+         LIMIT $2`,
+        [req.params.id, limit]
+      ),
+      query(
+        `SELECT pb.*, s.name AS supplier_lookup_name, u.name AS admin_name
+         FROM purchase_batches pb
+         LEFT JOIN suppliers s ON s.id = pb.supplier_id
+         LEFT JOIN users u ON u.id = pb.created_by_admin_id
+         WHERE pb.product_id = $1
+         ORDER BY pb.purchase_date DESC, pb.created_at DESC
+         LIMIT $2`,
+        [req.params.id, limit]
+      ),
+    ])
+    return { ok: true, data: { movements: movements.rows, purchase_batches: batches.rows } }
+  })
+
+  async function insertStockMovement(client, req, { productId, movementType, quantity, stockBefore, stockAfter, reason, purchaseBatchId = null, orderId = null }) {
+    await client.query(
+      `INSERT INTO inventory_stock_movements
+         (product_id, movement_type, quantity, stock_before, stock_after, reason, purchase_batch_id, order_id, created_by_admin_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [productId, movementType, quantity, stockBefore, stockAfter, reason, purchaseBatchId, orderId, req.admin.id]
+    )
+  }
+
+  app.post('/products/:id/inventory/adjust', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+      body: {
+        type: 'object',
+        required: ['movement_type', 'quantity', 'reason'],
+        properties: {
+          movement_type: { type: 'string', enum: ['stock_in', 'stock_out', 'adjustment', 'damaged', 'returned', 'manual_correction'] },
+          quantity: { type: 'integer', minimum: 1 },
+          direction: { type: 'string', enum: ['in', 'out'], default: 'in' },
+          reason: { type: 'string', minLength: 2, maxLength: 1000 },
+          low_stock_threshold: { type: 'integer', minimum: 0 },
+          cost_per_unit: { type: ['integer', 'null'], minimum: 0 },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req) => {
+    const updated = await withTransaction(async (client) => {
+      const product = await client.query(`SELECT id, name, stock FROM products WHERE id = $1 FOR UPDATE`, [req.params.id])
+      if (!product.rows.length) throw { code: 'NOT_FOUND', message: 'Product not found.' }
+      const before = Number(product.rows[0].stock || 0)
+      const isOut = req.body.direction === 'out' || ['stock_out', 'damaged'].includes(req.body.movement_type)
+      const after = isOut ? before - req.body.quantity : before + req.body.quantity
+      if (after < 0) throw { code: 'INSUFFICIENT_STOCK', message: 'Stock adjustment cannot make stock negative.' }
+      const { rows } = await client.query(
+        `UPDATE products
+         SET stock = $2,
+             low_stock_threshold = COALESCE($3, low_stock_threshold),
+             cost_per_unit = COALESCE($4, cost_per_unit),
+             updated_at = NOW()
+         WHERE id = $1
+         RETURNING ${PRODUCT_PRICE_RETURNING}`,
+        [req.params.id, after, req.body.low_stock_threshold ?? null, req.body.cost_per_unit ?? null]
+      )
+      await insertStockMovement(client, req, {
+        productId: req.params.id,
+        movementType: req.body.movement_type,
+        quantity: req.body.quantity,
+        stockBefore: before,
+        stockAfter: after,
+        reason: req.body.reason,
+      })
+      await auditLog(client, req, {
+        action: 'products.manage_inventory',
+        section: 'products',
+        entity_type: 'product',
+        entity_id: req.params.id,
+        summary: `Stock ${isOut ? 'decreased' : 'increased'} for ${product.rows[0].name}: ${before} → ${after}.`,
+        metadata: { movement_type: req.body.movement_type, quantity: req.body.quantity },
+      })
+      return rows[0]
+    })
+    return { ok: true, data: updated }
+  })
+
+  app.post('/products/:id/purchase-batches', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+      body: {
+        type: 'object',
+        required: ['supplier_name', 'quantity_purchased', 'unit_cost', 'purchase_date'],
+        properties: {
+          supplier_name: { type: 'string', minLength: 1, maxLength: 255 },
+          supplier_phone: { type: 'string', maxLength: 30 },
+          supplier_email: { type: 'string', maxLength: 255 },
+          quantity_purchased: { type: 'integer', minimum: 1 },
+          unit_cost: { type: 'integer', minimum: 0 },
+          purchase_date: { type: 'string', maxLength: 20 },
+          best_before: { type: ['string', 'null'], maxLength: 20 },
+          batch_note: { type: 'string', maxLength: 1000 },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req, reply) => {
+    const batch = await withTransaction(async (client) => {
+      const product = await client.query(`SELECT id, name, stock FROM products WHERE id = $1 FOR UPDATE`, [req.params.id])
+      if (!product.rows.length) throw { code: 'NOT_FOUND', message: 'Product not found.' }
+      const supplier = await client.query(
+        `INSERT INTO suppliers (name, phone, email, created_by_admin_id)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (name) DO UPDATE SET phone = COALESCE(EXCLUDED.phone, suppliers.phone), email = COALESCE(EXCLUDED.email, suppliers.email), updated_at = NOW()
+         RETURNING id, name`,
+        [req.body.supplier_name.trim(), req.body.supplier_phone || null, req.body.supplier_email || null, req.admin.id]
+      )
+      const { rows } = await client.query(
+        `INSERT INTO purchase_batches
+           (product_id, supplier_id, supplier_name, purchase_date, quantity_purchased, unit_cost, best_before, batch_note, created_by_admin_id)
+         VALUES ($1, $2, $3, $4::date, $5, $6, $7::date, $8, $9)
+         RETURNING *`,
+        [req.params.id, supplier.rows[0].id, req.body.supplier_name.trim(), req.body.purchase_date, req.body.quantity_purchased, req.body.unit_cost, req.body.best_before || null, req.body.batch_note || null, req.admin.id]
+      )
+      const before = Number(product.rows[0].stock || 0)
+      const after = before + req.body.quantity_purchased
+      await client.query(
+        `UPDATE products SET stock = $2, cost_per_unit = $3, updated_at = NOW() WHERE id = $1`,
+        [req.params.id, after, req.body.unit_cost]
+      )
+      await insertStockMovement(client, req, {
+        productId: req.params.id,
+        movementType: 'stock_in',
+        quantity: req.body.quantity_purchased,
+        stockBefore: before,
+        stockAfter: after,
+        reason: req.body.batch_note || `Purchase batch from ${req.body.supplier_name}.`,
+        purchaseBatchId: rows[0].id,
+      })
+      await auditLog(client, req, {
+        action: 'products.manage_inventory',
+        section: 'products',
+        entity_type: 'purchase_batch',
+        entity_id: rows[0].id,
+        summary: `Purchase batch added for ${product.rows[0].name}: +${req.body.quantity_purchased}.`,
+      })
+      return rows[0]
+    })
+    return reply.code(201).send({ ok: true, data: batch })
+  })
+
+  app.post('/packages', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['name', 'price', 'items'],
+        properties: {
+          name: { type: 'string', minLength: 1, maxLength: 255 },
+          description: { type: 'string', maxLength: 5000 },
+          price: { type: 'number', minimum: 0 },
+          status: { type: 'string', maxLength: 50 },
+          image: { type: ['string', 'null'] },
+          savings_label: { type: ['string', 'null'], maxLength: 120 },
+          sort_order: { type: 'integer', default: 0 },
+          is_visible: { type: 'boolean', default: true },
+          items: {
+            type: 'array',
+            minItems: 1,
+            items: {
+              type: 'object',
+              required: ['product_id', 'qty'],
+              properties: {
+                product_id: { type: 'string', format: 'uuid' },
+                qty: { type: 'integer', minimum: 1 },
+              },
+            },
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req, reply) => {
+    const pkg = await withTransaction(async (client) => {
+      const { rows } = await client.query(
+        `INSERT INTO product_packages
+           (name, description, price, status, image, savings_label, sort_order, is_visible, created_by_admin_id, updated_by_admin_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+         RETURNING *`,
+        [req.body.name.trim(), req.body.description || null, Math.round(Number(req.body.price)), req.body.status || 'Active',
+         req.body.image || null, req.body.savings_label || null, req.body.sort_order || 0, req.body.is_visible !== false, req.admin.id]
+      )
+      for (const item of req.body.items) {
+        await client.query(`INSERT INTO product_package_items (package_id, product_id, qty) VALUES ($1, $2, $3)`, [rows[0].id, item.product_id, item.qty])
+      }
+      await auditLog(client, req, { action: 'packages.create', section: 'products', entity_type: 'product_package', entity_id: rows[0].id, summary: `Package "${rows[0].name}" created.` })
+      return rows[0]
+    })
+    return reply.code(201).send({ ok: true, data: pkg })
+  })
+
+  app.patch('/packages/:id', {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+      body: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', minLength: 1, maxLength: 255 },
+          description: { type: ['string', 'null'], maxLength: 5000 },
+          price: { type: 'number', minimum: 0 },
+          status: { type: 'string', maxLength: 50 },
+          image: { type: ['string', 'null'] },
+          savings_label: { type: ['string', 'null'], maxLength: 120 },
+          sort_order: { type: 'integer' },
+          is_visible: { type: 'boolean' },
+          items: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['product_id', 'qty'],
+              properties: { product_id: { type: 'string', format: 'uuid' }, qty: { type: 'integer', minimum: 1 } },
+            },
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+  }, async (req) => {
+    await withTransaction(async (client) => {
+      const allowed = ['name', 'description', 'price', 'status', 'image', 'savings_label', 'sort_order', 'is_visible']
+      const entries = Object.entries(req.body).filter(([k]) => allowed.includes(k))
+      if (entries.length) {
+        const sets = entries.map(([k], i) => `${k} = $${i + 1}`)
+        const vals = entries.map(([k, v]) => k === 'price' ? Math.round(Number(v)) : v)
+        vals.push(req.admin.id, req.params.id)
+        const { rows } = await client.query(
+          `UPDATE product_packages SET ${sets.join(', ')}, updated_by_admin_id = $${vals.length - 1}, updated_at = NOW()
+           WHERE id = $${vals.length} RETURNING id`,
+          vals
+        )
+        if (!rows.length) throw { code: 'NOT_FOUND', message: 'Package not found.' }
+      }
+      if (Array.isArray(req.body.items)) {
+        await client.query(`DELETE FROM product_package_items WHERE package_id = $1`, [req.params.id])
+        for (const item of req.body.items) {
+          await client.query(`INSERT INTO product_package_items (package_id, product_id, qty) VALUES ($1, $2, $3)`, [req.params.id, item.product_id, item.qty])
+        }
+      }
+      await auditLog(client, req, { action: 'packages.edit', section: 'products', entity_type: 'product_package', entity_id: req.params.id, summary: 'Package updated.' })
+    })
+    const packages = await loadPackages()
+    return { ok: true, data: packages.find(p => p.id === req.params.id) }
+  })
+
+  app.delete('/packages/:id', {
+    schema: { params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } } },
+  }, async (req) => {
+    const { rows } = await query(`DELETE FROM product_packages WHERE id = $1 RETURNING id`, [req.params.id])
+    if (!rows.length) throw { code: 'NOT_FOUND', message: 'Package not found.' }
+    await auditLog(null, req, { action: 'packages.delete', section: 'products', entity_type: 'product_package', entity_id: req.params.id, summary: 'Package deleted.' })
+    return { ok: true, data: { id: req.params.id } }
+  })
+
   // POST /admin/products
   app.post('/products', {
     schema: {
@@ -992,6 +2840,8 @@ module.exports = async function adminRoutes(app) {
           discount_max_orders: { type: ['integer', 'null'], minimum: 1 },
           discount_label:   { type: ['string', 'null'], maxLength: 100 },
           stock:       { type: 'integer', minimum: 0 },
+          low_stock_threshold: { type: 'integer', minimum: 0 },
+          cost_per_unit: { type: ['integer', 'null'], minimum: 0 },
           qty:         { type: 'integer', minimum: 1 },
           unit:        { type: 'string', maxLength: 20 },
           status:      { type: 'string', maxLength: 50 },
@@ -1007,19 +2857,19 @@ module.exports = async function adminRoutes(app) {
       },
     },
   }, async (req, reply) => {
-    const { name, description, price, stock = 0, qty, unit, status = 'Active', images = [],
+    const { name, description, price, stock = 0, low_stock_threshold = 10, cost_per_unit, qty, unit, status = 'Active', images = [],
             category, badge, roast, origin, blend, process,
             discount_enabled = false, discount_type = 'flat', discount_value = 0, discount_max_qty, discount_max_orders, discount_label } = req.body
     const safePrice = Math.round(Number(price))
     const safeDiscountValue = Math.round(Number(discount_value || 0))
     const { rows } = await query(
-      `INSERT INTO products (name, description, price, stock, qty, unit, status, images,
+      `INSERT INTO products (name, description, price, stock, low_stock_threshold, cost_per_unit, qty, unit, status, images,
                              category, badge, roast, origin, blend, process,
                              discount_enabled, discount_type, discount_value, discount_max_qty, discount_max_orders, discount_label)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, $13, $14,
-               $15, $16, $17, $18, $19, $20)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16,
+               $17, $18, $19, $20, $21, $22)
        RETURNING ${PRODUCT_PRICE_RETURNING}`,
-      [name, description || null, safePrice, stock, qty || null, unit || null, status, JSON.stringify(images),
+      [name, description || null, safePrice, stock, low_stock_threshold, cost_per_unit || null, qty || null, unit || null, status, JSON.stringify(images),
        category || null, badge || null, roast || null, origin || null, blend || null, process || null,
        !!discount_enabled, discount_type || 'flat', safeDiscountValue, discount_max_qty || null, discount_max_orders || null, discount_label || null]
     )
@@ -1043,6 +2893,8 @@ module.exports = async function adminRoutes(app) {
           discount_max_orders: { type: ['integer', 'null'], minimum: 1 },
           discount_label:   { type: ['string', 'null'], maxLength: 100 },
           stock:       { type: 'integer', minimum: 0 },
+          low_stock_threshold: { type: 'integer', minimum: 0 },
+          cost_per_unit: { type: ['integer', 'null'], minimum: 0 },
           qty:         { type: 'integer', minimum: 1 },
           unit:        { type: 'string', maxLength: 20 },
           status:      { type: 'string', maxLength: 50 },
@@ -1059,7 +2911,7 @@ module.exports = async function adminRoutes(app) {
     },
   }, async (req) => {
     const fields = req.body
-    const allowed = ['name', 'description', 'price', 'stock', 'qty', 'unit', 'status', 'images',
+    const allowed = ['name', 'description', 'price', 'stock', 'low_stock_threshold', 'cost_per_unit', 'qty', 'unit', 'status', 'images',
                      'category', 'badge', 'roast', 'origin', 'blend', 'process',
                      'discount_enabled', 'discount_type', 'discount_value', 'discount_max_qty', 'discount_max_orders', 'discount_label']
     const sets = []
@@ -2356,7 +4208,7 @@ module.exports = async function adminRoutes(app) {
     const user = rows[0]
 
     // Prevent self-deactivation (admin locking themselves out)
-    if (user.id === req.user.id) {
+    if (user.id === req.user.sub) {
       throw { code: 'VALIDATION_ERROR', message: 'You cannot deactivate your own account.' }
     }
 

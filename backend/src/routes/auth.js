@@ -5,6 +5,7 @@ const { registerUser, loginUser, loginPhoneUser, getPhoneAuthStatus, getEmailAut
 const { createTokenPair, rotateRefreshToken, revokeTokens } = require('../services/tokens')
 const { createVerificationTicket, verifyOtpTicket } = require('../services/otp-ticket')
 const { adminLogin, bootstrapAdmin }      = require('../services/admin')
+const { getAdminContext }                 = require('../services/rbac')
 const { verifyGoogleCredential }          = require('../services/google')
 const { normalizeBdMobile }               = require('../services/phone')
 
@@ -422,6 +423,22 @@ module.exports = async function authRoutes(app) {
     return reply.send({ ok: true })
   })
 
+  // GET /auth/admin/status - Report whether an admin account already exists
+  app.get('/admin/status', async (_, reply) => {
+    const { adminExists } = require('../services/admin')
+    const exists = await adminExists()
+    reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+    reply.header('Pragma', 'no-cache')
+    reply.header('Expires', '0')
+    return {
+      ok: true,
+      data: {
+        admin_exists: exists,
+        bootstrap_allowed: !exists,
+      },
+    }
+  })
+
   // POST /auth/admin/login
   app.post('/admin/login', {
     schema: {
@@ -437,6 +454,7 @@ module.exports = async function authRoutes(app) {
     config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const user   = await adminLogin(req.body.email, req.body.password)
+    const admin  = await getAdminContext(user.id)
     const tokens = await createTokenPair(app, user)
     // Set httpOnly cookies for tokens
     reply.setCookie('mp_access_token', tokens.access_token, {
@@ -456,7 +474,7 @@ module.exports = async function authRoutes(app) {
     return reply.send({
       ok: true,
       data: {
-        user: { id: user.id, email: user.email, name: user.name, role: user.role },
+        user: { id: user.id, email: user.email, name: user.name, role: user.role, admin_role: admin?.admin_role, permissions: admin?.permissions || [] },
       },
     })
   })
@@ -476,6 +494,7 @@ module.exports = async function authRoutes(app) {
     config: { rateLimit: { max: 5, timeWindow: '1 hour' } },
   }, async (req, reply) => {
     const user   = await bootstrapAdmin(req.body.email, req.body.password)
+    const admin  = await getAdminContext(user.id)
     const tokens = await createTokenPair(app, user)
     // Set httpOnly cookies for tokens
     reply.setCookie('mp_access_token', tokens.access_token, {
@@ -495,7 +514,7 @@ module.exports = async function authRoutes(app) {
     return reply.code(201).send({
       ok: true,
       data: {
-        user: { id: user.id, email: user.email, name: user.name, role: user.role },
+        user: { id: user.id, email: user.email, name: user.name, role: user.role, admin_role: admin?.admin_role, permissions: admin?.permissions || [] },
       },
     })
   })

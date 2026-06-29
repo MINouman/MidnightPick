@@ -23,6 +23,12 @@ async function bootstrapAdmin(email, password) {
      RETURNING id, email, name, role`,
     [email, email.split('@')[0], password_hash]
   )
+  await query(
+    `INSERT INTO admin_user_roles (user_id, role_id)
+     SELECT $1, id FROM admin_roles WHERE key = 'super_admin'
+     ON CONFLICT (user_id) DO NOTHING`,
+    [rows[0].id]
+  )
 
   return rows[0]
 }

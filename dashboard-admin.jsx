@@ -39,6 +39,44 @@ const PRODUCT_STATUS_BADGE = {
   "Stock Out": "badge-red", "Featured": "badge-orange", "Discontinued": "badge-gray",
 };
 
+const SECTION_PERMISSIONS = {
+  overview: "overview.view",
+  orders: "orders.view",
+  products: "products.view",
+  customers: "customers.view",
+  subs: "subscriptions.view",
+  coupons: "coupons.view",
+  policies: "policies.view",
+  crew: "crew.view",
+  feedback: "feedback.view",
+  reviews: "reviews.view",
+  influencer: "influencers.view",
+  points: "points.view",
+  sms: "sms.view",
+  promo: "banners.view",
+  banner: "banners.view",
+  financials: "financials.view",
+  settings: "settings.view",
+};
+
+function can(user, permission) {
+  if (!permission) return true;
+  const perms = user?.permissions || [];
+  return perms.includes(permission);
+}
+
+function canAny(user, permissions) {
+  return (permissions || []).some(p => can(user, p));
+}
+
+function canAll(user, permissions) {
+  return (permissions || []).every(p => can(user, p));
+}
+
+function actionTitle(user, permission) {
+  return can(user, permission) ? undefined : "No permission";
+}
+
 
 // ── Helpers ────────────────────────────────────────────
 function StatusBadge({ status }) {
@@ -98,7 +136,8 @@ function RevenueChart({ days }) {
 
 // ── Section: Overview ──────────────────────────────────
 function Overview({ setSection }) {
-  const { stats, orders } = useContext(DashCtx);
+  const { stats, orders, adminProducts } = useContext(DashCtx);
+  const lowStockCount = (adminProducts || []).filter(p => Number(p.stock || 0) <= Number(p.low_stock_threshold ?? 10)).length;
 
   const statCards = [
     { label: "Total Orders",       value: stats?.orders?.total ?? '…',          icon: "fa-box" },
@@ -107,6 +146,7 @@ function Overview({ setSection }) {
     { label: "Crew Members",       value: stats?.users?.crew ?? '…',            icon: "fa-fire" },
     { label: "Influencers",        value: stats?.users?.influencer ?? '…',      icon: "fa-bolt" },
     { label: "Revenue Delivered",  value: `৳${Number(stats?.revenue?.total_delivered || 0).toLocaleString()}`, help: "Delivered orders only; excludes pending, processing and in-transit orders.", icon: "fa-chart-line" },
+    { label: "Low Stock Products", value: lowStockCount, help: "Products at or below their warning threshold.", icon: "fa-triangle-exclamation" },
   ];
 
   return (
@@ -165,9 +205,9 @@ function Overview({ setSection }) {
 
 // ── Section: Orders ────────────────────────────────────
 function Orders() {
-  const { orders: ctxOrders, adminProducts } = useContext(DashCtx);
+  const { user, orders: ctxOrders, adminProducts } = useContext(DashCtx);
   const [orders, setOrders] = useState(ctxOrders || []);
-  const [filter, setFilter] = useState({ status: "All", coupon: "All", search: "" });
+  const [filter, setFilter] = useState({ status: "All", coupon: "All", flagged: "All", search: "" });
   const [panel, setPanel] = useState(null);
   const [cancelConfirm, setCancelConfirm] = useState(false);
   const [newOrderPanel, setNewOrderPanel] = useState(false);
@@ -181,6 +221,13 @@ function Orders() {
   const [otpModalInput, setOtpModalInput] = useState("");
   const [otpModalVerifying, setOtpModalVerifying] = useState(false);
   const [pendingOrder, setPendingOrder] = useState(null); // Store form data until OTP verified
+  const [orderOps, setOrderOps] = useState({ notes: [], timeline: [], payment_history: [], refunds: [] });
+  const [opsLoading, setOpsLoading] = useState(false);
+  const [noteForm, setNoteForm] = useState({ note_type: "general", note: "" });
+  const [paymentForm, setPaymentForm] = useState({ payment_status: "verified", trx_id: "", sender_number: "", amount: "", note: "" });
+  const [refundForm, setRefundForm] = useState({ status: "requested", amount: "", method: "", transaction_id: "", reason: "" });
+  const [editOrderPanel, setEditOrderPanel] = useState(false);
+  const [editOrderForm, setEditOrderForm] = useState({ customer_name: "", customer_phone: "", address: "", payment_type: "cod", delivery_fee: "", notes: "", reason: "" });
 
   useEffect(() => { setOrders(ctxOrders || []); }, [ctxOrders]);
 
@@ -227,6 +274,7 @@ function Orders() {
       const updated = { ...panel, status: newStatus, ...(res.data?.points_earned != null ? { points_earned: res.data.points_earned } : {}) };
       setOrders(prev => prev.map(o => o.id === panel.id ? updated : o));
       setPanel(updated);
+      loadOrderOperations(panel.id);
     } catch (e) {
       alert(e?.message || 'Could not update the order status.');
     }
@@ -245,6 +293,7 @@ function Orders() {
       const updated = { ...panel, status: res.data?.status, steadfast_consignment_id: res.data?.steadfast_consignment_id };
       setOrders(prev => prev.map(o => o.id === panel.id ? updated : o));
       setPanel(updated);
+      loadOrderOperations(panel.id);
       alert('Order handed off to Steadfast successfully!');
     } catch (e) {
       alert(e?.message || 'Failed to handoff order.');
@@ -267,6 +316,7 @@ function Orders() {
       const updated = { ...panel, status: res.data?.status };
       setOrders(prev => prev.map(o => o.id === panel.id ? updated : o));
       setPanel(updated);
+      loadOrderOperations(panel.id);
       alert('Status refreshed!');
     } catch (e) {
       alert(e?.message || 'Failed to refresh status.');
@@ -281,9 +331,50 @@ function Orders() {
       const updated = { ...panel, points_earned: res.data.pts_awarded };
       setOrders(prev => prev.map(o => o.id === panel.id ? updated : o));
       setPanel(updated);
+      loadOrderOperations(panel.id);
       alert(`Done! ${res.data.pts_awarded} points awarded.`);
     } catch (e) {
       alert(e?.message || 'Failed to award points.');
+    }
+  }
+
+  async function flagForReview() {
+    if (!panel?.id) return;
+    const result = await Swal.fire({
+      title: "Flag order for review",
+      input: "select",
+      inputOptions: {
+        "Payment mismatch": "Payment mismatch",
+        "Suspicious order": "Suspicious order",
+        "Duplicate order": "Duplicate order",
+        "Customer complaint": "Customer complaint",
+        "Delivery issue": "Delivery issue",
+        "Coupon abuse": "Coupon abuse",
+        "Manual review": "Manual review",
+      },
+      inputPlaceholder: "Select reason",
+      html: '<textarea id="flag-note" class="swal2-textarea" placeholder="Optional internal note"></textarea>',
+      showCancelButton: true,
+      confirmButtonText: "Flag",
+      confirmButtonColor: "#FF9100",
+      background: "#fff",
+      preConfirm: reason => {
+        if (!reason) Swal.showValidationMessage("Reason is required.");
+        return { reason, note: document.getElementById("flag-note")?.value || "" };
+      },
+    });
+    if (!result.isConfirmed) return;
+    const res = await window.mpApi.fetch(`/admin/orders/${panel.id}/flag-review`, {
+      method: "POST",
+      body: JSON.stringify(result.value),
+    }).catch(() => null);
+    if (res?.ok) {
+      const updated = { ...panel, ...res.data };
+      setPanel(updated);
+      setOrders(prev => prev.map(o => o.id === panel.id ? { ...o, ...res.data } : o));
+      loadOrderOperations(panel.id);
+    } else {
+      Swal.fire({ title: "Could not flag order", text: res?.error?.message || "Please try again.", icon: "error", confirmButtonColor: "#FF9100", background: "#fff" });
     }
   }
 
@@ -315,6 +406,146 @@ function Orders() {
     } catch (e) {
       showNotice("SMS not sent", e?.message || `Failed to send ${label} SMS.`, "error");
     }
+  }
+
+  async function loadOrderOperations(orderId) {
+    if (!orderId || !can(user, "orders.view")) return;
+    setOpsLoading(true);
+    const res = await window.mpApi.fetch(`/admin/orders/${orderId}/operations`).catch(() => null);
+    if (res?.ok) setOrderOps(res.data || { notes: [], timeline: [], payment_history: [], refunds: [] });
+    setOpsLoading(false);
+  }
+
+  function openEditOrder() {
+    if (!panel) return;
+    const addr = parseAddressSnapshot(panel.address_snapshot);
+    setEditOrderForm({
+      customer_name: panel.customer_name || "",
+      customer_phone: panel.customer_phone || "",
+      address: addr.address || addr.line1 || "",
+      payment_type: panel.payment_type || "cod",
+      delivery_fee: String(panel.delivery_fee || 0),
+      notes: panel.notes || "",
+      reason: "",
+    });
+    setEditOrderPanel(true);
+  }
+
+  async function saveOrderEdit() {
+    if (!panel?.id || !editOrderForm.reason.trim()) {
+      alert("Admin reason is required.");
+      return;
+    }
+    const body = {
+      customer_name: editOrderForm.customer_name,
+      customer_phone: editOrderForm.customer_phone,
+      address: editOrderForm.address,
+      payment_type: editOrderForm.payment_type,
+      delivery_fee: Number(editOrderForm.delivery_fee || 0),
+      notes: editOrderForm.notes,
+      reason: editOrderForm.reason,
+    };
+    const res = await window.mpApi.fetch(`/admin/orders/${panel.id}`, { method: "PATCH", body: JSON.stringify(body) }).catch(() => null);
+    if (!res?.ok) {
+      alert(res?.error?.message || "Could not edit order.");
+      return;
+    }
+    setPanel(res.data);
+    setOrders(prev => prev.map(o => o.id === panel.id ? { ...o, ...res.data } : o));
+    setEditOrderPanel(false);
+    loadOrderOperations(panel.id);
+  }
+
+  async function addInternalNote() {
+    if (!panel?.id || !noteForm.note.trim()) return;
+    const res = await window.mpApi.fetch(`/admin/orders/${panel.id}/notes`, {
+      method: "POST",
+      body: JSON.stringify({ note_type: noteForm.note_type, note: noteForm.note.trim() }),
+    }).catch(() => null);
+    if (!res?.ok) {
+      alert(res?.error?.message || "Could not add note.");
+      return;
+    }
+    setNoteForm({ note_type: "general", note: "" });
+    loadOrderOperations(panel.id);
+  }
+
+  async function savePaymentEvent(statusOverride) {
+    if (!panel?.id) return;
+    const status = statusOverride || paymentForm.payment_status;
+    const res = await window.mpApi.fetch(`/admin/orders/${panel.id}/payment-events`, {
+      method: "POST",
+      body: JSON.stringify({
+        payment_status: status,
+        trx_id: paymentForm.trx_id || undefined,
+        sender_number: paymentForm.sender_number || undefined,
+        amount: paymentForm.amount ? Number(paymentForm.amount) : undefined,
+        note: paymentForm.note || undefined,
+      }),
+    }).catch(() => null);
+    if (!res?.ok) {
+      alert(res?.error?.message || "Could not save payment verification.");
+      return;
+    }
+    const updated = { ...panel, payment_status: status, payment_trx_id: paymentForm.trx_id || panel.payment_trx_id, payment_sender_number: paymentForm.sender_number || panel.payment_sender_number, payment_amount: paymentForm.amount ? Number(paymentForm.amount) : panel.payment_amount };
+    setPanel(updated);
+    setOrders(prev => prev.map(o => o.id === panel.id ? { ...o, ...updated } : o));
+    setPaymentForm({ payment_status: "verified", trx_id: "", sender_number: "", amount: "", note: "" });
+    loadOrderOperations(panel.id);
+  }
+
+  async function saveRefundEvent() {
+    if (!panel?.id || !refundForm.reason.trim()) {
+      alert("Refund/return reason is required.");
+      return;
+    }
+    const res = await window.mpApi.fetch(`/admin/orders/${panel.id}/refund`, {
+      method: "POST",
+      body: JSON.stringify({
+        status: refundForm.status,
+        amount: refundForm.amount ? Number(refundForm.amount) : 0,
+        method: refundForm.method || undefined,
+        transaction_id: refundForm.transaction_id || undefined,
+        reason: refundForm.reason,
+      }),
+    }).catch(() => null);
+    if (!res?.ok) {
+      alert(res?.error?.message || "Could not update refund/return.");
+      return;
+    }
+    const updated = {
+      ...panel,
+      return_status: refundForm.status,
+      refund_amount: refundForm.status === "refunded" ? Number(refundForm.amount || 0) : panel.refund_amount,
+      refund_method: refundForm.method || panel.refund_method,
+      refund_transaction_id: refundForm.transaction_id || panel.refund_transaction_id,
+      payment_status: refundForm.status === "refunded" ? "refunded" : panel.payment_status,
+    };
+    setPanel(updated);
+    setOrders(prev => prev.map(o => o.id === panel.id ? { ...o, ...updated } : o));
+    setRefundForm({ status: "requested", amount: "", method: "", transaction_id: "", reason: "" });
+    loadOrderOperations(panel.id);
+  }
+
+  function printInvoice(download = false) {
+    if (!panel) return;
+    const rows = (panel.items || []).map(it => `<tr><td>${it.name || ""}</td><td>${it.qty || 1}</td><td>৳${it.unit_price || 0}</td><td>৳${Number(it.unit_price || 0) * Number(it.qty || 1)}</td></tr>`).join("");
+    const html = `<!doctype html><html><head><title>Invoice ${panel.order_ref}</title><style>body{font-family:Arial,sans-serif;color:#2b171b;padding:24px}h1{font-size:22px;margin:0 0 8px}table{width:100%;border-collapse:collapse;margin-top:18px}th,td{border-bottom:1px solid #eee;padding:8px;text-align:left}.total{font-weight:700;color:#ff9100}</style></head><body><h1>Midnight Pick Invoice</h1><div>${panel.order_ref}</div><div>${panel.customer_name || ""} · ${panel.customer_phone || ""}</div><div>${formatAddress(parseAddressSnapshot(panel.address_snapshot))}</div><table><thead><tr><th>Product</th><th>Qty</th><th>Unit</th><th>Subtotal</th></tr></thead><tbody>${rows}</tbody></table><p>Subtotal: ৳${panelSubtotal}</p><p>Delivery: ৳${panelDelivery}</p><p>Discount: ৳${panelDiscount}</p><p class="total">Total: ৳${panelTotal}</p><p>Payment: ${panel.payment_type || "—"}</p></body></html>`;
+    if (download) {
+      const blob = new Blob([html], { type: "text/html" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${panel.order_ref || "invoice"}.html`;
+      a.click();
+      URL.revokeObjectURL(url);
+      return;
+    }
+    const w = window.open("", "_blank");
+    if (!w) return;
+    w.document.write(html);
+    w.document.close();
+    w.print();
   }
 
   function addOrderItem(productId) {
@@ -521,6 +752,8 @@ function Orders() {
     if (filter.status !== "All" && o.status !== filter.status) return false;
     if (filter.coupon === "With Coupon" && !o.coupon_code) return false;
     if (filter.coupon === "No Coupon" && o.coupon_code) return false;
+    if (filter.flagged === "Flagged" && !o.is_flagged) return false;
+    if (filter.flagged === "Unflagged" && o.is_flagged) return false;
     const q = filter.search.toLowerCase();
     if (q && !(o.customer_name || '').toLowerCase().includes(q) && !(o.customer_phone || '').includes(filter.search)) return false;
     return true;
@@ -530,8 +763,12 @@ function Orders() {
     setPanel(o);
     setOtpInput("");
     setOtpStatus(null);
+    setOrderOps({ notes: [], timeline: [], payment_history: [], refunds: [] });
+    setPaymentForm({ payment_status: "verified", trx_id: o.payment_trx_id || o.bkash_txn_id || "", sender_number: o.payment_sender_number || "", amount: o.payment_amount ? String(o.payment_amount) : String(o.total || ""), note: "" });
+    setRefundForm({ status: o.return_status && o.return_status !== "none" ? o.return_status : "requested", amount: o.refund_amount ? String(o.refund_amount) : "", method: o.refund_method || "", transaction_id: o.refund_transaction_id || "", reason: "" });
     // Load OTP status if order exists
     if (o.id) {
+      loadOrderOperations(o.id);
       const res = await window.mpApi.fetch(`/admin/orders/${o.id}/otp-status`).catch(() => null);
       if (res?.ok && res.data) {
         setOtpStatus(res.data);
@@ -606,9 +843,9 @@ function Orders() {
     <div className="dash-inner-wide">
       <div className="row-between mb20" style={{ alignItems: "flex-start" }}>
         <div className="page-title" style={{ marginBottom: 0 }}>Orders</div>
-        <button className="btn btn-primary" onClick={() => setNewOrderPanel(true)}>
+        {can(user, "orders.create") && <button className="btn btn-primary" onClick={() => setNewOrderPanel(true)}>
           <i className="fa fa-plus" style={{ fontSize: 12 }} /> New Order
-        </button>
+        </button>}
       </div>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
@@ -618,6 +855,9 @@ function Orders() {
         </select>
         <select className="select" style={{ width: 160 }} value={filter.coupon} onChange={e => setFilter(f => ({ ...f, coupon: e.target.value }))}>
           {["All", "With Coupon", "No Coupon"].map(s => <option key={s}>{s}</option>)}
+        </select>
+        <select className="select" style={{ width: 150 }} value={filter.flagged} onChange={e => setFilter(f => ({ ...f, flagged: e.target.value }))}>
+          {["All", "Flagged", "Unflagged"].map(s => <option key={s}>{s}</option>)}
         </select>
       </div>
 
@@ -632,7 +872,7 @@ function Orders() {
                 <tr><td colSpan={9} style={{ textAlign: "center", padding: 32, color: "var(--text-65)" }}>No orders found.</td></tr>
               ) : filtered.map((o, i) => (
                 <tr key={i}>
-                  <td className="mono text-xs" style={{ color: "var(--blue)" }}>{o.order_ref}</td>
+                  <td className="mono text-xs" style={{ color: "var(--blue)" }}>{o.order_ref}{o.is_flagged && <div><span className="badge badge-red" style={{ marginTop: 4 }}>Flagged</span></div>}</td>
                   <td className="muted">{fmtDate(o.created_at)}</td>
                   <td style={{ fontWeight: 600, cursor: "pointer" }} onClick={() => openPanel(o)}>{o.customer_name}</td>
                   <td className="muted" style={{ maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{orderSummary(o.items)}</td>
@@ -672,12 +912,13 @@ function Orders() {
                 <div className="row-between mb8 text-sm"><span className="text-muted">Items</span><span style={{ maxWidth: 200, textAlign: "right" }}>{orderSummary(panel.items)}</span></div>
                 <div className="row-between mb8 text-sm"><span className="text-muted">Phone</span><span>{panel.customer_phone || '—'}</span></div>
                 <div className="row-between mb8 text-sm"><span className="text-muted">Payment</span><span>{panel.payment_type || '—'}</span></div>
-                {panel.payment_type === "bkash" && (
+                    {panel.payment_type === "bkash" && can(user, "orders.update_status") && (
                   <div className="row-between mb8 text-sm"><span className="text-muted">bKash Txn ID</span><span className="mono" style={{ color: "var(--orange)" }}>{panel.bkash_txn_id || panel.payment_number || '—'}</span></div>
                 )}
                 {panel.coupon_code && <div className="row-between mb8 text-sm"><span className="text-muted">Coupon</span><span className="mono" style={{ color: "var(--blue)" }}>{panel.coupon_code}</span></div>}
                 <div className="row-between mb8 text-sm"><span className="text-muted">Date</span><span>{fmtDate(panel.created_at)}</span></div>
                 <div className="row-between mb16 text-sm"><span className="text-muted">Status</span><StatusBadge status={panel.status} /></div>
+                {panel.is_flagged && <div className="row-between mb8 text-sm"><span className="text-muted">Review Flag</span><span className="badge badge-red">{panel.flag_reason || "Flagged"}</span></div>}
                 {panel.steadfast_consignment_id && <div className="row-between mb8 text-sm"><span className="text-muted">Steadfast ID</span><span className="mono text-xs" style={{ color: "var(--orange)" }}>{panel.steadfast_consignment_id}</span></div>}
                 <div className="divider" />
 
@@ -693,6 +934,134 @@ function Orders() {
                 <div className="eyebrow mb10">Delivery Address</div>
                 <div className="text-sm mb16" style={{ lineHeight: 1.5 }}>{formatAddress(panelAddress)}</div>
                 <div className="divider" />
+
+                <div style={{ marginTop: 12, marginBottom: 12 }}>
+                  <div className="eyebrow mb10">Invoice</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                    <button className="btn btn-ghost btn-sm" onClick={() => printInvoice(false)}>
+                      <i className="fa fa-print" style={{ fontSize: 11 }} /> Print Invoice
+                    </button>
+                    <button className="btn btn-ghost btn-sm" onClick={() => printInvoice(true)}>
+                      <i className="fa fa-download" style={{ fontSize: 11 }} /> Download Invoice
+                    </button>
+                  </div>
+                </div>
+
+                {can(user, "orders.edit") && ["processing", "confirmed", "packed"].includes(panel.status) && (
+                  <div style={{ marginTop: 12, marginBottom: 12 }}>
+                    <button className="btn btn-ghost btn-sm btn-full" onClick={openEditOrder}>
+                      <i className="fa fa-pen" style={{ fontSize: 11 }} /> Edit Order Details
+                    </button>
+                  </div>
+                )}
+
+                <div style={{ marginTop: 12, marginBottom: 12 }}>
+                  <div className="eyebrow mb10">Payment Verification</div>
+                  <div className="row-between mb8 text-sm"><span className="text-muted">Status</span><StatusBadge status={panel.payment_status || "pending"} /></div>
+                  {(panel.payment_trx_id || panel.payment_sender_number || panel.payment_amount) && (
+                    <div className="text-xs muted mb8">
+                      {panel.payment_trx_id && <span className="mono">Trx: {panel.payment_trx_id}</span>}
+                      {panel.payment_sender_number && <span> · Sender: {panel.payment_sender_number}</span>}
+                      {panel.payment_amount && <span> · ৳{panel.payment_amount}</span>}
+                    </div>
+                  )}
+                  {can(user, "financials.reconcile_payments") && (
+                    <div className="col-gap" style={{ gap: 8 }}>
+                      <select className="select" value={paymentForm.payment_status} onChange={e => setPaymentForm(f => ({ ...f, payment_status: e.target.value }))}>
+                        {["pending", "verified", "mismatch", "failed", "refunded"].map(s => <option key={s} value={s}>{fmtStatus(s)}</option>)}
+                      </select>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                        <input className="input" placeholder="Transaction ID" value={paymentForm.trx_id} onChange={e => setPaymentForm(f => ({ ...f, trx_id: e.target.value }))} />
+                        <input className="input" placeholder="Sender number" value={paymentForm.sender_number} onChange={e => setPaymentForm(f => ({ ...f, sender_number: e.target.value }))} />
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                        <input className="input" type="number" min="0" placeholder="Amount" value={paymentForm.amount} onChange={e => setPaymentForm(f => ({ ...f, amount: e.target.value }))} />
+                        <input className="input" placeholder="Payment note" value={paymentForm.note} onChange={e => setPaymentForm(f => ({ ...f, note: e.target.value }))} />
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                        <button className="btn btn-primary btn-sm" onClick={() => savePaymentEvent("verified")}>
+                          <i className="fa fa-check-circle" style={{ fontSize: 11 }} /> Mark Verified
+                        </button>
+                        <button className="btn btn-ghost btn-sm" onClick={() => savePaymentEvent("mismatch")}>
+                          <i className="fa fa-exclamation-circle" style={{ fontSize: 11 }} /> Payment Issue
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {orderOps.payment_history?.length > 0 && (
+                    <div className="mt10" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {orderOps.payment_history.slice(0, 3).map(ev => (
+                        <div key={ev.id} className="text-xs" style={{ background: "var(--bg-soft)", color: "var(--text)", borderRadius: 6, padding: "7px 9px" }}>
+                          <strong>{fmtStatus(ev.payment_status)}</strong> · {fmtDate(ev.created_at)}{ev.amount ? ` · ৳${ev.amount}` : ""}{ev.trx_id ? ` · ${ev.trx_id}` : ""}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="divider" />
+
+                <div style={{ marginTop: 12, marginBottom: 12 }}>
+                  <div className="eyebrow mb10">Internal Notes</div>
+                  {can(user, "orders.edit") && (
+                    <div className="col-gap" style={{ gap: 8 }}>
+                      <select className="select" value={noteForm.note_type} onChange={e => setNoteForm(f => ({ ...f, note_type: e.target.value }))}>
+                        <option value="general">General</option>
+                        <option value="customer_request">Customer request</option>
+                        <option value="payment_issue">Payment issue</option>
+                        <option value="delivery_issue">Delivery issue</option>
+                        <option value="refund_return">Refund/return</option>
+                      </select>
+                      <textarea className="input" rows={2} placeholder="Private admin note" value={noteForm.note} onChange={e => setNoteForm(f => ({ ...f, note: e.target.value }))} />
+                      <button className="btn btn-ghost btn-sm" onClick={addInternalNote}>Add Note</button>
+                    </div>
+                  )}
+                  <div className="mt10" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {opsLoading ? <div className="text-muted text-sm">Loading order activity…</div> : (orderOps.notes || []).slice(0, 4).map(n => (
+                      <div key={n.id} className="text-xs" style={{ background: "var(--bg-soft)", color: "var(--text)", borderRadius: 6, padding: "7px 9px" }}>
+                        <div><strong>{n.admin_name || "Admin"}</strong> · {fmtStatus((n.note_type || "general").replace(/_/g, " "))} · {fmtDate(n.created_at)}</div>
+                        <div style={{ marginTop: 3 }}>{n.note}</div>
+                      </div>
+                    ))}
+                    {!opsLoading && !(orderOps.notes || []).length && <div className="text-muted text-sm">No internal notes yet.</div>}
+                  </div>
+                </div>
+                <div className="divider" />
+
+                <div style={{ marginTop: 12, marginBottom: 12 }}>
+                  <div className="eyebrow mb10">Order Timeline</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {(orderOps.timeline || []).slice(0, 8).map(ev => (
+                      <div key={ev.id} className="text-xs" style={{ display: "flex", justifyContent: "space-between", gap: 10, background: "var(--bg-soft)", color: "var(--text)", borderRadius: 6, padding: "7px 9px" }}>
+                        <span><strong>{fmtStatus((ev.event_type || "").replace(/_/g, " "))}</strong>{ev.note ? ` · ${ev.note}` : ""}</span>
+                        <span style={{ color: "var(--text-65)", whiteSpace: "nowrap" }}>{fmtDate(ev.created_at)}</span>
+                      </div>
+                    ))}
+                    {!(orderOps.timeline || []).length && <div className="text-muted text-sm">No timeline events yet.</div>}
+                  </div>
+                </div>
+                <div className="divider" />
+
+                {can(user, "orders.refund") && (
+                  <>
+                    <div style={{ marginTop: 12, marginBottom: 12 }}>
+                      <div className="eyebrow mb10">Return / Refund</div>
+                      <div className="row-between mb8 text-sm"><span className="text-muted">Current</span><StatusBadge status={panel.return_status || "none"} /></div>
+                      <div className="col-gap" style={{ gap: 8 }}>
+                        <select className="select" value={refundForm.status} onChange={e => setRefundForm(f => ({ ...f, status: e.target.value }))}>
+                          {["requested", "approved", "rejected", "received", "refunded"].map(s => <option key={s} value={s}>{fmtStatus(s)}</option>)}
+                        </select>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                          <input className="input" type="number" min="0" placeholder="Refund amount" value={refundForm.amount} onChange={e => setRefundForm(f => ({ ...f, amount: e.target.value }))} />
+                          <input className="input" placeholder="Method" value={refundForm.method} onChange={e => setRefundForm(f => ({ ...f, method: e.target.value }))} />
+                        </div>
+                        <input className="input" placeholder="Refund transaction ID" value={refundForm.transaction_id} onChange={e => setRefundForm(f => ({ ...f, transaction_id: e.target.value }))} />
+                        <textarea className="input" rows={2} placeholder="Reason required" value={refundForm.reason} onChange={e => setRefundForm(f => ({ ...f, reason: e.target.value }))} />
+                        <button className="btn btn-ghost btn-sm" onClick={saveRefundEvent}>Save Return / Refund</button>
+                      </div>
+                    </div>
+                    <div className="divider" />
+                  </>
+                )}
 
                 {panel.payment_type === "bkash" && (
                   <div style={{ marginTop: 12, marginBottom: 12 }}>
@@ -739,27 +1108,27 @@ function Orders() {
                   <div style={{ marginTop: 12, marginBottom: 12 }}>
                     <div className="eyebrow mb10">Update Status</div>
                     <div className="col-gap" style={{ gap: 8 }}>
-                      {(panel.status === "processing" || panel.status === "confirmed") && (
+                      {(panel.status === "processing" || panel.status === "confirmed") && can(user, "orders.update_status") && (
                         <button className="btn btn-primary btn-sm" onClick={() => updateStatus("packed")}>
                           <i className="fa fa-box-open" style={{ fontSize: 11 }} /> Mark as Packaged
                         </button>
                       )}
-                      {panel.status === "packed" && (
+                      {panel.status === "packed" && can(user, "orders.update_status") && (
                         <>
-                          <button className="btn btn-primary btn-sm" onClick={() => handoffToSteadfast()}>
+                          {can(user, "orders.handoff_courier") && <button className="btn btn-primary btn-sm" onClick={() => handoffToSteadfast()}>
                             <i className="fa fa-truck" style={{ fontSize: 11 }} /> Handoff to Steadfast
-                          </button>
+                          </button>}
                           <button className="btn btn-ghost btn-sm" onClick={() => updateStatus("delivered")}>
                             <i className="fa fa-person-walking" style={{ fontSize: 11 }} /> Personally Delivered
                           </button>
                         </>
                       )}
-                      {panel.status === "shipped" && (
+                      {panel.status === "shipped" && can(user, "orders.update_status") && (
                         <>
                           <div style={{ fontSize: 12, color: "var(--blue)", padding: "8px 12px", background: "rgba(100,181,246,0.1)", border: "1px solid rgba(100,181,246,0.2)", borderRadius: 8 }}>
                             <i className="fa fa-info-circle" style={{ marginRight: 6 }} />Tracking status will auto-update via Steadfast webhooks.
                           </div>
-                          {panel.steadfast_consignment_id && (
+                          {panel.steadfast_consignment_id && can(user, "orders.handoff_courier") && (
                             <button className="btn btn-ghost btn-sm" onClick={() => refreshSteadfastStatus()}>
                               <i className="fa fa-refresh" style={{ fontSize: 11 }} /> Refresh Steadfast Status
                             </button>
@@ -774,21 +1143,68 @@ function Orders() {
                 )}
 
                 <div className="col-gap mt4">
-                  {panel.status !== "cancelled" && (
+                  {panel.status !== "cancelled" && can(user, "orders.cancel") && (
                     <button className="btn btn-full" style={{ background: "rgba(217,64,64,.08)", color: "var(--red)", border: "1px solid rgba(217,64,64,.25)" }} onClick={() => setCancelConfirm(true)}>
                       <i className="fa fa-times-circle" style={{ fontSize: 12 }} /> Cancel Order
                     </button>
                   )}
-                  {panel.status === "delivered" && !panel.points_earned && (
+                  {panel.status === "delivered" && !panel.points_earned && can(user, "orders.award_points") && (
                     <button className="btn btn-ghost btn-full" style={{ color: "var(--orange)", border: "1px solid rgba(255,145,0,.3)" }} onClick={awardOrderPoints}>
                       <i className="fa fa-star" style={{ fontSize: 12 }} /> Award Points
                     </button>
                   )}
-                  <button className="btn btn-ghost btn-full"><i className="fa fa-flag" style={{ fontSize: 12 }} /> Flag for Review</button>
+                  {can(user, "orders.flag_review") && <button className="btn btn-ghost btn-full" onClick={flagForReview}><i className="fa fa-flag" style={{ fontSize: 12 }} /> Flag for Review</button>}
                 </div>
               </>
           </div>
         </>
+      )}
+
+      {editOrderPanel && (
+        <Sheet
+          title={`Edit ${panel?.order_ref || "order"}`}
+          body={
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div className="input-group" style={{ gridColumn: "1/-1" }}>
+                <label className="input-label">Customer Name</label>
+                <input className="input" value={editOrderForm.customer_name} onChange={e => setEditOrderForm(f => ({ ...f, customer_name: e.target.value }))} />
+              </div>
+              <div className="input-group" style={{ gridColumn: "1/-1" }}>
+                <label className="input-label">Phone</label>
+                <input className="input" value={editOrderForm.customer_phone} onChange={e => setEditOrderForm(f => ({ ...f, customer_phone: e.target.value }))} />
+              </div>
+              <div className="input-group" style={{ gridColumn: "1/-1" }}>
+                <label className="input-label">Address</label>
+                <textarea className="input" rows={2} value={editOrderForm.address} onChange={e => setEditOrderForm(f => ({ ...f, address: e.target.value }))} />
+              </div>
+              <div className="input-group">
+                <label className="input-label">Payment</label>
+                <select className="select" value={editOrderForm.payment_type} onChange={e => setEditOrderForm(f => ({ ...f, payment_type: e.target.value }))}>
+                  <option value="bkash">bKash</option>
+                  <option value="nagad">Nagad</option>
+                  <option value="rocket">Rocket</option>
+                  <option value="cod">Cash / COD</option>
+                  <option value="card">Card / Bank</option>
+                </select>
+              </div>
+              <div className="input-group">
+                <label className="input-label">Delivery Fee</label>
+                <input className="input" type="number" min="0" value={editOrderForm.delivery_fee} onChange={e => setEditOrderForm(f => ({ ...f, delivery_fee: e.target.value }))} />
+              </div>
+              <div className="input-group" style={{ gridColumn: "1/-1" }}>
+                <label className="input-label">Internal Notes</label>
+                <textarea className="input" rows={2} value={editOrderForm.notes} onChange={e => setEditOrderForm(f => ({ ...f, notes: e.target.value }))} />
+              </div>
+              <div className="input-group" style={{ gridColumn: "1/-1" }}>
+                <label className="input-label">Admin Reason *</label>
+                <textarea className="input" rows={2} placeholder="Required for audit log" value={editOrderForm.reason} onChange={e => setEditOrderForm(f => ({ ...f, reason: e.target.value }))} />
+              </div>
+            </div>
+          }
+          confirmLabel="Save Changes"
+          onConfirm={saveOrderEdit}
+          onClose={() => setEditOrderPanel(false)}
+        />
       )}
 
       {cancelConfirm && (
@@ -936,31 +1352,148 @@ function Orders() {
 
 // ── Section: Customers ─────────────────────────────────
 function Customers() {
+  const { user } = useContext(DashCtx);
   const [customers, setCustomers] = useState([]);
   const [loading, setLoading]     = useState(true);
   const [search, setSearch]       = useState("");
   const [selected, setSelected]   = useState(null);
+  const [timeline, setTimeline]   = useState([]);
+  const [crmNote, setCrmNote]     = useState({ note_type: "general", note: "" });
+  const [tagInput, setTagInput]   = useState("");
+  const [profileForm, setProfileForm] = useState({ name: "", phone: "", email: "", default_address: "", admin_notes: "", risk_status: "normal", segment: "" });
+  const [riskReason, setRiskReason] = useState("");
 
-  useEffect(() => {
+  async function loadCustomers() {
     setLoading(true);
-    window.mpApi.fetch('/admin/customers?limit=500').then(res => {
+    await window.mpApi.fetch('/admin/customers?limit=500').then(res => {
       if (res?.ok) setCustomers(res.data.customers || []);
     }).catch(() => {}).finally(() => setLoading(false));
-  }, []);
+  }
+
+  useEffect(() => { loadCustomers(); }, []);
 
   const filtered = customers.filter(c =>
     (c.name || '').toLowerCase().includes(search.toLowerCase()) ||
-    (c.phone || '').includes(search)
+    (c.phone || '').includes(search) ||
+    (c.tags || []).some(t => t.includes(search.toLowerCase()))
   );
 
+  function maskPhone(phone) {
+    if (!phone || can(user, "customers.view_pii")) return phone || "—";
+    return `${phone.slice(0, 3)}••••${phone.slice(-2)}`;
+  }
+
+  function openCustomer(c) {
+    setSelected(c);
+    setProfileForm({
+      name: c.name || "",
+      phone: c.phone || "",
+      email: c.email || "",
+      default_address: c.default_address || c.last_address || "",
+      admin_notes: c.admin_notes || "",
+      risk_status: c.risk_status || "normal",
+      segment: c.segment || "",
+    });
+    setRiskReason(c.blocked_reason || "");
+    setCrmNote({ note_type: "general", note: "" });
+    setTagInput("");
+    window.mpApi.fetch(`/admin/customers/${c.id}/timeline`).then(res => {
+      if (res?.ok) setTimeline(res.data.timeline || []);
+    }).catch(() => setTimeline([]));
+  }
+
+  async function refreshSelected(id = selected?.id) {
+    if (!id) return;
+    const [profileRes, timelineRes] = await Promise.all([
+      window.mpApi.fetch(`/admin/customers/${id}`).catch(() => null),
+      window.mpApi.fetch(`/admin/customers/${id}/timeline`).catch(() => null),
+    ]);
+    if (profileRes?.ok) {
+      setSelected(profileRes.data);
+      setCustomers(prev => prev.map(c => c.id === id ? { ...c, ...profileRes.data } : c));
+      setProfileForm({
+        name: profileRes.data.name || "",
+        phone: profileRes.data.phone || "",
+        email: profileRes.data.email || "",
+        default_address: profileRes.data.default_address || profileRes.data.last_address || "",
+        admin_notes: profileRes.data.admin_notes || "",
+        risk_status: profileRes.data.risk_status || "normal",
+        segment: profileRes.data.segment || "",
+      });
+      setRiskReason(profileRes.data.blocked_reason || "");
+    }
+    if (timelineRes?.ok) setTimeline(timelineRes.data.timeline || []);
+  }
+
+  async function saveProfile() {
+    if (!selected?.id || !can(user, "customers.edit")) return;
+    const body = {
+      name: profileForm.name || null,
+      admin_notes: profileForm.admin_notes || null,
+      risk_status: profileForm.risk_status,
+      segment: profileForm.segment || null,
+    };
+    if (can(user, "customers.view_pii")) {
+      body.phone = profileForm.phone;
+      body.email = profileForm.email || null;
+      body.default_address = profileForm.default_address || null;
+    }
+    const res = await window.mpApi.fetch(`/admin/customers/${selected.id}`, { method: "PATCH", body: JSON.stringify(body) }).catch(() => null);
+    if (!res?.ok) { alert(res?.error?.message || "Could not save customer profile."); return; }
+    await refreshSelected(selected.id);
+  }
+
+  async function addCrmNote() {
+    if (!selected?.id || !crmNote.note.trim() || !can(user, "customers.edit")) return;
+    const res = await window.mpApi.fetch(`/admin/customers/${selected.id}/notes`, {
+      method: "POST",
+      body: JSON.stringify({ note_type: crmNote.note_type, note: crmNote.note.trim() }),
+    }).catch(() => null);
+    if (!res?.ok) { alert(res?.error?.message || "Could not add customer note."); return; }
+    setCrmNote({ note_type: "general", note: "" });
+    await refreshSelected(selected.id);
+  }
+
+  async function addTag() {
+    if (!selected?.id || !tagInput.trim() || !can(user, "customers.edit")) return;
+    const res = await window.mpApi.fetch(`/admin/customers/${selected.id}/tags`, {
+      method: "POST",
+      body: JSON.stringify({ tag: tagInput.trim() }),
+    }).catch(() => null);
+    if (!res?.ok) { alert(res?.error?.message || "Could not add tag."); return; }
+    setTagInput("");
+    await refreshSelected(selected.id);
+  }
+
+  async function removeTag(tag) {
+    if (!selected?.id || !can(user, "customers.edit")) return;
+    await window.mpApi.fetch(`/admin/customers/${selected.id}/tags/${encodeURIComponent(tag)}`, { method: "DELETE" }).catch(() => null);
+    await refreshSelected(selected.id);
+  }
+
+  async function saveRisk(status) {
+    if (!selected?.id || !can(user, "customers.edit")) return;
+    const res = await window.mpApi.fetch(`/admin/customers/${selected.id}/risk`, {
+      method: "POST",
+      body: JSON.stringify({ risk_status: status, blocked_reason: status === "blocked" ? riskReason : undefined }),
+    }).catch(() => null);
+    if (!res?.ok) { alert(res?.error?.message || "Could not update risk status."); return; }
+    await refreshSelected(selected.id);
+  }
+
+  function createManualOrderForCustomer() {
+    alert("Use Orders → New Order. This customer profile keeps the phone and address ready for support reference.");
+  }
+
   function exportCsv() {
+    if (!can(user, "customers.export")) return;
     const header = 'Name,Phone,Orders,Total Spent (BDT),Last Address,First Order,Last Order';
     const rows = customers.map(c => [
       `"${(c.name || '').replace(/"/g, '""')}"`,
-      c.phone || '',
+      can(user, "customers.view_pii") ? (c.phone || '') : '',
       c.order_count || 0,
       Number(c.total_spent || 0).toFixed(0),
-      `"${(c.last_address || '').replace(/"/g, '""')}"`,
+      can(user, "customers.view_pii") ? `"${(c.last_address || '').replace(/"/g, '""')}"` : '',
       c.first_seen ? new Date(c.first_seen).toLocaleDateString('en-GB') : '',
       c.last_seen  ? new Date(c.last_seen).toLocaleDateString('en-GB')  : '',
     ].join(','));
@@ -974,7 +1507,7 @@ function Customers() {
     URL.revokeObjectURL(url);
   }
 
-  if (selected) {
+    if (selected) {
     const c = selected;
     return (
       <div className="dash-inner-wide">
@@ -982,16 +1515,95 @@ function Customers() {
           <i className="fa fa-arrow-left" style={{ fontSize: 12 }} /> Back to Customers
         </button>
         <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>{c.name || '—'}</div>
-        <div className="text-muted text-sm mb16">{c.phone || '—'}</div>
+        <div className="text-muted text-sm mb16">{maskPhone(c.phone)}</div>
         <div className="stat-row mb16">
           <div className="stat-card"><div className="stat-label">Orders</div><div className="stat-value">{c.order_count || 0}</div></div>
           <div className="stat-card"><div className="stat-label">Total Spent</div><div className="stat-value">৳{Number(c.total_spent || 0).toLocaleString()}</div></div>
+          <div className="stat-card"><div className="stat-label">Risk</div><div className="stat-value" style={{ fontSize: 18 }}>{fmtStatus(c.risk_status || "normal")}</div></div>
         </div>
         <SectionCard>
-          <div className="row-between mb8 text-sm"><span className="text-muted">Phone</span><span>{c.phone || '—'}</span></div>
-          <div className="row-between mb8 text-sm"><span className="text-muted">Last Address</span><span style={{ textAlign: "right", maxWidth: 220 }}>{c.last_address || '—'}</span></div>
+          <div className="row-between mb8 text-sm"><span className="text-muted">Phone</span><span>{maskPhone(c.phone)}</span></div>
+          <div className="row-between mb8 text-sm"><span className="text-muted">Email</span><span>{c.email || '—'}</span></div>
+          <div className="row-between mb8 text-sm"><span className="text-muted">Default Address</span><span style={{ textAlign: "right", maxWidth: 220 }}>{can(user, "customers.view_pii") ? (c.default_address || c.last_address || '—') : "Hidden"}</span></div>
+          <div className="row-between mb8 text-sm"><span className="text-muted">Segment</span><span>{c.segment ? fmtStatus(c.segment.replace(/_/g, " ")) : '—'}</span></div>
           <div className="row-between mb8 text-sm"><span className="text-muted">First Order</span><span>{fmtDate(c.first_seen)}</span></div>
           <div className="row-between text-sm"><span className="text-muted">Last Order</span><span>{fmtDate(c.last_seen)}</span></div>
+        </SectionCard>
+        <SectionCard>
+          <div className="row-between mb10">
+            <div className="eyebrow">Tags</div>
+            {can(user, "customers.edit") && <div style={{ display: "flex", gap: 8 }}>
+              <input className="input" style={{ width: 180 }} placeholder="Add tag" value={tagInput} onChange={e => setTagInput(e.target.value)} />
+              <button className="btn btn-sm btn-ghost" onClick={addTag}>Add</button>
+            </div>}
+          </div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {(c.tags || []).length ? c.tags.map(tag => (
+              <span key={tag} className="badge badge-gray" style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                {tag}
+                {can(user, "customers.edit") && <button className="icon-btn" style={{ width: 18, height: 18, minWidth: 18 }} onClick={() => removeTag(tag)}><i className="fa fa-times" style={{ fontSize: 10 }} /></button>}
+              </span>
+            )) : <span className="text-muted text-sm">No tags yet.</span>}
+          </div>
+        </SectionCard>
+        {can(user, "customers.edit") && <SectionCard>
+          <div className="eyebrow mb12">Profile Edit</div>
+          <div className="grid-2">
+            <div className="input-group"><label className="input-label">Name</label><input className="input" value={profileForm.name} onChange={e => setProfileForm(f => ({ ...f, name: e.target.value }))} /></div>
+            {can(user, "customers.view_pii") && <div className="input-group"><label className="input-label">Phone</label><input className="input" value={profileForm.phone} onChange={e => setProfileForm(f => ({ ...f, phone: e.target.value }))} /></div>}
+            {can(user, "customers.view_pii") && <div className="input-group"><label className="input-label">Email</label><input className="input" value={profileForm.email} onChange={e => setProfileForm(f => ({ ...f, email: e.target.value }))} /></div>}
+            <div className="input-group"><label className="input-label">Segment</label><select className="select" value={profileForm.segment} onChange={e => setProfileForm(f => ({ ...f, segment: e.target.value }))}>
+              <option value="">Unassigned</option>
+              {["new_customer", "repeat_customer", "vip", "subscription_customer", "inactive", "high_complaint", "coupon_sensitive", "cod_risk"].map(s => <option key={s} value={s}>{fmtStatus(s.replace(/_/g, " "))}</option>)}
+            </select></div>
+            {can(user, "customers.view_pii") && <div className="input-group" style={{ gridColumn: "1/-1" }}><label className="input-label">Default Address</label><textarea className="input" rows={2} value={profileForm.default_address} onChange={e => setProfileForm(f => ({ ...f, default_address: e.target.value }))} /></div>}
+            <div className="input-group" style={{ gridColumn: "1/-1" }}><label className="input-label">Admin Notes</label><textarea className="input" rows={3} value={profileForm.admin_notes} onChange={e => setProfileForm(f => ({ ...f, admin_notes: e.target.value }))} /></div>
+          </div>
+          <button className="btn btn-primary btn-sm" onClick={saveProfile}>Save Profile</button>
+        </SectionCard>}
+        {can(user, "customers.edit") && <SectionCard>
+          <div className="eyebrow mb12">Support Actions</div>
+          <div className="grid-2">
+            <div className="input-group"><label className="input-label">Risk Status</label><select className="select" value={profileForm.risk_status} onChange={e => setProfileForm(f => ({ ...f, risk_status: e.target.value }))}>
+              {["normal", "vip", "watch", "cod_risk", "blocked"].map(s => <option key={s} value={s}>{fmtStatus(s.replace(/_/g, " "))}</option>)}
+            </select></div>
+            <div className="input-group"><label className="input-label">Blocked/Risk Reason</label><input className="input" value={riskReason} onChange={e => setRiskReason(e.target.value)} /></div>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="btn btn-ghost btn-sm" onClick={() => saveRisk(profileForm.risk_status)}>Apply Risk Status</button>
+            <button className="btn btn-ghost btn-sm" onClick={createManualOrderForCustomer}>Create Manual Order</button>
+          </div>
+        </SectionCard>}
+        <SectionCard>
+          <div className="eyebrow mb12">CRM Notes</div>
+          {can(user, "customers.edit") && <div className="col-gap mb12" style={{ gap: 8 }}>
+            <select className="select" value={crmNote.note_type} onChange={e => setCrmNote(f => ({ ...f, note_type: e.target.value }))}>
+              {["general", "support", "complaint", "payment", "delivery", "refund_return"].map(s => <option key={s} value={s}>{fmtStatus(s.replace(/_/g, " "))}</option>)}
+            </select>
+            <textarea className="input" rows={2} placeholder="Add support note" value={crmNote.note} onChange={e => setCrmNote(f => ({ ...f, note: e.target.value }))} />
+            <button className="btn btn-ghost btn-sm" onClick={addCrmNote}>Add Note</button>
+          </div>}
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {timeline.filter(t => t.event_type === "support_note").slice(0, 5).map(t => (
+              <div key={t.id} className="text-sm" style={{ background: "var(--bg-soft)", borderRadius: 6, padding: "8px 10px" }}>
+                <div className="text-xs text-muted">{fmtStatus(t.detail || "Note")} · {fmtDate(t.created_at)} · {t.actor_name || "Admin"}</div>
+                <div>{t.note}</div>
+              </div>
+            ))}
+            {!timeline.filter(t => t.event_type === "support_note").length && <div className="text-muted text-sm">No support notes yet.</div>}
+          </div>
+        </SectionCard>
+        <SectionCard>
+          <div className="eyebrow mb12">Customer Timeline</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {timeline.slice(0, 25).map(t => (
+              <div key={`${t.event_type}-${t.id}`} className="text-sm" style={{ display: "flex", justifyContent: "space-between", gap: 12, background: "var(--bg-soft)", borderRadius: 6, padding: "8px 10px" }}>
+                <span><strong>{fmtStatus((t.event_type || "").replace(/_/g, " "))}</strong>{t.note ? ` · ${t.note}` : ""}</span>
+                <span className="text-muted" style={{ whiteSpace: "nowrap" }}>{fmtDate(t.created_at)}</span>
+              </div>
+            ))}
+            {!timeline.length && <div className="text-muted text-sm">No customer activity yet.</div>}
+          </div>
         </SectionCard>
       </div>
     );
@@ -1001,9 +1613,9 @@ function Customers() {
     <div className="dash-inner-wide">
       <div className="row-between mb16">
         <div className="page-title" style={{ marginBottom: 0 }}>Customers</div>
-        <button className="btn btn-ghost btn-sm" onClick={exportCsv} disabled={customers.length === 0}>
+        {can(user, "customers.export") && <button className="btn btn-ghost btn-sm" onClick={exportCsv} disabled={customers.length === 0}>
           <i className="fa fa-download" style={{ fontSize: 12 }} /> Export CSV
-        </button>
+        </button>}
       </div>
       <input className="input mb16" placeholder="Search by name or phone…" value={search} onChange={e => setSearch(e.target.value)} style={{ maxWidth: 320 }} />
       <SectionCard style={{ padding: 0, overflow: "hidden" }}>
@@ -1018,12 +1630,12 @@ function Customers() {
               ) : filtered.length === 0 ? (
                 <tr><td colSpan={6} style={{ textAlign: "center", padding: 32, color: "var(--text-65)" }}>No customers found.</td></tr>
               ) : filtered.map((c, i) => (
-                <tr key={i} style={{ cursor: "pointer" }} onClick={() => setSelected(c)}>
+                <tr key={i} style={{ cursor: "pointer" }} onClick={() => openCustomer(c)}>
                   <td style={{ fontWeight: 600 }}>{c.name || '—'}</td>
-                  <td className="muted mono">{c.phone || '—'}</td>
+                  <td className="muted mono">{maskPhone(c.phone)}</td>
                   <td>{c.order_count || 0}</td>
                   <td style={{ color: "var(--orange)", fontWeight: 600 }}>৳{Number(c.total_spent || 0).toLocaleString()}</td>
-                  <td className="muted" style={{ maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.last_address || '—'}</td>
+                  <td className="muted" style={{ maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{can(user, "customers.view_pii") ? (c.default_address || c.last_address || '—') : "Hidden"}</td>
                   <td className="muted">{fmtDate(c.last_seen)}</td>
                 </tr>
               ))}
@@ -1040,31 +1652,129 @@ function Customers() {
 
 // ── Section: Subscriptions ─────────────────────────────
 function Subscriptions() {
-  const STATUS_TABS = ["active", "paused", "cancelled"];
+  const { user, adminProducts } = useContext(DashCtx);
+  const STATUS_TABS = ["active", "paused", "cancelled", "upcoming_7", "payment_issue", "delivery_due"];
   const [subTab, setSubTab]   = useState("active");
   const [subs, setSubs]       = useState([]);
   const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState(null);
+  const [events, setEvents] = useState([]);
+  const [createOpen, setCreateOpen] = useState(false);
+  const emptyForm = { phone: "", product_id: "", qty: 1, address: "", billing_day: 1, next_delivery_date: "", admin_note: "" };
+  const [form, setForm] = useState(emptyForm);
+  const [editForm, setEditForm] = useState({ product_id: "", qty: 1, address: "", billing_day: 1, next_delivery_date: "", admin_note: "", payment_status: "ok" });
+  const [actionNote, setActionNote] = useState("");
 
-  useEffect(() => {
+  async function loadSubs(status = subTab) {
     setLoading(true);
-    window.mpApi.fetch(`/admin/subscriptions?status=${subTab}`)
+    await window.mpApi.fetch(`/admin/subscriptions?status=${status}`)
       .then(res => setSubs(res?.data?.subscriptions || []))
       .catch(() => setSubs([]))
       .finally(() => setLoading(false));
-  }, [subTab]);
+  }
+
+  useEffect(() => { loadSubs(subTab); }, [subTab]);
 
   const sfx    = n => ['st','nd','rd'][n - 1] || 'th';
   const fmtDt  = iso => iso ? new Date(iso).toLocaleDateString('en-BD', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
   const fmtAmt = v  => `৳${Number(v).toLocaleString()}`;
+  const tabLabel = t => ({ upcoming_7: "Upcoming 7d", payment_issue: "Payment Issue", delivery_due: "Delivery Due" }[t] || fmtStatus(t));
+
+  async function openSub(s) {
+    setSelected(s);
+    setActionNote("");
+    setEditForm({
+      product_id: s.product_id || "",
+      qty: s.qty || 1,
+      address: s.address || "",
+      billing_day: s.billing_day || 1,
+      next_delivery_date: s.next_delivery_date ? String(s.next_delivery_date).slice(0, 10) : "",
+      admin_note: s.admin_note || "",
+      payment_status: s.payment_status || "ok",
+    });
+    const res = await window.mpApi.fetch(`/admin/subscriptions/${s.id}/events`).catch(() => null);
+    setEvents(res?.ok ? (res.data.events || []) : []);
+  }
+
+  async function refreshSelected(id = selected?.id) {
+    await loadSubs(subTab);
+    if (!id) return;
+    const eventRes = await window.mpApi.fetch(`/admin/subscriptions/${id}/events`).catch(() => null);
+    setEvents(eventRes?.ok ? (eventRes.data.events || []) : []);
+    const listRes = await window.mpApi.fetch(`/admin/subscriptions?status=${subTab}`).catch(() => null);
+    const next = (listRes?.data?.subscriptions || []).find(s => s.id === id);
+    if (next) setSelected(next);
+  }
+
+  async function createSubscription() {
+    const body = {
+      phone: form.phone,
+      product_id: form.product_id || undefined,
+      qty: Number(form.qty || 1),
+      address: form.address,
+      billing_day: Number(form.billing_day || 1),
+      next_delivery_date: form.next_delivery_date || undefined,
+      admin_note: form.admin_note || undefined,
+    };
+    const res = await window.mpApi.fetch('/admin/subscriptions', { method: 'POST', body: JSON.stringify(body) }).catch(() => null);
+    if (!res?.ok) { alert(res?.error?.message || "Could not create subscription."); return; }
+    setCreateOpen(false);
+    setForm(emptyForm);
+    await loadSubs(subTab);
+  }
+
+  async function saveSubscription() {
+    if (!selected?.id) return;
+    const body = {
+      product_id: editForm.product_id || null,
+      qty: Number(editForm.qty || 1),
+      address: editForm.address,
+      billing_day: Number(editForm.billing_day || 1),
+      next_delivery_date: editForm.next_delivery_date || undefined,
+      admin_note: editForm.admin_note || undefined,
+      payment_status: editForm.payment_status,
+    };
+    const res = await window.mpApi.fetch(`/admin/subscriptions/${selected.id}`, { method: 'PATCH', body: JSON.stringify(body) }).catch(() => null);
+    if (!res?.ok) { alert(res?.error?.message || "Could not update subscription."); return; }
+    setSelected(res.data);
+    await refreshSelected(selected.id);
+  }
+
+  async function subAction(action) {
+    if (!selected?.id) return;
+    let body = {};
+    if (action === "pause") {
+      const months = Number(prompt("Pause for how many months? 1-6", "1") || 1);
+      if (!months) return;
+      body = { months, note: actionNote || undefined };
+    } else if (action === "cancel") {
+      const reason = prompt("Cancel reason", actionNote || "");
+      if (reason === null) return;
+      body = { reason };
+    } else if (action === "resume") {
+      body = { note: actionNote || undefined };
+    } else if (action === "create-order") {
+      body = { note: actionNote || undefined };
+    }
+    const res = await window.mpApi.fetch(`/admin/subscriptions/${selected.id}/${action}`, { method: 'POST', body: JSON.stringify(body) }).catch(() => null);
+    if (!res?.ok) { alert(res?.error?.message || "Subscription action failed."); return; }
+    if (action === "create-order") alert(`Order ${res.data.order_ref} created.`);
+    await refreshSelected(selected.id);
+  }
 
   return (
     <div className="dash-inner-wide">
-      <div className="page-title">Subscriptions</div>
+      <div className="row-between mb16">
+        <div className="page-title" style={{ marginBottom: 0 }}>Subscriptions</div>
+        {can(user, "subscriptions.create") && <button className="btn btn-primary" onClick={() => setCreateOpen(true)}>
+          <i className="fa fa-plus" style={{ fontSize: 12 }} /> Create Subscription
+        </button>}
+      </div>
 
       <div className="toggle-group mb16">
         {STATUS_TABS.map(t => (
           <button key={t} className={`toggle-btn ${subTab === t ? "active" : ""}`} onClick={() => setSubTab(t)}>
-            {t.charAt(0).toUpperCase() + t.slice(1)}
+            {tabLabel(t)}
           </button>
         ))}
       </div>
@@ -1082,7 +1792,7 @@ function Subscriptions() {
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {subs.map(s => (
-            <div key={s.id} className="card" style={{ padding: "14px 16px" }}>
+            <div key={s.id} className="card" style={{ padding: "14px 16px", cursor: "pointer" }} onClick={() => openSub(s)}>
               <div className="row-between mb8">
                 <div>
                   <div style={{ fontWeight: 700, fontSize: 15 }}>{s.user_name}</div>
@@ -1119,9 +1829,100 @@ function Subscriptions() {
                 <span className="text-muted">Address</span>
                 <span style={{ maxWidth: "55%", textAlign: "right", wordBreak: "break-word" }}>{s.address}</span>
               </div>
+              {s.payment_status && s.payment_status !== "ok" && (
+                <div className="row-between text-sm mt4">
+                  <span className="text-muted">Payment</span>
+                  <span className="badge badge-orange">{fmtStatus(s.payment_status.replace(/_/g, " "))}</span>
+                </div>
+              )}
             </div>
           ))}
         </div>
+      )}
+
+      {createOpen && (
+        <Sheet
+          title="Create Subscription"
+          body={
+            <div className="grid-2">
+              <div className="input-group"><label className="input-label">Customer Phone</label><input className="input" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} /></div>
+              <div className="input-group"><label className="input-label">Product</label><select className="select" value={form.product_id} onChange={e => setForm(f => ({ ...f, product_id: e.target.value }))}><option value="">Default subscription product</option>{(adminProducts || []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
+              <div className="input-group"><label className="input-label">Quantity</label><input className="input" type="number" min="1" max="20" value={form.qty} onChange={e => setForm(f => ({ ...f, qty: e.target.value }))} /></div>
+              <div className="input-group"><label className="input-label">Billing Day</label><input className="input" type="number" min="1" max="28" value={form.billing_day} onChange={e => setForm(f => ({ ...f, billing_day: e.target.value }))} /></div>
+              <div className="input-group" style={{ gridColumn: "1/-1" }}><label className="input-label">Next Delivery Date</label><input className="input" type="date" value={form.next_delivery_date} onChange={e => setForm(f => ({ ...f, next_delivery_date: e.target.value }))} /></div>
+              <div className="input-group" style={{ gridColumn: "1/-1" }}><label className="input-label">Address</label><textarea className="input" rows={2} value={form.address} onChange={e => setForm(f => ({ ...f, address: e.target.value }))} /></div>
+              <div className="input-group" style={{ gridColumn: "1/-1" }}><label className="input-label">Admin Note</label><textarea className="input" rows={2} value={form.admin_note} onChange={e => setForm(f => ({ ...f, admin_note: e.target.value }))} /></div>
+            </div>
+          }
+          confirmLabel="Create Subscription"
+          onConfirm={createSubscription}
+          onClose={() => setCreateOpen(false)}
+        />
+      )}
+
+      {selected && (
+        <>
+          <div className="panel-overlay" onClick={() => setSelected(null)} />
+          <div className="slide-panel">
+            <div className="panel-hd">
+              <div>
+                <div className="eyebrow" style={{ marginBottom: 4 }}>Subscription</div>
+                <div style={{ fontWeight: 700, fontSize: 16 }}>{selected.user_name}</div>
+              </div>
+              <button className="icon-btn" onClick={() => setSelected(null)}><i className="fa fa-times" /></button>
+            </div>
+            <div className="eyebrow mb10">Details</div>
+            <div className="row-between mb8 text-sm"><span className="text-muted">Product</span><span>{selected.product_name} × {selected.qty}</span></div>
+            <div className="row-between mb8 text-sm"><span className="text-muted">Monthly</span><span style={{ color: "var(--orange)", fontWeight: 700 }}>{fmtAmt(selected.qty * selected.unit_price)}</span></div>
+            <div className="row-between mb8 text-sm"><span className="text-muted">Next Delivery</span><span>{fmtDt(selected.next_delivery_date)}</span></div>
+            <div className="row-between mb8 text-sm"><span className="text-muted">Status</span><StatusBadge status={selected.status} /></div>
+            <div className="row-between mb16 text-sm"><span className="text-muted">Payment</span><span className="badge badge-gray">{fmtStatus((selected.payment_status || "ok").replace(/_/g, " "))}</span></div>
+            <div className="divider" />
+
+            {can(user, "subscriptions.edit") && (
+              <>
+                <div className="eyebrow mb10">Edit Subscription</div>
+                <div className="col-gap" style={{ gap: 8 }}>
+                  <select className="select" value={editForm.product_id} onChange={e => setEditForm(f => ({ ...f, product_id: e.target.value }))}>
+                    <option value="">Keep current product</option>{(adminProducts || []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                    <input className="input" type="number" min="1" max="20" value={editForm.qty} onChange={e => setEditForm(f => ({ ...f, qty: e.target.value }))} />
+                    <input className="input" type="number" min="1" max="28" value={editForm.billing_day} onChange={e => setEditForm(f => ({ ...f, billing_day: e.target.value }))} />
+                  </div>
+                  <input className="input" type="date" value={editForm.next_delivery_date} onChange={e => setEditForm(f => ({ ...f, next_delivery_date: e.target.value }))} />
+                  <select className="select" value={editForm.payment_status} onChange={e => setEditForm(f => ({ ...f, payment_status: e.target.value }))}>
+                    {["ok", "pending", "payment_issue", "failed"].map(s => <option key={s} value={s}>{fmtStatus(s.replace(/_/g, " "))}</option>)}
+                  </select>
+                  <textarea className="input" rows={2} value={editForm.address} onChange={e => setEditForm(f => ({ ...f, address: e.target.value }))} />
+                  <textarea className="input" rows={2} placeholder="Admin note" value={editForm.admin_note} onChange={e => setEditForm(f => ({ ...f, admin_note: e.target.value }))} />
+                  <button className="btn btn-primary btn-sm" onClick={saveSubscription}>Save Changes</button>
+                </div>
+                <div className="divider" />
+              </>
+            )}
+
+            <div className="eyebrow mb10">Actions</div>
+            <textarea className="input mb10" rows={2} placeholder="Optional action note" value={actionNote} onChange={e => setActionNote(e.target.value)} />
+            <div className="col-gap" style={{ gap: 8 }}>
+              {selected.status === "active" && can(user, "subscriptions.pause") && <button className="btn btn-ghost btn-sm" onClick={() => subAction("pause")}>Pause Subscription</button>}
+              {selected.status === "paused" && can(user, "subscriptions.resume") && <button className="btn btn-primary btn-sm" onClick={() => subAction("resume")}>Resume Subscription</button>}
+              {selected.status === "active" && can(user, "subscriptions.edit") && <button className="btn btn-ghost btn-sm" onClick={() => subAction("create-order")}>Create Order From Subscription</button>}
+              {selected.status !== "cancelled" && can(user, "subscriptions.cancel") && <button className="btn btn-ghost btn-sm" style={{ color: "var(--red)", border: "1px solid rgba(217,64,64,.35)" }} onClick={() => subAction("cancel")}>Cancel Subscription</button>}
+            </div>
+            <div className="divider" />
+
+            <div className="eyebrow mb10">Event History</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {events.length ? events.slice(0, 12).map(ev => (
+                <div key={ev.id} className="text-xs" style={{ background: "var(--bg-soft)", borderRadius: 6, padding: "7px 9px" }}>
+                  <strong>{fmtStatus((ev.event_type || "").replace(/_/g, " "))}</strong> · {fmtDt(ev.created_at)}{ev.admin_name ? ` · ${ev.admin_name}` : ""}
+                  {ev.note && <div style={{ marginTop: 3 }}>{ev.note}</div>}
+                </div>
+              )) : <div className="text-sm text-muted">No events recorded yet.</div>}
+            </div>
+          </div>
+        </>
       )}
     </div>
   );
@@ -1129,7 +1930,7 @@ function Subscriptions() {
 
 // ── Section: Coupons ───────────────────────────────────
 function Coupons() {
-  const { adminInfluencers, setAdminInfluencers } = useContext(DashCtx);
+  const { user, adminInfluencers, setAdminInfluencers } = useContext(DashCtx);
 
   useEffect(() => {
     if ((adminInfluencers || []).length > 0) return;
@@ -1364,7 +2165,7 @@ function Coupons() {
               <div className="eyebrow" style={{ marginBottom: 0 }}>Create New Coupon</div>
               <i className={`fa fa-chevron-${showForm ? "up" : "down"} text-muted`} style={{ fontSize: 12 }} />
             </div>
-            {showForm && (
+            {showForm && can(user, "coupons.create") && (
               <div style={{ marginTop: 16 }}>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                   <div className="input-group"><label className="input-label">Code</label><input className="input" placeholder="SUMMER25" value={form.code} onChange={e => setForm(f => ({ ...f, code: e.target.value.toUpperCase() }))} /></div>
@@ -1466,10 +2267,10 @@ function Coupons() {
                         </td>
                         <td>
                           <div className="cell-action">
-                            <button className="btn btn-sm btn-ghost" style={{ padding: "5px 10px", fontSize: 11 }} onClick={() => editingCode === c.code ? setEditingCode(null) : startEdit(c)}>
+                            {can(user, "coupons.edit") && <button className="btn btn-sm btn-ghost" style={{ padding: "5px 10px", fontSize: 11 }} onClick={() => editingCode === c.code ? setEditingCode(null) : startEdit(c)}>
                               {editingCode === c.code ? "Cancel" : "Edit"}
-                            </button>
-                            {c.target_type === 'specific_customers' && (
+                            </button>}
+                            {c.target_type === 'specific_customers' && can(user, "coupons.edit") && (
                               <button className="btn btn-sm btn-ghost" style={{ padding: "5px 10px", fontSize: 11 }} onClick={() => {
                                 if (managingTargets === c.code) {
                                   setManagingTargets(null); setTargetUsers([]); setTargetSearch(""); setTargetSearchResults([]);
@@ -1484,10 +2285,10 @@ function Coupons() {
                                 Customers
                               </button>
                             )}
-                            <button className="btn btn-sm btn-ghost" style={{ padding: "5px 10px", fontSize: 11 }} onClick={() => toggleCoupon(c.code)}>
+                            {can(user, "coupons.toggle") && <button className="btn btn-sm btn-ghost" style={{ padding: "5px 10px", fontSize: 11 }} onClick={() => toggleCoupon(c.code)}>
                               {c.is_active ? "Deactivate" : "Activate"}
-                            </button>
-                            <button className="btn btn-sm btn-ghost" style={{ padding: "5px 10px", fontSize: 11, color: "var(--red)", borderColor: "rgba(229,92,92,.4)" }} onClick={() => deleteCoupon(c.code)}>Delete</button>
+                            </button>}
+                            {can(user, "coupons.delete") && <button className="btn btn-sm btn-ghost" style={{ padding: "5px 10px", fontSize: 11, color: "var(--red)", borderColor: "rgba(229,92,92,.4)" }} onClick={() => deleteCoupon(c.code)}>Delete</button>}
                           </div>
                         </td>
                       </tr>
@@ -1622,9 +2423,9 @@ function Coupons() {
                       </td>
                       <td><span className={`badge ${c.is_active !== false ? "badge-green" : "badge-gray"}`}>{c.is_active !== false ? "Active" : "Inactive"}</span></td>
                       <td>
-                        <button className="btn btn-sm btn-ghost" style={{ padding: "5px 10px", fontSize: 11 }} onClick={() => toggleInfluencerCoupon(c.code)}>
+                        {can(user, "coupons.toggle") && <button className="btn btn-sm btn-ghost" style={{ padding: "5px 10px", fontSize: 11 }} onClick={() => toggleInfluencerCoupon(c.code)}>
                           {c.is_active !== false ? "Deactivate" : "Activate"}
-                        </button>
+                        </button>}
                       </td>
                     </tr>
                   ))}
@@ -2006,6 +2807,7 @@ function CrewManagement() {
 
 // ── Section: User Management ─────────────────────
 function UsersAdmin() {
+  const { user: currentAdmin } = useContext(DashCtx);
   const [users, setUsers]           = useState([]);
   const [loading, setLoading]       = useState(true);
   const [search, setSearch]         = useState('');
@@ -2218,6 +3020,7 @@ function UsersAdmin() {
                       <td>
                         <div style={{ display: 'flex', gap: '8px' }}>
                           {user.is_active ? (
+                            can(currentAdmin, "admins.disable") && (
                             <button
                               onClick={() => handleDeactivate(user.id, user.email || user.phone)}
                               disabled={actionInProgress}
@@ -2226,7 +3029,9 @@ function UsersAdmin() {
                             >
                               Deactivate
                             </button>
+                            )
                           ) : (
+                            can(currentAdmin, "admins.disable") && (
                             <button
                               onClick={() => handleActivate(user.id, user.email || user.phone)}
                               disabled={actionInProgress}
@@ -2234,13 +3039,14 @@ function UsersAdmin() {
                             >
                               Activate
                             </button>
+                            )
                           )}
-                          <button
+                          {can(currentAdmin, "points.adjust_user_points") && <button
                             onClick={() => setSelectedUser(user.id === selectedUser ? null : user.id)}
                             className="btn btn-sm btn-ghost"
                           >
                             <i className={`fa fa-chevron-${user.id === selectedUser ? 'up' : 'down'}`} />
-                          </button>
+                          </button>}
                         </div>
                       </td>
                     </tr>
@@ -2715,6 +3521,7 @@ function PointsTierClaimsTab() {
 
 // ── Section: Financials ────────────────────────────────
 function Financials() {
+  const { user } = useContext(DashCtx);
   const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
   const months = Array.from({ length: 6 }, (_, i) => {
     const d = new Date();
@@ -2725,6 +3532,11 @@ function Financials() {
   const [month, setMonth]     = useState(months[0]);
   const [fin, setFin]         = useState(null);
   const [loading, setLoading] = useState(true);
+  const [tab, setTab]         = useState("summary");
+  const [expenses, setExpenses] = useState([]);
+  const [recons, setRecons]     = useState([]);
+  const [expenseForm, setExpenseForm] = useState({ category: "product_purchase", amount: "", expense_date: new Date().toISOString().slice(0, 10), note: "" });
+  const [reconForm, setReconForm] = useState({ order_id: "", payment_method: "bkash", expected_amount: "", received_amount: "", status: "verified", transaction_id: "", note: "" });
 
   const toYYYYMM = (label) => {
     const [name, year] = label.split(' ');
@@ -2733,7 +3545,7 @@ function Financials() {
 
   const csvEscape = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
   const exportCsv = () => {
-    if (!fin) return;
+    if (!fin || !can(user, "financials.export")) return;
     const monthKey = toYYYYMM(month);
     const rows = [
       ['Month', month],
@@ -2744,6 +3556,10 @@ function Financials() {
       ['Influencer Commission', Number(fin.commission || 0)],
       ['Crew Commission', Number(fin.crew_commission || 0)],
       ['Points Redeemed (Taka Equivalent)', Number(fin.points_redeemed_taka || 0)],
+      ['Refunds', Number(fin.refunds || 0)],
+      ['Total Expenses', Number(fin.expenses?.total || 0)],
+      ['Pending Payment Amount', Number(fin.payment_reconciliation?.pending_amount || 0)],
+      ['Net Profit Estimate', Number(fin.profit_summary?.net_profit_estimate || 0)],
       ['Total Outstanding Liability (Current)', Number(fin.outstanding_liability?.total || 0)],
       ['Unpaid Influencer Commission (Current)', Number(fin.outstanding_liability?.influencer_unpaid || 0)],
       ['Unpaid Crew Commission (Current)', Number(fin.outstanding_liability?.crew_unpaid || 0)],
@@ -2763,13 +3579,53 @@ function Financials() {
 
   useEffect(() => {
     setLoading(true);
-    window.mpApi.fetch(`/admin/financials?month=${toYYYYMM(month)}`)
-      .then(res => { if (res?.data) setFin(res.data); })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    loadFinancials();
   }, [month]);
 
   const fmt = v => loading ? '…' : `৳${Number(v ?? 0).toLocaleString()}`;
+  const monthKey = toYYYYMM(month);
+
+  async function loadFinancials() {
+    const [summaryRes, expensesRes, reconsRes] = await Promise.all([
+      window.mpApi.fetch(`/admin/financials?month=${monthKey}`).catch(() => null),
+      window.mpApi.fetch(`/admin/financials/expenses?month=${monthKey}`).catch(() => null),
+      window.mpApi.fetch(`/admin/financials/reconciliations?month=${monthKey}`).catch(() => null),
+    ]);
+    if (summaryRes?.data) setFin(summaryRes.data);
+    setExpenses(expensesRes?.data?.expenses || []);
+    setRecons(reconsRes?.data?.reconciliations || []);
+    setLoading(false);
+  }
+
+  async function addExpense() {
+    if (!expenseForm.amount || !can(user, "financials.manage_expenses")) return;
+    const res = await window.mpApi.fetch('/admin/financials/expenses', {
+      method: 'POST',
+      body: JSON.stringify({ ...expenseForm, amount: Number(expenseForm.amount) }),
+    }).catch(() => null);
+    if (!res?.ok) { alert(res?.error?.message || "Could not add expense."); return; }
+    setExpenseForm({ category: "product_purchase", amount: "", expense_date: new Date().toISOString().slice(0, 10), note: "" });
+    setLoading(true);
+    await loadFinancials();
+  }
+
+  async function addReconciliation() {
+    if (!reconForm.expected_amount || !can(user, "financials.reconcile_payments")) return;
+    const body = {
+      order_id: reconForm.order_id || null,
+      payment_method: reconForm.payment_method,
+      expected_amount: Number(reconForm.expected_amount || 0),
+      received_amount: Number(reconForm.received_amount || 0),
+      status: reconForm.status,
+      transaction_id: reconForm.transaction_id || undefined,
+      note: reconForm.note || undefined,
+    };
+    const res = await window.mpApi.fetch('/admin/financials/reconciliations', { method: 'POST', body: JSON.stringify(body) }).catch(() => null);
+    if (!res?.ok) { alert(res?.error?.message || "Could not save reconciliation."); return; }
+    setReconForm({ order_id: "", payment_method: "bkash", expected_amount: "", received_amount: "", status: "verified", transaction_id: "", note: "" });
+    setLoading(true);
+    await loadFinancials();
+  }
 
   return (
     <div className="dash-inner-wide">
@@ -2779,7 +3635,7 @@ function Financials() {
           <select className="select" style={{ width: 140 }} value={month} onChange={e => setMonth(e.target.value)}>
             {months.map(m => <option key={m}>{m}</option>)}
           </select>
-          <button className="btn btn-ghost btn-sm" disabled={!fin || loading} onClick={exportCsv}><i className="fa fa-download" style={{ fontSize: 12 }} /> Export CSV</button>
+          {can(user, "financials.export") && <button className="btn btn-ghost btn-sm" disabled={!fin || loading} onClick={exportCsv}><i className="fa fa-download" style={{ fontSize: 12 }} /> Export CSV</button>}
         </div>
       </div>
 
@@ -2811,6 +3667,20 @@ function Financials() {
           <div className="stat-value">{fmt(fin?.points_redeemed_taka)}</div>
           <div className="text-xs text-muted mt4">Uses ৳{Number(fin?.point_redemption_value ?? 0).toLocaleString()} per point.</div>
         </div>
+        <div className="stat-card" style={{ borderColor: "rgba(46,168,107,.3)" }}>
+          <div className="stat-label">Net Profit Estimate</div>
+          <div className="stat-value">{fmt(fin?.profit_summary?.net_profit_estimate)}</div>
+          <div className="text-xs text-muted mt4">Delivered revenue minus tracked costs, commissions and refunds.</div>
+        </div>
+        <div className="stat-card" style={{ borderColor: "rgba(217,64,64,.25)" }}>
+          <div className="stat-label">Pending Payment Amount</div>
+          <div className="stat-value">{fmt(fin?.payment_reconciliation?.pending_amount)}</div>
+          <div className="text-xs text-muted mt4">{Number(fin?.payment_reconciliation?.pending_count || 0)} reconciliation item(s).</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Tracked Expenses</div>
+          <div className="stat-value">{fmt(fin?.expenses?.total)}</div>
+        </div>
       </div>
 
       <SectionCard>
@@ -2835,6 +3705,90 @@ function Financials() {
           </div>
         </div>
       </SectionCard>
+
+      <div className="toggle-group mb16">
+        {["summary", "expenses", "reconciliation"].map(t => (
+          <button key={t} className={`toggle-btn ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>
+            {t === "summary" ? "Profit Summary" : t === "expenses" ? "Expenses" : "Reconciliation"}
+          </button>
+        ))}
+      </div>
+
+      {tab === "summary" && (
+        <SectionCard>
+          <div className="eyebrow mb12">Profit Summary</div>
+          <div className="table-wrap">
+            <table className="data-table">
+              <tbody>
+                {[
+                  ["Delivered revenue", fin?.profit_summary?.revenue],
+                  ["Discounts", -Number(fin?.profit_summary?.discounts || 0)],
+                  ["COGS / product purchase", -Number(fin?.profit_summary?.cogs || 0)],
+                  ["Packaging cost", -Number(fin?.profit_summary?.packaging_cost || 0)],
+                  ["Courier cost", -Number(fin?.profit_summary?.courier_cost || 0)],
+                  ["Marketing cost", -Number(fin?.profit_summary?.marketing_cost || 0)],
+                  ["Commissions", -Number(fin?.profit_summary?.commissions || 0)],
+                  ["Refunds", -Number(fin?.profit_summary?.refunds || 0)],
+                  ["Operational expense", -Number(fin?.profit_summary?.operational_expense || 0)],
+                  ["Other expense", -Number(fin?.profit_summary?.other_expense || 0)],
+                  ["Net profit estimate", fin?.profit_summary?.net_profit_estimate],
+                ].map(([label, value]) => (
+                  <tr key={label}><td style={{ fontWeight: label === "Net profit estimate" ? 800 : 500 }}>{label}</td><td style={{ textAlign: "right", color: Number(value || 0) < 0 ? "var(--red)" : "var(--orange)", fontWeight: 700 }}>{fmt(value)}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </SectionCard>
+      )}
+
+      {tab === "expenses" && (
+        <SectionCard style={{ padding: 0, overflow: "hidden" }}>
+          {can(user, "financials.manage_expenses") && <div style={{ padding: 14, borderBottom: "1px solid var(--line)" }}>
+            <div className="eyebrow mb12">Add Expense</div>
+            <div className="grid-2">
+              <div className="input-group"><label className="input-label">Category</label><select className="select" value={expenseForm.category} onChange={e => setExpenseForm(f => ({ ...f, category: e.target.value }))}>{["product_purchase", "packaging", "delivery_courier", "ads_marketing", "commission", "refund", "operational", "other"].map(c => <option key={c} value={c}>{fmtStatus(c.replace(/_/g, " "))}</option>)}</select></div>
+              <div className="input-group"><label className="input-label">Amount</label><input className="input" type="number" min="0" value={expenseForm.amount} onChange={e => setExpenseForm(f => ({ ...f, amount: e.target.value }))} /></div>
+              <div className="input-group"><label className="input-label">Date</label><input className="input" type="date" value={expenseForm.expense_date} onChange={e => setExpenseForm(f => ({ ...f, expense_date: e.target.value }))} /></div>
+              <div className="input-group"><label className="input-label">Note</label><input className="input" value={expenseForm.note} onChange={e => setExpenseForm(f => ({ ...f, note: e.target.value }))} /></div>
+            </div>
+            <button className="btn btn-primary btn-sm" onClick={addExpense}>Add Expense</button>
+          </div>}
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead><tr><th>Date</th><th>Category</th><th>Amount</th><th>Note</th><th>Admin</th></tr></thead>
+              <tbody>{expenses.length === 0 ? <tr><td colSpan={5} style={{ textAlign: "center", padding: 28, color: "var(--text-65)" }}>No expenses for this month.</td></tr> : expenses.map(e => (
+                <tr key={e.id}><td>{fmtDate(e.expense_date)}</td><td><span className="badge badge-gray">{fmtStatus(e.category.replace(/_/g, " "))}</span></td><td style={{ color: "var(--orange)", fontWeight: 700 }}>{fmt(e.amount)}</td><td className="text-muted">{e.note || "—"}</td><td className="text-muted">{e.created_by_admin_name || "—"}</td></tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </SectionCard>
+      )}
+
+      {tab === "reconciliation" && (
+        <SectionCard style={{ padding: 0, overflow: "hidden" }}>
+          {can(user, "financials.reconcile_payments") && <div style={{ padding: 14, borderBottom: "1px solid var(--line)" }}>
+            <div className="eyebrow mb12">Record Payment Reconciliation</div>
+            <div className="grid-2">
+              <div className="input-group"><label className="input-label">Order ID optional</label><input className="input" value={reconForm.order_id} onChange={e => setReconForm(f => ({ ...f, order_id: e.target.value }))} /></div>
+              <div className="input-group"><label className="input-label">Method</label><select className="select" value={reconForm.payment_method} onChange={e => setReconForm(f => ({ ...f, payment_method: e.target.value }))}>{["bkash", "nagad", "rocket", "cod", "card", "bank_transfer", "cash"].map(m => <option key={m} value={m}>{fmtStatus(m.replace(/_/g, " "))}</option>)}</select></div>
+              <div className="input-group"><label className="input-label">Expected</label><input className="input" type="number" min="0" value={reconForm.expected_amount} onChange={e => setReconForm(f => ({ ...f, expected_amount: e.target.value }))} /></div>
+              <div className="input-group"><label className="input-label">Received</label><input className="input" type="number" min="0" value={reconForm.received_amount} onChange={e => setReconForm(f => ({ ...f, received_amount: e.target.value }))} /></div>
+              <div className="input-group"><label className="input-label">Status</label><select className="select" value={reconForm.status} onChange={e => setReconForm(f => ({ ...f, status: e.target.value }))}>{["pending", "verified", "mismatch", "failed", "refunded"].map(s => <option key={s} value={s}>{fmtStatus(s)}</option>)}</select></div>
+              <div className="input-group"><label className="input-label">Transaction ID</label><input className="input" value={reconForm.transaction_id} onChange={e => setReconForm(f => ({ ...f, transaction_id: e.target.value }))} /></div>
+              <div className="input-group" style={{ gridColumn: "1/-1" }}><label className="input-label">Note</label><input className="input" value={reconForm.note} onChange={e => setReconForm(f => ({ ...f, note: e.target.value }))} /></div>
+            </div>
+            <button className="btn btn-primary btn-sm" onClick={addReconciliation}>Save Reconciliation</button>
+          </div>}
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead><tr><th>Date</th><th>Order</th><th>Method</th><th>Expected</th><th>Received</th><th>Status</th><th>Note</th></tr></thead>
+              <tbody>{recons.length === 0 ? <tr><td colSpan={7} style={{ textAlign: "center", padding: 28, color: "var(--text-65)" }}>No reconciliation records for this month.</td></tr> : recons.map(r => (
+                <tr key={r.id}><td>{fmtDate(r.created_at)}</td><td className="mono text-xs">{r.order_ref || r.order_id || "—"}</td><td>{fmtStatus(r.payment_method.replace(/_/g, " "))}</td><td>{fmt(r.expected_amount)}</td><td>{fmt(r.received_amount)}</td><td><StatusBadge status={r.status} /></td><td className="text-muted">{r.note || "—"}</td></tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </SectionCard>
+      )}
     </div>
   );
 }
@@ -3299,52 +4253,168 @@ function SmsTemplatesEditor() {
 // ── Section: Settings ──────────────────────────────────
 function Settings() {
   const { user } = useContext(DashCtx);
-  const [store, setStore] = useState({ freeDelivery: "", city: "", whatsapp: "" });
+  const tabs = [
+    ["store", "Store", "settings.view"],
+    ["admins", "Admins", "admins.view"],
+    ["audit", "Audit Logs", "audit_logs.view"],
+  ].filter(([, , permission]) => can(user, permission));
+  const [tab, setTab] = useState(tabs[0]?.[0] || "store");
+  const [store, setStore] = useState({ free_delivery_threshold: "", default_city: "", support_whatsapp: "" });
   const [crew, setCrew]   = useState({ refPts: "", subBonus: "", orderPts: "" });
+  const [roles, setRoles] = useState([]);
+  const [admins, setAdmins] = useState([]);
+  const [auditLogs, setAuditLogs] = useState([]);
+  const [adminForm, setAdminForm] = useState({ name: "", email: "", phone: "", role_id: "", temporary_password: "" });
+  const [auditFilter, setAuditFilter] = useState({ section: "", action: "", search: "" });
+
+  useEffect(() => {
+    if (tab !== "store" || !can(user, "settings.view")) return;
+    window.mpApi.fetch('/admin/settings').then(res => {
+      if (res?.data?.store) setStore(s => ({ ...s, ...res.data.store }));
+    }).catch(() => {});
+  }, [tab]);
+
+  useEffect(() => {
+    if (tab !== "admins" || !can(user, "admins.view")) return;
+    Promise.all([
+      window.mpApi.fetch('/admin/roles').catch(() => null),
+      window.mpApi.fetch('/admin/admins').catch(() => null),
+    ]).then(([rolesRes, adminsRes]) => {
+      setRoles(rolesRes?.data?.roles || []);
+      setAdmins(adminsRes?.data?.admins || []);
+    });
+  }, [tab]);
+
+  useEffect(() => {
+    if (tab !== "audit" || !can(user, "audit_logs.view")) return;
+    const params = new URLSearchParams({ limit: "50" });
+    Object.entries(auditFilter).forEach(([k, v]) => { if (v) params.set(k, v); });
+    window.mpApi.fetch(`/admin/audit-logs?${params}`).then(res => setAuditLogs(res?.data?.logs || [])).catch(() => setAuditLogs([]));
+  }, [tab, auditFilter]);
+
+  async function inviteAdmin() {
+    if (!adminForm.name || !adminForm.email || !adminForm.role_id) return;
+    const res = await window.mpApi.fetch('/admin/admins', { method: 'POST', body: JSON.stringify(adminForm) }).catch(() => null);
+    if (res?.ok) {
+      setAdminForm({ name: "", email: "", phone: "", role_id: "", temporary_password: "" });
+      const adminsRes = await window.mpApi.fetch('/admin/admins').catch(() => null);
+      setAdmins(adminsRes?.data?.admins || []);
+      Swal.fire({ title: "Admin saved", icon: "success", timer: 1200, showConfirmButton: false, background: "#fff" });
+    } else {
+      Swal.fire({ title: "Could not save admin", text: res?.error?.message || "Please check the details.", icon: "error", confirmButtonColor: "#FF9100", background: "#fff" });
+    }
+  }
+
+  async function changeAdminRole(adminId, roleId) {
+    const res = await window.mpApi.fetch(`/admin/admins/${adminId}/role`, { method: 'PATCH', body: JSON.stringify({ role_id: roleId }) }).catch(() => null);
+    if (res?.ok) setAdmins(prev => prev.map(a => a.id === adminId ? { ...a, admin_role_id: roleId, admin_role_name: roles.find(r => r.id === roleId)?.name } : a));
+  }
+
+  async function deactivateAdmin(adminId) {
+    const ok = await Swal.fire({ title: "Deactivate admin?", text: "This will revoke active sessions.", icon: "warning", showCancelButton: true, confirmButtonText: "Deactivate", confirmButtonColor: "#D94040", background: "#fff" });
+    if (!ok.isConfirmed) return;
+    const res = await window.mpApi.fetch(`/admin/admins/${adminId}/deactivate`, { method: 'PATCH' }).catch(() => null);
+    if (res?.ok) setAdmins(prev => prev.map(a => a.id === adminId ? { ...a, is_active: false, active_sessions: 0 } : a));
+  }
+
+  async function saveStoreSettings() {
+    const res = await window.mpApi.fetch('/admin/settings/store', { method: 'PATCH', body: JSON.stringify(store) }).catch(() => null);
+    if (res?.ok) {
+      setStore(s => ({ ...s, ...res.data }));
+      Swal.fire({ title: "Store settings saved", icon: "success", timer: 1200, showConfirmButton: false, background: "#fff" });
+    } else {
+      Swal.fire({ title: "Could not save settings", text: res?.error?.message || "Please try again.", icon: "error", confirmButtonColor: "#FF9100", background: "#fff" });
+    }
+  }
 
   return (
     <div className="dash-inner">
       <div className="page-title">Settings</div>
-
-      <div className="eyebrow mb10">Store Settings</div>
-      <div className="card mb16">
-        <div className="input-group"><label className="input-label">Free Delivery Threshold (৳)</label><input className="input" value={store.freeDelivery} onChange={e => setStore(s => ({ ...s, freeDelivery: e.target.value }))} /></div>
-        <div className="input-group"><label className="input-label">Default City</label><input className="input" value={store.city} onChange={e => setStore(s => ({ ...s, city: e.target.value }))} /></div>
-        <div className="input-group" style={{ marginBottom: 0 }}><label className="input-label">Support WhatsApp Number</label><input className="input" value={store.whatsapp} onChange={e => setStore(s => ({ ...s, whatsapp: e.target.value }))} /></div>
-        <button className="btn btn-primary mt16">Save Store Settings</button>
+      <div className="toggle-group mb20">
+        {tabs.map(([id, label]) => <button key={id} className={`toggle-btn ${tab === id ? "active" : ""}`} onClick={() => setTab(id)}>{label}</button>)}
       </div>
 
-      <div className="eyebrow mb10">Crew Program</div>
-      <div className="card mb16">
-        <div className="input-group"><label className="input-label">Points per referral order</label><input className="input" value={crew.refPts} onChange={e => setCrew(c => ({ ...c, refPts: e.target.value }))} /></div>
-        <div className="input-group"><label className="input-label">Bonus pts for subscription conversion</label><input className="input" value={crew.subBonus} onChange={e => setCrew(c => ({ ...c, subBonus: e.target.value }))} /></div>
-        <div className="input-group" style={{ marginBottom: 0 }}><label className="input-label">Points per ৳ spent (regular orders)</label><input className="input" value={crew.orderPts} onChange={e => setCrew(c => ({ ...c, orderPts: e.target.value }))} /></div>
-        <button className="btn btn-primary mt16">Save Crew Settings</button>
-      </div>
-
-      <div className="eyebrow mb10">Notification Templates</div>
-      <div className="card mb16">
-        {["Crew Approval", "Order Confirmation", "Subscription Charge Reminder", "Redemption Fulfilled"].map(t => (
-          <div key={t} className="mb12">
-            <label className="input-label">{t}</label>
-            <textarea className="input" rows={2} style={{ resize: "vertical" }} placeholder={`Template for: ${t}`} />
+      {tab === "store" && (
+        <>
+          <div className="eyebrow mb10">Store Settings</div>
+          <div className="card mb16">
+            <div className="input-group"><label className="input-label">Free Delivery Threshold (৳)</label><input className="input" value={store.free_delivery_threshold || ""} onChange={e => setStore(s => ({ ...s, free_delivery_threshold: e.target.value }))} /></div>
+            <div className="input-group"><label className="input-label">Default City</label><input className="input" value={store.default_city || ""} onChange={e => setStore(s => ({ ...s, default_city: e.target.value }))} /></div>
+            <div className="input-group" style={{ marginBottom: 0 }}><label className="input-label">Support WhatsApp Number</label><input className="input" value={store.support_whatsapp || ""} onChange={e => setStore(s => ({ ...s, support_whatsapp: e.target.value }))} /></div>
+            {can(user, "settings.update_store") && <button className="btn btn-primary mt16" onClick={saveStoreSettings}>Save Store Settings</button>}
           </div>
-        ))}
-        <button className="btn btn-primary">Save Templates</button>
-      </div>
 
-      <div className="eyebrow mb10">Admin Account</div>
-      <div className="card">
-        <div className="input-group"><label className="input-label">Email</label><input className="input" defaultValue={user?.email || ''} readOnly /></div>
-        <div className="input-group"><label className="input-label">New Password</label><input className="input" type="password" placeholder="Leave blank to keep current" /></div>
-        <div className="input-group" style={{ marginBottom: 0 }}>
-          <div className="row-between">
-            <label className="input-label" style={{ marginBottom: 0 }}>Two-Factor Authentication</label>
-            <span className="badge badge-green">Enabled</span>
+          <div className="eyebrow mb10">Crew Program</div>
+          <div className="card mb16">
+            <div className="input-group"><label className="input-label">Points per referral order</label><input className="input" value={crew.refPts} onChange={e => setCrew(c => ({ ...c, refPts: e.target.value }))} /></div>
+            <div className="input-group"><label className="input-label">Bonus pts for subscription conversion</label><input className="input" value={crew.subBonus} onChange={e => setCrew(c => ({ ...c, subBonus: e.target.value }))} /></div>
+            <div className="input-group" style={{ marginBottom: 0 }}><label className="input-label">Points per ৳ spent (regular orders)</label><input className="input" value={crew.orderPts} onChange={e => setCrew(c => ({ ...c, orderPts: e.target.value }))} /></div>
+            {can(user, "crew.manage_settings") && <button className="btn btn-primary mt16">Save Crew Settings</button>}
           </div>
-        </div>
-        <button className="btn btn-primary mt16">Update Account</button>
-      </div>
+
+          <div className="eyebrow mb10">Admin Account</div>
+          <div className="card">
+            <div className="input-group"><label className="input-label">Email</label><input className="input" defaultValue={user?.email || ''} readOnly /></div>
+            <div className="input-group" style={{ marginBottom: 0 }}>
+              <div className="row-between">
+                <label className="input-label" style={{ marginBottom: 0 }}>Admin Role</label>
+                <span className="badge badge-orange">{user?.admin_role?.name || "Admin"}</span>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {tab === "admins" && can(user, "admins.view") && (
+        <>
+          {can(user, "admins.invite") && <div className="card mb16">
+            <div className="eyebrow mb12">Invite / Update Admin</div>
+            <div className="grid-2">
+              <div className="input-group"><label className="input-label">Name</label><input className="input" value={adminForm.name} onChange={e => setAdminForm(f => ({ ...f, name: e.target.value }))} /></div>
+              <div className="input-group"><label className="input-label">Email</label><input className="input" type="email" value={adminForm.email} onChange={e => setAdminForm(f => ({ ...f, email: e.target.value }))} /></div>
+              <div className="input-group"><label className="input-label">Phone</label><input className="input" value={adminForm.phone} onChange={e => setAdminForm(f => ({ ...f, phone: e.target.value }))} /></div>
+              <div className="input-group"><label className="input-label">Role</label><select className="select" value={adminForm.role_id} onChange={e => setAdminForm(f => ({ ...f, role_id: e.target.value }))}><option value="">Select role</option>{roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select></div>
+              <div className="input-group"><label className="input-label">Temporary Password</label><input className="input" type="password" value={adminForm.temporary_password} onChange={e => setAdminForm(f => ({ ...f, temporary_password: e.target.value }))} placeholder="Auto-generate if blank" /></div>
+            </div>
+            <button className="btn btn-primary" onClick={inviteAdmin} disabled={!adminForm.name || !adminForm.email || !adminForm.role_id}>Save Admin</button>
+          </div>}
+          <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+            <div className="table-wrap"><table className="data-table"><thead><tr><th>Admin</th><th>Role</th><th>Status</th><th>2FA</th><th>Sessions</th><th>Last Login</th><th>Actions</th></tr></thead><tbody>
+              {admins.map(a => <tr key={a.id}>
+                <td><div style={{ fontWeight: 700 }}>{a.name || "—"}</div><div className="text-xs text-muted">{a.email || a.phone}</div></td>
+                <td>{can(user, "admins.edit_role") ? <select className="select" value={a.admin_role_id || ""} onChange={e => changeAdminRole(a.id, e.target.value)}>{roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select> : <span className="badge badge-gray">{a.admin_role_name || "—"}</span>}</td>
+                <td><span className={`badge ${a.is_active ? "badge-green" : "badge-gray"}`}>{a.is_active ? "Active" : "Inactive"}</span></td>
+                <td><span className="badge badge-gray">{a.two_factor_enabled ? "Enabled" : "Not Set"}</span></td>
+                <td>{a.active_sessions || 0}</td>
+                <td className="text-muted">{a.last_login_at ? new Date(a.last_login_at).toLocaleString() : "—"}</td>
+                <td>{can(user, "admins.disable") && a.id !== user.id && a.is_active && <button className="btn btn-sm btn-ghost" style={{ color: "var(--red)" }} onClick={() => deactivateAdmin(a.id)}>Deactivate</button>}</td>
+              </tr>)}
+            </tbody></table></div>
+          </div>
+        </>
+      )}
+
+      {tab === "audit" && can(user, "audit_logs.view") && (
+        <>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
+            <input className="input" placeholder="Search summary/entity…" style={{ width: 220 }} value={auditFilter.search} onChange={e => setAuditFilter(f => ({ ...f, search: e.target.value }))} />
+            <input className="input" placeholder="Section" style={{ width: 150 }} value={auditFilter.section} onChange={e => setAuditFilter(f => ({ ...f, section: e.target.value }))} />
+            <input className="input" placeholder="Action" style={{ width: 180 }} value={auditFilter.action} onChange={e => setAuditFilter(f => ({ ...f, action: e.target.value }))} />
+          </div>
+          <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+            <div className="table-wrap"><table className="data-table"><thead><tr><th>Date</th><th>Admin</th><th>Action</th><th>Entity</th><th>Summary</th><th>IP / Device</th></tr></thead><tbody>
+              {auditLogs.length === 0 ? <tr><td colSpan={6} style={{ textAlign: "center", padding: 28, color: "var(--text-65)" }}>No audit logs found.</td></tr> : auditLogs.map(l => <tr key={l.id}>
+                <td className="text-muted">{new Date(l.created_at).toLocaleString()}</td>
+                <td>{l.admin_name || l.admin_email || "System"}</td>
+                <td><span className="badge badge-gray">{l.action}</span></td>
+                <td className="text-muted">{l.entity_type || "—"} {l.entity_id ? <span className="mono text-xs">{l.entity_id}</span> : null}</td>
+                <td>{l.summary || "—"}</td>
+                <td className="text-muted">{l.ip || "—"}<div className="text-xs">{l.user_agent || ""}</div></td>
+              </tr>)}
+            </tbody></table></div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -3379,23 +4449,56 @@ function calcProductDiscount(p) {
 
 function Products() {
   const [prodTab, setProdTab] = useState("Products");
-  const { adminProducts: products, setAdminProducts: setProducts } = useContext(DashCtx);
+  const { user, adminProducts: products, setAdminProducts: setProducts } = useContext(DashCtx);
   const [packages, setPackages] = useState([]);
   const [panel, setPanel] = useState(null);
+  const [inventoryPanel, setInventoryPanel] = useState(null);
+  const [inventoryTab, setInventoryTab] = useState("adjust");
+  const [inventoryData, setInventoryData] = useState({ movements: [], purchase_batches: [] });
+  const [inventoryLoading, setInventoryLoading] = useState(false);
   const [pkgPanel, setPkgPanel] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const fileRef = useRef(null);
   const activeImgIdx = useRef(0);
 
-  const emptyProd = { name: "", description: "", price: "", stock: "", qty: "", unit: "g", status: "Active", images: [], category: "", badge: "", roast: "", origin: "", discount_enabled: false, discount_type: "flat", discount_value: "", discount_max_qty: "", discount_max_orders: "", discount_label: "" };
+  const emptyProd = { name: "", description: "", price: "", stock: "", low_stock_threshold: "10", cost_per_unit: "", qty: "", unit: "g", status: "Active", images: [], category: "", badge: "", roast: "", origin: "", discount_enabled: false, discount_type: "flat", discount_value: "", discount_max_qty: "", discount_max_orders: "", discount_label: "" };
   const [form, setForm] = useState(emptyProd);
   const [blendMode, setBlendMode]       = useState("single"); // "single" | "blend"
   const [singleVariety, setSingleVariety] = useState("Robusta");
   const [blendParts, setBlendParts]     = useState([{ variety: "Robusta", pct: "" }]);
   const [processVal, setProcessVal]     = useState("");
+  const [inventoryForm, setInventoryForm] = useState({ movement_type: "stock_in", quantity: "", direction: "in", reason: "", low_stock_threshold: "", cost_per_unit: "" });
+  const [batchForm, setBatchForm] = useState({ supplier_name: "", supplier_phone: "", supplier_email: "", quantity_purchased: "", unit_cost: "", purchase_date: new Date().toISOString().slice(0, 10), best_before: "", batch_note: "" });
 
   const emptyPkg = { name: "", description: "", price: "", status: "Active", productIds: [], quantities: {} };
   const [pkgForm, setPkgForm] = useState(emptyPkg);
+
+  useEffect(() => {
+    if (prodTab !== "Packages" || !can(user, "products.view")) return;
+    window.mpApi.fetch('/admin/packages').then(res => {
+      const loaded = (res?.data?.packages || []).map(pkg => ({
+        ...pkg,
+        productIds: (pkg.items || []).map(it => it.product_id),
+        quantities: (pkg.items || []).reduce((acc, it) => ({ ...acc, [it.product_id]: it.qty }), {}),
+      }));
+      setPackages(loaded);
+    }).catch(() => {});
+  }, [prodTab]);
+
+  useEffect(() => {
+    if (!inventoryPanel?.data?.id || !can(user, "products.view")) return;
+    setInventoryLoading(true);
+    window.mpApi.fetch(`/admin/products/${inventoryPanel.data.id}/inventory`)
+      .then(res => {
+        if (!res?.ok) throw new Error(res?.error?.message || "Failed to load inventory.");
+        setInventoryData({
+          movements: res?.data?.movements || [],
+          purchase_batches: res?.data?.purchase_batches || [],
+        });
+      })
+      .catch(() => setInventoryData({ movements: [], purchase_batches: [] }))
+      .finally(() => setInventoryLoading(false));
+  }, [inventoryPanel?.data?.id, user]);
 
   function handleImageChange(e) {
     const file = e.target.files[0];
@@ -3439,6 +4542,8 @@ function Products() {
       ...p,
       price: String(p.price),
       stock: String(p.stock),
+      low_stock_threshold: p.low_stock_threshold != null ? String(p.low_stock_threshold) : "10",
+      cost_per_unit: p.cost_per_unit != null ? String(p.cost_per_unit) : "",
       qty: p.qty ? String(p.qty) : "",
       unit: p.unit || "g",
       images: p.images || (p.image ? [p.image] : []),
@@ -3466,6 +4571,29 @@ function Products() {
     setPanel({ type: "edit", data: p });
   }
 
+  function openInventory(p) {
+    setInventoryForm({
+      movement_type: "stock_in",
+      quantity: "",
+      direction: "in",
+      reason: "",
+      low_stock_threshold: p.low_stock_threshold != null ? String(p.low_stock_threshold) : "",
+      cost_per_unit: p.cost_per_unit != null ? String(p.cost_per_unit) : "",
+    });
+    setBatchForm({
+      supplier_name: "",
+      supplier_phone: "",
+      supplier_email: "",
+      quantity_purchased: "",
+      unit_cost: p.cost_per_unit != null ? String(p.cost_per_unit) : "",
+      purchase_date: new Date().toISOString().slice(0, 10),
+      best_before: "",
+      batch_note: "",
+    });
+    setInventoryTab("adjust");
+    setInventoryPanel({ data: p });
+  }
+
   async function saveProduct() {
     if (!form.name || !form.price || !(form.images?.length)) return;
     const maxDiscountQty = Number.parseInt(form.discount_max_qty, 10);
@@ -3473,6 +4601,7 @@ function Products() {
       name:   form.name,
       price:  parseFloat(form.price) || 0,
       stock:  parseInt(form.stock) || 0,
+      low_stock_threshold: Math.max(0, parseInt(form.low_stock_threshold, 10) || 0),
       status: form.status,
       images: form.images || [],
       discount_enabled: !!form.discount_enabled,
@@ -3483,6 +4612,7 @@ function Products() {
       discount_label: form.discount_label || null,
     };
     if (form.description) body.description = form.description;
+    if (form.cost_per_unit !== "" && form.cost_per_unit != null) body.cost_per_unit = Math.max(0, parseInt(form.cost_per_unit, 10) || 0);
     const qtyVal = parseInt(form.qty);
     if (qtyVal > 0) body.qty = qtyVal;
     if (form.unit) body.unit = form.unit;
@@ -3509,6 +4639,73 @@ function Products() {
     setPanel(null);
   }
 
+  async function saveInventoryAdjust() {
+    if (!inventoryPanel?.data?.id || !inventoryForm.quantity || !inventoryForm.reason) return;
+    try {
+      const res = await window.mpApi.fetch(`/admin/products/${inventoryPanel.data.id}/inventory/adjust`, {
+        method: 'POST',
+        body: JSON.stringify({
+          movement_type: inventoryForm.movement_type,
+          direction: inventoryForm.direction,
+          quantity: Math.max(1, parseInt(inventoryForm.quantity, 10) || 0),
+          reason: inventoryForm.reason,
+          low_stock_threshold: inventoryForm.low_stock_threshold === "" ? undefined : Math.max(0, parseInt(inventoryForm.low_stock_threshold, 10) || 0),
+          cost_per_unit: inventoryForm.cost_per_unit === "" ? null : Math.max(0, parseInt(inventoryForm.cost_per_unit, 10) || 0),
+        }),
+      });
+      if (!res?.ok) throw new Error(res?.error?.message || "Failed to update inventory.");
+      const updated = res?.data;
+      if (updated) setProducts(prev => prev.map(p => p.id === updated.id ? updated : p));
+      setInventoryPanel(prev => prev ? ({ ...prev, data: updated || prev.data }) : prev);
+      setInventoryForm(f => ({ ...f, quantity: "", reason: "" }));
+      const refresh = await window.mpApi.fetch(`/admin/products/${inventoryPanel.data.id}/inventory`).catch(() => null);
+      if (refresh?.ok) {
+        setInventoryData({
+          movements: refresh?.data?.movements || [],
+          purchase_batches: refresh?.data?.purchase_batches || [],
+        });
+      }
+    } catch (e) {
+      alert(e?.message || 'Failed to update inventory.');
+    }
+  }
+
+  async function savePurchaseBatch() {
+    if (!inventoryPanel?.data?.id || !batchForm.supplier_name || !batchForm.quantity_purchased || !batchForm.unit_cost || !batchForm.purchase_date) return;
+    try {
+      const qty = Math.max(1, parseInt(batchForm.quantity_purchased, 10) || 0);
+      const unitCost = Math.max(0, parseInt(batchForm.unit_cost, 10) || 0);
+      const res = await window.mpApi.fetch(`/admin/products/${inventoryPanel.data.id}/purchase-batches`, {
+        method: 'POST',
+        body: JSON.stringify({
+          supplier_name: batchForm.supplier_name,
+          supplier_phone: batchForm.supplier_phone || null,
+          supplier_email: batchForm.supplier_email || null,
+          quantity_purchased: qty,
+          unit_cost: unitCost,
+          purchase_date: batchForm.purchase_date,
+          best_before: batchForm.best_before || null,
+          batch_note: batchForm.batch_note || null,
+        }),
+      });
+      if (!res?.ok) throw new Error(res?.error?.message || "Failed to add purchase batch.");
+      const updated = { ...inventoryPanel.data, stock: Number(inventoryPanel.data.stock || 0) + qty, cost_per_unit: unitCost };
+      setProducts(prev => prev.map(p => p.id === updated.id ? updated : p));
+      setInventoryPanel(prev => prev ? ({ ...prev, data: updated }) : prev);
+      setBatchForm(f => ({ ...f, supplier_name: "", supplier_phone: "", supplier_email: "", quantity_purchased: "", unit_cost: "", best_before: "", batch_note: "" }));
+      setInventoryTab("history");
+      const refresh = await window.mpApi.fetch(`/admin/products/${updated.id}/inventory`).catch(() => null);
+      if (refresh?.ok) {
+        setInventoryData({
+          movements: refresh?.data?.movements || [],
+          purchase_batches: refresh?.data?.purchase_batches || [],
+        });
+      }
+    } catch (e) {
+      alert(e?.message || 'Failed to add purchase batch.');
+    }
+  }
+
   async function deleteProduct(id) {
     try {
       await window.mpApi.fetch(`/admin/products/${id}`, { method: 'DELETE' });
@@ -3532,27 +4729,44 @@ function Products() {
     setPkgForm(f => ({ ...f, quantities: { ...f.quantities, [id]: Math.max(1, parseInt(qty) || 1) } }));
   }
 
-  function savePkg() {
+  async function savePkg() {
     if (!pkgForm.name || !pkgForm.price) return;
-    const entry = { ...pkgForm, price: parseFloat(pkgForm.price) || 0 };
-    if (pkgPanel.type === "add") {
-      setPackages(prev => [...prev, { ...entry, id: `PKG${String(prev.length + 1).padStart(3, "0")}` }]);
-    } else {
-      setPackages(prev => prev.map(p => p.id === pkgPanel.data.id ? { ...p, ...entry } : p));
+    const body = {
+      name: pkgForm.name,
+      description: pkgForm.description || null,
+      price: parseFloat(pkgForm.price) || 0,
+      status: pkgForm.status || "Active",
+      items: (pkgForm.productIds || []).map(id => ({ product_id: id, qty: pkgForm.quantities?.[id] || 1 })),
+    };
+    try {
+      const res = await window.mpApi.fetch(pkgPanel.type === "add" ? '/admin/packages' : `/admin/packages/${pkgPanel.data.id}`, {
+        method: pkgPanel.type === "add" ? 'POST' : 'PATCH',
+        body: JSON.stringify(body),
+      });
+      if (!res?.ok) throw new Error(res?.error?.message || "Failed to save package.");
+      const packagesRes = await window.mpApi.fetch('/admin/packages');
+      const loaded = (packagesRes?.data?.packages || []).map(pkg => ({
+        ...pkg,
+        productIds: (pkg.items || []).map(it => it.product_id),
+        quantities: (pkg.items || []).reduce((acc, it) => ({ ...acc, [it.product_id]: it.qty }), {}),
+      }));
+      setPackages(loaded);
+      setPkgPanel(null);
+    } catch (e) {
+      alert(e?.message || 'Failed to save package.');
     }
-    setPkgPanel(null);
   }
 
   return (
     <div className="dash-inner-wide">
       <div className="row-between mb20" style={{ alignItems: "flex-start" }}>
         <div className="page-title" style={{ marginBottom: 0 }}>Products</div>
-        <button className="btn btn-primary" onClick={() => {
+        {(prodTab === "Products" ? can(user, "products.create") : can(user, "products.manage_packages")) && <button className="btn btn-primary" onClick={() => {
           if (prodTab === "Products") openAddProduct();
           else { setPkgForm(emptyPkg); setPkgPanel({ type: "add" }); }
         }}>
           <i className="fa fa-plus" style={{ fontSize: 12 }} /> {prodTab === "Products" ? "Add Product" : "Add Package"}
-        </button>
+        </button>}
       </div>
 
       <div className="toggle-group" style={{ marginBottom: 20 }}>
@@ -3597,15 +4811,21 @@ function Products() {
                       );
                     })()}
                   </div>
-                  <div className="text-xs text-muted">{p.qty && p.unit ? <span style={{ marginRight: 8 }}>{p.qty}{p.unit}</span> : null}Stock: {p.stock}</div>
+                  <div className="text-xs text-muted" style={{ textAlign: "right" }}>
+                    {p.qty && p.unit ? <span style={{ marginRight: 8 }}>{p.qty}{p.unit}</span> : null}Stock: {p.stock}
+                    {Number(p.stock || 0) <= Number(p.low_stock_threshold ?? 10) && <span className="badge badge-orange" style={{ fontSize: 9, marginLeft: 6 }}>Low</span>}
+                  </div>
                 </div>
                 <div className="row" style={{ gap: 8, flexShrink: 0 }}>
-                  <button className="btn btn-sm btn-primary" style={{ flex: 1, padding: "6px 10px", fontSize: 11 }} onClick={() => openEditProduct(p)}>
+                  {can(user, "products.edit") && <button className="btn btn-sm btn-primary" style={{ flex: 1, padding: "6px 10px", fontSize: 11 }} onClick={() => openEditProduct(p)}>
                     <i className="fa fa-pencil" style={{ fontSize: 10 }} /> Edit
-                  </button>
-                  <button className="btn btn-sm btn-ghost" style={{ padding: "6px 10px", fontSize: 11, color: "var(--red)", borderColor: "rgba(217,64,64,.3)" }} onClick={() => setConfirmDelete(p)}>
+                  </button>}
+                  {can(user, "products.manage_inventory") && <button className="btn btn-sm btn-ghost" style={{ padding: "6px 10px", fontSize: 11 }} onClick={() => openInventory(p)}>
+                    <i className="fa fa-warehouse" style={{ fontSize: 10 }} /> Inventory
+                  </button>}
+                  {can(user, "products.delete") && <button className="btn btn-sm btn-ghost" style={{ padding: "6px 10px", fontSize: 11, color: "var(--red)", borderColor: "rgba(217,64,64,.3)" }} onClick={() => setConfirmDelete(p)}>
                     <i className="fa fa-trash" style={{ fontSize: 10 }} />
-                  </button>
+                  </button>}
                 </div>
               </div>
             ))}
@@ -3653,9 +4873,9 @@ function Products() {
                       <button className="btn btn-sm btn-primary" style={{ padding: "6px 10px", fontSize: 11 }} onClick={() => { setPkgForm({ ...pkg, price: String(pkg.price), quantities: { ...(pkg.quantities || {}) } }); setPkgPanel({ type: "edit", data: pkg }); }}>
                         <i className="fa fa-pencil" style={{ fontSize: 10 }} /> Edit
                       </button>
-                      <button className="btn btn-sm btn-ghost" style={{ padding: "6px 10px", fontSize: 11, color: "var(--red)", borderColor: "rgba(217,64,64,.3)" }} onClick={() => setPackages(prev => prev.filter(p => p.id !== pkg.id))}>
+                      {can(user, "products.manage_packages") && <button className="btn btn-sm btn-ghost" style={{ padding: "6px 10px", fontSize: 11, color: "var(--red)", borderColor: "rgba(217,64,64,.3)" }} onClick={async () => { await window.mpApi.fetch(`/admin/packages/${pkg.id}`, { method: 'DELETE' }); setPackages(prev => prev.filter(p => p.id !== pkg.id)); }}>
                         <i className="fa fa-trash" style={{ fontSize: 10 }} />
-                      </button>
+                      </button>}
                     </div>
                   </div>
                 </div>
@@ -3712,6 +4932,23 @@ function Products() {
                   <label className="input-label">Stock Quantity</label>
                   <input className="input" type="number" min="0" placeholder="100" value={form.stock} onChange={e => setForm(f => ({ ...f, stock: e.target.value }))} />
                 </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div className="input-group">
+                  <label className="input-label">Low Stock Threshold</label>
+                  <input className="input" type="number" min="0" placeholder="10" value={form.low_stock_threshold} onChange={e => setForm(f => ({ ...f, low_stock_threshold: e.target.value }))} />
+                </div>
+                {canAny(user, ["products.manage_cost", "financials.view"]) ? (
+                  <div className="input-group">
+                    <label className="input-label">Cost Per Unit</label>
+                    <input className="input" type="number" min="0" placeholder="0" value={form.cost_per_unit} onChange={e => setForm(f => ({ ...f, cost_per_unit: e.target.value }))} />
+                  </div>
+                ) : (
+                  <div className="input-group">
+                    <label className="input-label">Inventory Hint</label>
+                    <div className="text-xs text-muted" style={{ paddingTop: 10 }}>Cost fields are hidden for this role.</div>
+                  </div>
+                )}
               </div>
               <div className="input-group" style={{ padding: 12, borderRadius: 8, border: "1px solid rgba(255,160,0,.22)", background: "rgba(255,160,0,.06)" }}>
                 <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, cursor: "pointer" }}>
@@ -3972,12 +5209,191 @@ function Products() {
                   {pkgPanel.type === "add" ? "Create Package" : "Save Package"}
                 </button>
                 {pkgPanel.type === "edit" && (
-                  <button className="btn btn-full" style={{ background: "rgba(217,64,64,.08)", color: "var(--red)", border: "1px solid rgba(217,64,64,.25)" }} onClick={() => { setPackages(prev => prev.filter(p => p.id !== pkgPanel.data.id)); setPkgPanel(null); }}>
+                  <button className="btn btn-full" style={{ background: "rgba(217,64,64,.08)", color: "var(--red)", border: "1px solid rgba(217,64,64,.25)" }} onClick={async () => { await window.mpApi.fetch(`/admin/packages/${pkgPanel.data.id}`, { method: 'DELETE' }); setPackages(prev => prev.filter(p => p.id !== pkgPanel.data.id)); setPkgPanel(null); }}>
                     <i className="fa fa-trash" style={{ fontSize: 12 }} /> Delete Package
                   </button>
                 )}
                 <button className="btn btn-ghost btn-full" onClick={() => setPkgPanel(null)}>Cancel</button>
               </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {inventoryPanel && (
+        <>
+          <div className="panel-overlay" onClick={() => setInventoryPanel(null)} />
+          <div className="slide-panel" style={{ width: 520 }}>
+            <div className="panel-hd">
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 16 }}>{inventoryPanel.data.name}</div>
+                <div className="text-xs text-muted">Inventory and batch tracking</div>
+              </div>
+              <button className="icon-btn" onClick={() => setInventoryPanel(null)}><i className="fa fa-times" /></button>
+            </div>
+            <div className="toggle-group" style={{ marginBottom: 16 }}>
+              {["adjust", "batches", "history"].map(t => (
+                <button key={t} className={`toggle-btn ${inventoryTab === t ? "active" : ""}`} onClick={() => setInventoryTab(t)}>
+                  {t === "adjust" ? "Adjust" : t === "batches" ? "Purchase Batches" : "Movement Log"}
+                </button>
+              ))}
+            </div>
+            <div style={{ overflowY: "auto", flex: 1, paddingBottom: 16 }}>
+              <div className="row-between mb12">
+                <div>
+                  <div className="eyebrow mb4">Current Stock</div>
+                  <div style={{ fontWeight: 700, fontSize: 18, color: "var(--orange)" }}>{inventoryPanel.data.stock}</div>
+                </div>
+                <div className="text-xs text-muted" style={{ textAlign: "right" }}>
+                  Threshold: {inventoryPanel.data.low_stock_threshold ?? 10}<br />
+                  {inventoryPanel.data.cost_per_unit != null ? <>Cost: ৳{inventoryPanel.data.cost_per_unit}</> : "Cost hidden"}
+                </div>
+              </div>
+
+              {inventoryTab === "adjust" && (
+                <div>
+                  <div className="input-group">
+                    <label className="input-label">Movement Type</label>
+                    <select className="select" value={inventoryForm.movement_type} onChange={e => setInventoryForm(f => ({ ...f, movement_type: e.target.value, direction: ['stock_out', 'damaged'].includes(e.target.value) ? 'out' : 'in' }))}>
+                      <option value="stock_in">Stock In</option>
+                      <option value="stock_out">Stock Out</option>
+                      <option value="adjustment">Adjustment</option>
+                      <option value="damaged">Damaged</option>
+                      <option value="returned">Returned</option>
+                      <option value="manual_correction">Manual Correction</option>
+                    </select>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                    <div className="input-group">
+                      <label className="input-label">Quantity</label>
+                      <input className="input" type="number" min="1" value={inventoryForm.quantity} onChange={e => setInventoryForm(f => ({ ...f, quantity: e.target.value }))} />
+                    </div>
+                    <div className="input-group">
+                      <label className="input-label">Direction</label>
+                      <select className="select" value={inventoryForm.direction} onChange={e => setInventoryForm(f => ({ ...f, direction: e.target.value }))}>
+                        <option value="in">Increase stock</option>
+                        <option value="out">Decrease stock</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                    <div className="input-group">
+                      <label className="input-label">Low Stock Threshold</label>
+                      <input className="input" type="number" min="0" value={inventoryForm.low_stock_threshold} onChange={e => setInventoryForm(f => ({ ...f, low_stock_threshold: e.target.value }))} />
+                    </div>
+                    {canAny(user, ["products.manage_cost", "financials.view"]) ? (
+                      <div className="input-group">
+                        <label className="input-label">Cost Per Unit</label>
+                        <input className="input" type="number" min="0" value={inventoryForm.cost_per_unit} onChange={e => setInventoryForm(f => ({ ...f, cost_per_unit: e.target.value }))} />
+                      </div>
+                    ) : <div />}
+                  </div>
+                  <div className="input-group">
+                    <label className="input-label">Reason</label>
+                    <textarea className="input" rows={3} style={{ resize: "vertical" }} value={inventoryForm.reason} onChange={e => setInventoryForm(f => ({ ...f, reason: e.target.value }))} />
+                  </div>
+                  <button className="btn btn-primary btn-full" onClick={saveInventoryAdjust} disabled={!inventoryForm.quantity || !inventoryForm.reason}>
+                    Save Inventory Change
+                  </button>
+                </div>
+              )}
+
+              {inventoryTab === "batches" && (
+                <div>
+                  <div className="input-group">
+                    <label className="input-label">Supplier Name</label>
+                    <input className="input" value={batchForm.supplier_name} onChange={e => setBatchForm(f => ({ ...f, supplier_name: e.target.value }))} />
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                    <div className="input-group">
+                      <label className="input-label">Supplier Phone</label>
+                      <input className="input" value={batchForm.supplier_phone} onChange={e => setBatchForm(f => ({ ...f, supplier_phone: e.target.value }))} />
+                    </div>
+                    <div className="input-group">
+                      <label className="input-label">Supplier Email</label>
+                      <input className="input" value={batchForm.supplier_email} onChange={e => setBatchForm(f => ({ ...f, supplier_email: e.target.value }))} />
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                    <div className="input-group">
+                      <label className="input-label">Quantity Purchased</label>
+                      <input className="input" type="number" min="1" value={batchForm.quantity_purchased} onChange={e => setBatchForm(f => ({ ...f, quantity_purchased: e.target.value }))} />
+                    </div>
+                    <div className="input-group">
+                      <label className="input-label">Unit Cost</label>
+                      <input className="input" type="number" min="0" value={batchForm.unit_cost} onChange={e => setBatchForm(f => ({ ...f, unit_cost: e.target.value }))} />
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                    <div className="input-group">
+                      <label className="input-label">Purchase Date</label>
+                      <input className="input" type="date" value={batchForm.purchase_date} onChange={e => setBatchForm(f => ({ ...f, purchase_date: e.target.value }))} />
+                    </div>
+                    <div className="input-group">
+                      <label className="input-label">Best Before</label>
+                      <input className="input" type="date" value={batchForm.best_before} onChange={e => setBatchForm(f => ({ ...f, best_before: e.target.value }))} />
+                    </div>
+                  </div>
+                  <div className="input-group">
+                    <label className="input-label">Batch Note</label>
+                    <textarea className="input" rows={3} style={{ resize: "vertical" }} value={batchForm.batch_note} onChange={e => setBatchForm(f => ({ ...f, batch_note: e.target.value }))} />
+                  </div>
+                  <button className="btn btn-primary btn-full" onClick={savePurchaseBatch} disabled={!batchForm.supplier_name || !batchForm.quantity_purchased || !batchForm.unit_cost || !batchForm.purchase_date}>
+                    Add Purchase Batch
+                  </button>
+                </div>
+              )}
+
+              {inventoryTab === "history" && (
+                <div>
+                  <div className="eyebrow mb8">Inventory Movements</div>
+                  {inventoryLoading ? (
+                    <div className="text-sm text-muted">Loading inventory history…</div>
+                  ) : (inventoryData.movements || []).length === 0 ? (
+                    <div className="text-sm text-muted mb16">No inventory movements yet.</div>
+                  ) : (
+                    <div className="table-wrap mb16">
+                      <table className="data-table">
+                        <thead><tr><th>Date</th><th>Type</th><th>Qty</th><th>Stock</th><th>Reason</th></tr></thead>
+                        <tbody>
+                          {inventoryData.movements.map(m => (
+                            <tr key={m.id}>
+                              <td className="muted">{fmtDate(m.created_at)}</td>
+                              <td><span className="badge badge-gray">{m.movement_type}</span></td>
+                              <td>{m.quantity}</td>
+                              <td>{m.stock_before} → {m.stock_after}</td>
+                              <td className="muted" style={{ maxWidth: 180, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.reason}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  <div className="eyebrow mb8">Purchase Batches</div>
+                  {inventoryLoading ? (
+                    <div className="text-sm text-muted">Loading purchase batches…</div>
+                  ) : (inventoryData.purchase_batches || []).length === 0 ? (
+                    <div className="text-sm text-muted">No purchase batches recorded.</div>
+                  ) : (
+                    <div className="table-wrap">
+                      <table className="data-table">
+                        <thead><tr><th>Date</th><th>Supplier</th><th>Qty</th><th>Cost</th><th>Note</th></tr></thead>
+                        <tbody>
+                          {inventoryData.purchase_batches.map(b => (
+                            <tr key={b.id}>
+                              <td className="muted">{fmtDate(b.purchase_date)}</td>
+                              <td style={{ fontWeight: 600 }}>{b.supplier_name}</td>
+                              <td>{b.quantity_purchased}</td>
+                              <td>৳{b.unit_cost}</td>
+                              <td className="muted" style={{ maxWidth: 180, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{b.batch_note || "—"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </>
@@ -4520,6 +5936,7 @@ function Sidebar({ section, setSection, onLogout }) {
     { id: "financials", icon: "fa-chart-line",      label: "Financials" },
     { id: "settings",   icon: "fa-cog",             label: "Settings" },
   ];
+  const visibleLinks = links.filter(l => can(user, SECTION_PERMISSIONS[l.id]));
 
   const initial = (user?.name || 'A')[0].toUpperCase();
 
@@ -4527,7 +5944,7 @@ function Sidebar({ section, setSection, onLogout }) {
     <aside className="sidebar">
       <div className="sidebar-logo"><img src="assets/logo.png" alt="Midnight Pick" /></div>
       <nav className="sidebar-nav">
-        {links.map(l => (
+        {visibleLinks.map(l => (
           <div key={l.id} className={`sidebar-link ${section === l.id ? "active" : ""}`} onClick={() => setSection(l.id)}>
             <i className={`fa ${l.icon} s-icon`} />
             <span dangerouslySetInnerHTML={{ __html: l.label }} />
@@ -4551,7 +5968,7 @@ function Sidebar({ section, setSection, onLogout }) {
 // ── Mobile bottom nav (sidebar is hidden ≤768px) ───────
 function AdminTabbar({ section, setSection, onLogout }) {
   const [moreOpen, setMoreOpen] = useState(false);
-  const { stats } = useContext(DashCtx);
+  const { user, stats } = useContext(DashCtx);
   const activeOrders = stats?.orders?.active || 0;
 
   const main = [
@@ -4575,13 +5992,15 @@ function AdminTabbar({ section, setSection, onLogout }) {
     { id: "financials", icon: "fa-chart-line",     label: "Financials" },
     { id: "settings",   icon: "fa-cog",            label: "Settings" },
   ];
-  const moreActive = more.some(l => l.id === section);
+  const visibleMain = main.filter(l => can(user, SECTION_PERMISSIONS[l.id]));
+  const visibleMore = more.filter(l => can(user, SECTION_PERMISSIONS[l.id]));
+  const moreActive = visibleMore.some(l => l.id === section);
 
   return (
     <>
       <div className="tabbar">
         <div className="tabbar-inner">
-          {main.map(it => (
+          {visibleMain.map(it => (
             <button key={it.id} className={`tab-item ${section === it.id ? "active" : ""}`} onClick={() => setSection(it.id)}>
               <div className="tab-icon" style={{ position: "relative" }}>
                 <i className={`fa ${it.icon}`} />
@@ -4605,7 +6024,7 @@ function AdminTabbar({ section, setSection, onLogout }) {
             <div className="sheet-handle" />
             <div className="sheet-title">All Sections</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 16 }}>
-              {more.map(l => (
+              {visibleMore.map(l => (
                 <button
                   key={l.id}
                   onClick={() => { setSection(l.id); setMoreOpen(false); }}
@@ -4696,8 +6115,22 @@ function AdminDashboard() {
     loadDashboard();
   }
 
+  const visibleSections = Object.keys(SECTION_PERMISSIONS).filter(id => can(ctxData.user, SECTION_PERMISSIONS[id]));
+  const currentSection = visibleSections.includes(section) ? section : (visibleSections[0] || null);
+  useEffect(() => {
+    if (ctxData.user && currentSection && currentSection !== section) setSection(currentSection);
+  }, [ctxData.user, currentSection, section]);
+
   function render() {
-    switch (section) {
+    if (!currentSection) {
+      return (
+        <div className="dash-inner">
+          <div className="page-title">No Admin Permissions</div>
+          <div className="card text-sm text-muted">Your admin account is active, but no dashboard permissions are assigned.</div>
+        </div>
+      );
+    }
+    switch (currentSection) {
       case "overview":   return <Overview setSection={setSection} />;
       case "orders":     return <Orders />;
       case "products":   return <Products />;
@@ -4726,13 +6159,13 @@ function AdminDashboard() {
   return (
     <DashCtx.Provider value={{...ctxData, adminProducts, setAdminProducts, adminInfluencers, setAdminInfluencers}}>
       <div className="dash-layout">
-        <Sidebar section={section} setSection={setSection} onLogout={() => setLogoutOpen(true)} />
+        <Sidebar section={currentSection || section} setSection={setSection} onLogout={() => setLogoutOpen(true)} />
         <div className="dash-main">
           <main className="dash-content">
             {render()}
           </main>
         </div>
-        <AdminTabbar section={section} setSection={setSection} onLogout={() => setLogoutOpen(true)} />
+        <AdminTabbar section={currentSection || section} setSection={setSection} onLogout={() => setLogoutOpen(true)} />
       </div>
       {logoutOpen && (
         <Sheet
@@ -5245,7 +6678,7 @@ function AdminLogin({ onSuccess }) {
   const [isBootstrap, setIsBootstrap] = useState(null);
 
   useEffect(() => {
-    // Check if any admin exists by attempting to check admin status
+    // Check if any admin exists without invoking the bootstrap endpoint.
     async function checkAdminExists() {
       try {
         // Try to call /me with credentials to check if already authenticated
@@ -5261,20 +6694,17 @@ function AdminLogin({ onSuccess }) {
           return;
         }
 
-        // Not authenticated, try bootstrap with test credentials
-        const res = await fetch(window.mpApi.base + '/auth/admin/bootstrap', {
-          method: 'POST',
+        const statusRes = await fetch(window.mpApi.base + '/auth/admin/status', {
+          method: 'GET',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: 'test@test.com', password: 'test' }),
           credentials: 'include',
+          cache: 'no-store',
         });
-        const data = await res.json();
-        // If bootstrap fails with ADMIN_EXISTS, then admin already exists → show login
-        // If bootstrap succeeds or any other error → show bootstrap form
-        const adminExists = data.error?.code === 'ADMIN_EXISTS';
+        const statusData = await statusRes.json();
+        const adminExists = !!statusData?.data?.admin_exists;
         setIsBootstrap(!adminExists);
       } catch {
-        setIsBootstrap(false); // Assume admin exists if we can't reach the server
+        setIsBootstrap(false); // Default to login when status cannot be confirmed.
       }
     }
     checkAdminExists();

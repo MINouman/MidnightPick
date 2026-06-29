@@ -3,6 +3,7 @@
 const Fastify = require('fastify')
 const { env }           = require('./config/env')
 const { isBlacklisted } = require('./services/tokens')
+const { requireAdminPermission } = require('./services/rbac')
 
 async function build() {
   const app = Fastify({
@@ -110,6 +111,7 @@ async function build() {
       return reply.code(401).send({ ok: false, error: { code: 'UNAUTHORIZED', message: 'Authentication required.' } })
     }
   })
+  app.decorate('requireAdminPermission', requireAdminPermission)
 
   // ── Global error handler ──────────────────────────────────────────────
 
