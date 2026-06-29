@@ -13,6 +13,7 @@ const { getWeightBasedFee } = require('./delivery')
 
 const BKASH_TXN_ID_PATTERN = /^[A-Z0-9]{10}$/
 const BKASH_TXN_ID_PATTERN_MESSAGE = 'bKash transaction ID must be exactly 10 uppercase letters or numbers.'
+const PHONE_PAYMENT_TYPES = ['bkash', 'nagad', 'rocket']
 
 async function validateAndLockCoupon(client, code, subtotal, customerPhone = null, userId = null) {
   const res = await validateCoupon(client, { code, subtotal, customerPhone, userId, lock: true })
@@ -89,11 +90,15 @@ function resolveCheckoutPayment({ payment_method, payment_type, bkash_txn_id }) 
   }
 }
 
-async function ensureBkashTxnAvailable(client, bkashTxnId) {
+async function ensureBkashTxnAvailable(client, bkashTxnId, excludeOrderId = null) {
   if (!bkashTxnId) return
   const { rows } = await client.query(
-    `SELECT id FROM orders WHERE LOWER(bkash_txn_id) = LOWER($1) LIMIT 1`,
-    [bkashTxnId]
+    `SELECT id
+     FROM orders
+     WHERE LOWER(bkash_txn_id) = LOWER($1)
+       AND ($2::uuid IS NULL OR id <> $2::uuid)
+     LIMIT 1`,
+    [bkashTxnId, excludeOrderId]
   )
   if (rows.length) {
     throw { code: 'DUPLICATE_BKASH_TXN', message: 'This bKash transaction ID has already been used. Please check and enter a unique transaction ID.' }
@@ -160,7 +165,6 @@ async function placeOrder(userId, body) {
     // Default to the account's registered phone so the per-phone cap is enforced
     // even on card/cod, and so a user can't dodge it by reusing the same coupon
     // as a phone-only guest. For phone payments, prefer the payment number.
-    const PHONE_PAYMENT_TYPES = ['bkash', 'nagad', 'rocket']
     let couponPhone = null
     if (coupon_code) {
       const { rows: uRows } = await client.query(`SELECT phone FROM users WHERE id = $1`, [userId])
@@ -366,7 +370,8 @@ function assertCustomerCanChangeOrder(order, action = 'edited') {
 async function updateOrder(userId, orderId, body) {
   return withTransaction(async (client) => {
     const { rows } = await client.query(
-      `SELECT id, status, address_snapshot, payment_type, payment_number, notes
+      `SELECT id, status, address_snapshot, payment_type, payment_number,
+              bkash_txn_id, subtotal, discount_amount, delivery_fee, total, notes
        FROM   orders
        WHERE  id = $1 AND user_id = $2
        FOR UPDATE`,
@@ -377,6 +382,59 @@ async function updateOrder(userId, orderId, body) {
 
     const order = rows[0]
     assertCustomerCanChangeOrder(order, 'edited')
+    const nextAddress = body.address || order.address_snapshot || {}
+    const nextPaymentType = body.payment_type || order.payment_type
+    const requestedBkashTxn = body.bkash_txn_id || (nextPaymentType === 'bkash' ? body.payment_number : null)
+    const nextBkashTxnId = nextPaymentType === 'bkash'
+      ? normalizeBkashTxnId(requestedBkashTxn || order.bkash_txn_id)
+      : null
+    let nextPaymentNumber = body.payment_number || order.payment_number
+
+    if (nextPaymentType === 'bkash') {
+      resolveCheckoutPayment({ payment_type: 'bkash', bkash_txn_id: nextBkashTxnId })
+      await ensureBkashTxnAvailable(client, nextBkashTxnId, order.id)
+      nextPaymentNumber = nextBkashTxnId
+    } else if (nextPaymentType === 'cod') {
+      nextPaymentNumber = 'cod'
+    } else if (PHONE_PAYMENT_TYPES.includes(nextPaymentType)) {
+      if (!body.payment_number) {
+        throw { code: 'VALIDATION_ERROR', message: `${nextPaymentType} number is required.` }
+      }
+      nextPaymentNumber = normalizeBdMobile(body.payment_number)
+    } else if (body.payment_type && !body.payment_number) {
+      throw { code: 'VALIDATION_ERROR', message: 'Payment reference is required for this payment method.' }
+    }
+
+    const paymentChanged = Object.prototype.hasOwnProperty.call(body, 'payment_type') ||
+      Object.prototype.hasOwnProperty.call(body, 'payment_number') ||
+      Object.prototype.hasOwnProperty.call(body, 'bkash_txn_id')
+    const addressChanged = Object.prototype.hasOwnProperty.call(body, 'address')
+
+    let recalculated = null
+    if (paymentChanged || addressChanged) {
+      const { rows: itemRows } = await client.query(
+        `SELECT oi.qty, COALESCE(p.qty, 95) AS product_weight_grams
+         FROM order_items oi
+         LEFT JOIN products p ON p.id = oi.product_id
+         WHERE oi.order_id = $1`,
+        [order.id]
+      )
+      const totalWeightGrams = itemRows.reduce((sum, item) => {
+        const weight = Number(item.product_weight_grams || 95)
+        return sum + weight * Number(item.qty || 0)
+      }, 0)
+      const productPayable = Number(order.subtotal || 0) - Number(order.discount_amount || 0)
+      const deliveryCharges = calculateCheckoutDeliveryCharge(
+        { city: nextAddress.city, district: nextAddress.district },
+        totalWeightGrams,
+        productPayable,
+        nextPaymentType === 'cod'
+      )
+      recalculated = {
+        deliveryFee: deliveryCharges.totalDeliveryCharge,
+        total: productPayable + deliveryCharges.totalDeliveryCharge,
+      }
+    }
 
     const sets = []
     const params = []
@@ -389,10 +447,21 @@ async function updateOrder(userId, orderId, body) {
       sets.push(`address_snapshot = ${nextParam(JSON.stringify(body.address))}`)
     }
     if (body.payment_type) {
-      sets.push(`payment_type = ${nextParam(body.payment_type)}`)
+      sets.push(`payment_type = ${nextParam(nextPaymentType)}`)
+      if (nextPaymentType !== order.payment_type) {
+        sets.push(`payment_status = ${nextParam('pending')}`)
+        sets.push(`payment_amount = NULL`)
+        sets.push(`payment_trx_id = NULL`)
+        sets.push(`payment_sender_number = NULL`)
+      }
     }
-    if (body.payment_number) {
-      sets.push(`payment_number = ${nextParam(body.payment_number)}`)
+    if (paymentChanged) {
+      sets.push(`payment_number = ${nextParam(nextPaymentNumber)}`)
+      sets.push(`bkash_txn_id = ${nextParam(nextBkashTxnId)}`)
+    }
+    if (recalculated) {
+      sets.push(`delivery_fee = ${nextParam(recalculated.deliveryFee)}`)
+      sets.push(`total = ${nextParam(recalculated.total)}`)
     }
     if (Object.prototype.hasOwnProperty.call(body, 'notes')) {
       sets.push(`notes = ${nextParam(body.notes || null)}`)
@@ -403,7 +472,8 @@ async function updateOrder(userId, orderId, body) {
         `SELECT o.id, o.order_ref, o.status,
                 o.subtotal, o.discount_amount, o.delivery_fee, o.total,
                 o.points_earned, o.coupon_code,
-                o.payment_type, o.payment_number,
+                o.payment_type, o.payment_number, o.payment_status,
+                o.payment_trx_id, o.payment_amount,
                 o.address_snapshot, o.notes,
                 o.created_at, o.updated_at,
                 (SELECT json_agg(json_build_object(

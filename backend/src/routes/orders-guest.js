@@ -155,7 +155,7 @@ module.exports = async function guestOrderRoutes(app) {
       const { rows: productRows } = await query(
         `SELECT id, name, price, discount_enabled, discount_type, discount_value, discount_max_qty, discount_max_orders, discount_label
          FROM products
-         WHERE id = $1`,
+         WHERE id = $1 AND LOWER(status) = 'active'`,
         [req.body.product_id]
       )
 

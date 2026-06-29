@@ -516,6 +516,13 @@ function OrderModal({
   var effectiveFinalTotal = checkoutCharges.shippingCost + effectiveCodFee + totalPrice;
   var discountCapMessage = getDiscountCapMessage(effectiveProduct, qty);
   useEffect(() => {
+    if (!hasProductDiscount(effectiveProduct)) return;
+    setCoupon?.("");
+    setCouponStatus?.("idle");
+    setCouponError?.("");
+    setDiscount?.(0);
+  }, [effectiveProduct.salePrice, effectiveProduct.originalPrice, effectiveProduct.discountBlocked, product.id]);
+  useEffect(() => {
     document.body.style.overflow = open ? "hidden" : "";
     return () => {
       document.body.style.overflow = "";
@@ -1450,6 +1457,7 @@ function OrderModal({
         }
         var vres = await fetch(`${API_BASE}/coupons/validate`, {
           method: "POST",
+          credentials: "include",
           headers: {
             "Content-Type": "application/json"
           },
@@ -1463,7 +1471,7 @@ function OrderModal({
           })
         });
         var vjson = await vres.json().catch(() => null);
-        if (!vres.ok) {
+        if (!vres.ok || !vjson?.ok) {
           setErrorMsg(vjson?.error?.message || "This coupon can't be used for this order.");
           setStep("error");
           return;
@@ -3798,6 +3806,12 @@ function ShopPage() {
     setDiscount(0);
     setCouponOpen(false);
   }, [productDiscounted, product.id]);
+  useEffect(() => {
+    if (couponStatus !== "ok") return;
+    setDiscount(0);
+    setCouponStatus("idle");
+    setCouponError("Apply the coupon again after changing quantity.");
+  }, [qty, product.id]);
   var switchImage = idx => {
     setActiveImg(idx);
     setImgKey(k => k + 1);

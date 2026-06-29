@@ -93,6 +93,7 @@ module.exports = async function orderRoutes(app) {
           address:        addressSchema,
           payment_type:   { type: 'string', enum: ['bkash', 'nagad', 'rocket', 'card', 'cod'] },
           payment_number: { type: 'string', minLength: 1, maxLength: 25 },
+          bkash_txn_id:   bkashTxnIdSchema,
           notes:          { type: 'string', maxLength: 500 },
         },
         additionalProperties: false,

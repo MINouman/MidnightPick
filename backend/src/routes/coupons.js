@@ -13,7 +13,7 @@ function softReadUserId(app, req) {
   try {
     const token = req.cookies?.mp_access_token
     if (!token) return null
-    const decoded = app.jwt.decode(token)
+    const decoded = app.jwt.verify(token)
     return decoded?.sub || null
   } catch {
     return null
