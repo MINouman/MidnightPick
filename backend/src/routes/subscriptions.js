@@ -1,11 +1,16 @@
 'use strict'
 
 const { query } = require('../config/db')
+const {
+  getSubscriptionPolicy,
+  calculateSubscriptionUnitPrice,
+  getSubscriptionCommitmentStatus,
+  assertDeliveryLock,
+  assertCustomerCommitment,
+  addSubscriptionEvent,
+} = require('../services/subscription-policy')
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-const SUBSCRIPTION_CHANGE_CUTOFF_DAYS = 3
-const SUBSCRIPTION_DISCOUNT_PCT = 5
 
 function nextDeliveryDate(billingDay) {
   const today = new Date()
@@ -34,55 +39,39 @@ function ordinalSuffix(n) {
   return s[(v - 20) % 10] || s[v] || s[0]
 }
 
-function subscriptionUnitPrice(price) {
-  return Math.round(Number(price || 0) * (100 - SUBSCRIPTION_DISCOUNT_PCT) / 100)
-}
-
-function daysUntilDate(dateStr) {
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const target = new Date(dateStr)
-  target.setHours(0, 0, 0, 0)
-  return Math.ceil((target - today) / 86400000)
-}
-
-function assertCanChangeUpcomingDelivery(sub, action) {
-  if (!sub || sub.status === 'cancelled') return
-  if (!sub.next_delivery_date) return
-  const daysUntilDelivery = daysUntilDate(sub.next_delivery_date)
-  if (daysUntilDelivery <= SUBSCRIPTION_CHANGE_CUTOFF_DAYS) {
-    throw {
-      code: 'SUBSCRIPTION_CHANGE_LOCKED',
-      message: `This subscription can no longer be ${action} for the upcoming delivery. Please make changes at least ${SUBSCRIPTION_CHANGE_CUTOFF_DAYS} days before delivery.`,
-    }
-  }
-}
-
-async function addSubscriptionEvent(subscriptionId, eventType, note, metadata = {}) {
-  await query(
-    `INSERT INTO subscription_events (subscription_id, event_type, note, metadata)
-     VALUES ($1, $2, $3, $4::jsonb)`,
-    [subscriptionId, eventType, note || null, JSON.stringify({ actor: 'user', ...metadata })]
-  )
-}
-
 // ── Routes ──────────────────────────────────────────────────────────────────
 
 module.exports = async function subscriptionRoutes(app) {
+  async function addUserSubscriptionEvent(subscriptionId, eventType, note, metadata = {}) {
+    await addSubscriptionEvent(queryClient, subscriptionId, eventType, note, { actor: 'user', ...metadata })
+  }
+
+  const queryClient = { query }
 
   // GET /subscriptions — get the user's current subscription (or null)
   app.get('/', async (req) => {
+    const policy = await getSubscriptionPolicy(queryClient)
     const { rows } = await query(
       `SELECT s.id, s.user_id, s.product_id, s.product_name, s.qty, s.unit_price,
               s.address, s.billing_day, s.status, s.pause_until,
-              s.next_delivery_date, s.created_at, s.updated_at
+              s.next_delivery_date, s.created_at, s.updated_at,
+              s.commitment_started_at, s.committed_min_deliveries, s.committed_min_days,
+              s.initial_product_id, s.initial_product_name, s.initial_qty, s.initial_unit_price,
+              s.fulfilled_subscription_order_count, s.commitment_completed_at,
+              s.payment_type, s.payment_number
        FROM   subscriptions s
        WHERE  s.user_id = $1
          AND  s.status  != 'cancelled'
        LIMIT 1`,
       [req.user.sub]
     )
-    return { ok: true, data: rows[0] || null }
+    const sub = rows[0] || null
+    return { ok: true, data: sub ? { ...sub, commitment: getSubscriptionCommitmentStatus(sub, policy) } : null, policy }
+  })
+
+  app.get('/policy', async () => {
+    const policy = await getSubscriptionPolicy(queryClient)
+    return { ok: true, data: { policy } }
   })
 
   // POST /subscriptions — create a new subscription
@@ -103,6 +92,13 @@ module.exports = async function subscriptionRoutes(app) {
   }, async (req, reply) => {
     const { product_id, qty, address, billing_day } = req.body
     const userId = req.user.sub
+    const policy = await getSubscriptionPolicy(queryClient)
+    if (!policy.subscription_enabled) {
+      throw { code: 'VALIDATION_ERROR', message: 'Subscriptions are currently unavailable.' }
+    }
+    if (qty < policy.min_qty || qty > policy.max_qty) {
+      throw { code: 'VALIDATION_ERROR', message: `Subscription quantity must be between ${policy.min_qty} and ${policy.max_qty}.` }
+    }
 
     // One active/paused subscription per user
     const { rows: existing } = await query(
@@ -115,16 +111,15 @@ module.exports = async function subscriptionRoutes(app) {
 
     // Resolve product details
     let productName = 'Midnight Blend — 95g Pouch'
-    let unitPrice   = subscriptionUnitPrice(699)
+    let unitPrice   = calculateSubscriptionUnitPrice(699, policy)
     if (product_id) {
       const { rows: pRows } = await query(
-        `SELECT name, price FROM products WHERE id = $1 AND LOWER(status) = 'active'`,
+        `SELECT name, price, discount_enabled FROM products WHERE id = $1 AND LOWER(status) = 'active'`,
         [product_id]
       )
-      if (pRows.length) {
-        productName = pRows[0].name
-        unitPrice   = subscriptionUnitPrice(pRows[0].price)
-      }
+      if (!pRows.length) throw { code: 'NOT_FOUND', message: 'Product not found or unavailable for subscription.' }
+      productName = pRows[0].name
+      unitPrice   = calculateSubscriptionUnitPrice(pRows[0].price, policy, pRows[0])
     }
 
     const deliveryDate = nextDeliveryDate(billing_day)
@@ -133,10 +128,16 @@ module.exports = async function subscriptionRoutes(app) {
     try {
       const result = await query(
         `INSERT INTO subscriptions
-           (user_id, product_id, product_name, qty, unit_price, address, billing_day, next_delivery_date)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           (user_id, product_id, product_name, qty, unit_price, address, billing_day, next_delivery_date,
+            commitment_started_at, committed_min_deliveries, committed_min_days,
+            initial_product_id, initial_product_name, initial_qty, initial_unit_price,
+            payment_type, payment_number)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+                 NOW(), $9, $10, $2, $3, $4, $5, 'cod', NULL)
          RETURNING *`,
-        [userId, product_id || null, productName, qty, unitPrice, address.trim(), billing_day, deliveryDate]
+        [userId, product_id || null, productName, qty, unitPrice, address.trim(), billing_day, deliveryDate,
+         policy.minimum_commitment_enabled ? policy.minimum_commitment_deliveries : 0,
+         policy.commitment_basis === 'fulfilled_deliveries_and_days' ? policy.minimum_commitment_days : 0]
       )
       insertRows = result.rows
     } catch (dbErr) {
@@ -145,10 +146,17 @@ module.exports = async function subscriptionRoutes(app) {
       }
       throw dbErr
     }
-    await addSubscriptionEvent(insertRows[0].id, 'created', 'Subscription created from customer dashboard.', {
+    await addUserSubscriptionEvent(insertRows[0].id, 'created', 'Subscription created from customer dashboard.', {
       next_delivery_date: insertRows[0].next_delivery_date,
       product_name: insertRows[0].product_name,
       qty: insertRows[0].qty,
+    })
+    await addUserSubscriptionEvent(insertRows[0].id, 'policy_applied_on_create', 'Current subscription policy was applied at signup.', {
+      discount_type: policy.discount_type,
+      discount_value: policy.discount_value,
+      minimum_commitment_deliveries: insertRows[0].committed_min_deliveries,
+      minimum_commitment_days: insertRows[0].committed_min_days,
+      free_delivery_enabled: policy.free_delivery_enabled,
     })
     return reply.code(201).send({ ok: true, data: insertRows[0] })
   })
@@ -171,6 +179,7 @@ module.exports = async function subscriptionRoutes(app) {
   }, async (req) => {
     const userId = req.user.sub
     const { product_id, qty, address, billing_day } = req.body
+    const policy = await getSubscriptionPolicy(queryClient)
 
     const { rows: cur } = await query(
       `SELECT * FROM subscriptions WHERE user_id = $1 AND status != 'cancelled' LIMIT 1`,
@@ -178,18 +187,31 @@ module.exports = async function subscriptionRoutes(app) {
     )
     if (!cur.length) throw { code: 'NOT_FOUND', message: 'No active subscription found.' }
     const sub = cur[0]
-    assertCanChangeUpcomingDelivery(sub, 'updated')
+    assertDeliveryLock(sub, policy, 'edit')
+    if (qty != null && (qty < policy.min_qty || qty > policy.max_qty)) {
+      throw { code: 'VALIDATION_ERROR', message: `Subscription quantity must be between ${policy.min_qty} and ${policy.max_qty}.` }
+    }
+    if (qty != null && Number(qty) < Number(sub.qty)) {
+      assertCustomerCommitment(sub, policy, 'decrease_qty', { nextQty: qty })
+    }
 
     let productName = sub.product_name
     let unitPrice   = sub.unit_price
     if (product_id && product_id !== sub.product_id) {
+      if (!policy.allow_product_change) throw { code: 'VALIDATION_ERROR', message: 'Product changes are currently disabled for subscriptions.' }
+      const commitment = getSubscriptionCommitmentStatus(sub, policy)
+      if (commitment.isUnderCommitment && !policy.allow_product_change_during_commitment) {
+        throw { code: 'SUBSCRIPTION_COMMITMENT_LOCKED', message: 'Product changes become available after your minimum subscription commitment is completed.' }
+      }
       const { rows: pRows } = await query(
-        `SELECT name, price FROM products WHERE id = $1 AND LOWER(status) = 'active'`,
+        `SELECT name, price, discount_enabled FROM products WHERE id = $1 AND LOWER(status) = 'active'`,
         [product_id]
       )
-      if (pRows.length) {
-        productName = pRows[0].name
-        unitPrice   = subscriptionUnitPrice(pRows[0].price)
+      if (!pRows.length) throw { code: 'NOT_FOUND', message: 'Product not found or unavailable for subscription.' }
+      productName = pRows[0].name
+      unitPrice   = calculateSubscriptionUnitPrice(pRows[0].price, policy, pRows[0])
+      if (commitment.isUnderCommitment && unitPrice < Number(sub.initial_unit_price || sub.unit_price)) {
+        assertCustomerCommitment(sub, policy, 'downgrade_product')
       }
     }
 
@@ -214,7 +236,7 @@ module.exports = async function subscriptionRoutes(app) {
        product_id || sub.product_id, productName, unitPrice,
        qty, address?.trim(), newBillingDay, newDeliveryDate]
     )
-    await addSubscriptionEvent(rows[0].id, 'edited', 'Subscription updated from customer dashboard.', {
+    await addUserSubscriptionEvent(rows[0].id, 'edited', 'Subscription updated from customer dashboard.', {
       fields: Object.keys(req.body || {}),
       old_next_delivery_date: sub.next_delivery_date,
       new_next_delivery_date: rows[0].next_delivery_date,
@@ -237,13 +259,20 @@ module.exports = async function subscriptionRoutes(app) {
   }, async (req) => {
     const userId = req.user.sub
     const { months } = req.body
+    const policy = await getSubscriptionPolicy(queryClient)
 
     const { rows: cur } = await query(
       `SELECT * FROM subscriptions WHERE user_id = $1 AND status = 'active' LIMIT 1`,
       [userId]
     )
     if (!cur.length) throw { code: 'NOT_FOUND', message: 'No active subscription to pause.' }
-    assertCanChangeUpcomingDelivery(cur[0], 'paused')
+    assertDeliveryLock(cur[0], policy, 'pause')
+    try {
+      assertCustomerCommitment(cur[0], policy, 'pause')
+    } catch (err) {
+      await addUserSubscriptionEvent(cur[0].id, 'pause_blocked', err.message, { reason: err.code })
+      throw err
+    }
 
     const newDelivery = addMonthsToDate(cur[0].next_delivery_date, months)
 
@@ -257,7 +286,7 @@ module.exports = async function subscriptionRoutes(app) {
        RETURNING *`,
       [userId, newDelivery]
     )
-    await addSubscriptionEvent(rows[0].id, 'paused', `Subscription paused until ${newDelivery}.`, {
+    await addUserSubscriptionEvent(rows[0].id, 'paused', `Subscription paused until ${newDelivery}.`, {
       months,
       old_next_delivery_date: cur[0].next_delivery_date,
       new_next_delivery_date: rows[0].next_delivery_date,
@@ -292,7 +321,7 @@ module.exports = async function subscriptionRoutes(app) {
       [userId]
     )
     if (!rows.length) throw { code: 'NOT_FOUND', message: 'No paused subscription found.' }
-    await addSubscriptionEvent(rows[0].id, 'resumed', 'Subscription resumed from customer dashboard.', {
+    await addUserSubscriptionEvent(rows[0].id, 'resumed', 'Subscription resumed from customer dashboard.', {
       old_next_delivery_date: cur[0].next_delivery_date,
       new_next_delivery_date: rows[0].next_delivery_date,
     })
@@ -302,12 +331,19 @@ module.exports = async function subscriptionRoutes(app) {
   // POST /subscriptions/skip-next — skip one delivery while keeping plan active
   app.post('/skip-next', async (req) => {
     const userId = req.user.sub
+    const policy = await getSubscriptionPolicy(queryClient)
     const { rows: cur } = await query(
       `SELECT * FROM subscriptions WHERE user_id = $1 AND status = 'active' LIMIT 1`,
       [userId]
     )
     if (!cur.length) throw { code: 'NOT_FOUND', message: 'No active subscription to skip.' }
-    assertCanChangeUpcomingDelivery(cur[0], 'skipped')
+    assertDeliveryLock(cur[0], policy, 'skip')
+    try {
+      assertCustomerCommitment(cur[0], policy, 'skip')
+    } catch (err) {
+      await addUserSubscriptionEvent(cur[0].id, 'skip_blocked', err.message, { reason: err.code })
+      throw err
+    }
 
     const oldNext = cur[0].next_delivery_date
     const newNext = addMonthsToDate(oldNext, 1)
@@ -319,7 +355,7 @@ module.exports = async function subscriptionRoutes(app) {
        RETURNING *`,
       [userId, newNext]
     )
-    await addSubscriptionEvent(rows[0].id, 'skipped_next_delivery', 'Customer skipped the next delivery.', {
+    await addUserSubscriptionEvent(rows[0].id, 'skipped_next_delivery', 'Customer skipped the next delivery.', {
       old_next_delivery_date: oldNext,
       new_next_delivery_date: newNext,
     })
@@ -347,23 +383,32 @@ module.exports = async function subscriptionRoutes(app) {
   // DELETE /subscriptions — cancel the subscription
   app.delete('/', async (req) => {
     const userId = req.user.sub
+    const policy = await getSubscriptionPolicy(queryClient)
     const { rows: cur } = await query(
       `SELECT * FROM subscriptions WHERE user_id = $1 AND status != 'cancelled' LIMIT 1`,
       [userId]
     )
     if (!cur.length) throw { code: 'NOT_FOUND', message: 'No active subscription found.' }
-    assertCanChangeUpcomingDelivery(cur[0], 'cancelled')
+    assertDeliveryLock(cur[0], policy, 'cancel')
+    try {
+      assertCustomerCommitment(cur[0], policy, 'cancel')
+    } catch (err) {
+      await addUserSubscriptionEvent(cur[0].id, 'cancellation_blocked', err.message, { reason: err.code })
+      throw err
+    }
 
     const { rows } = await query(
       `UPDATE subscriptions
        SET status     = 'cancelled',
+           cancelled_at = NOW(),
+           cancel_reason = COALESCE(cancel_reason, 'Customer cancelled'),
            updated_at = NOW()
        WHERE user_id = $1 AND status != 'cancelled'
        RETURNING id`,
       [userId]
     )
     if (!rows.length) throw { code: 'NOT_FOUND', message: 'No active subscription found.' }
-    await addSubscriptionEvent(cur[0].id, 'cancelled', 'Subscription cancelled from customer dashboard.')
+    await addUserSubscriptionEvent(cur[0].id, 'cancelled', 'Subscription cancelled from customer dashboard.')
     return { ok: true, data: { cancelled: true } }
   })
 }

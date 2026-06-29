@@ -107,6 +107,7 @@ function routePermission(method, routeUrl) {
   if (u.startsWith('/customers')) return m === 'GET' ? 'customers.view' : 'customers.edit'
   if (u.startsWith('/subscriptions')) {
     if (m === 'GET') return 'subscriptions.view'
+    if (u === '/subscription-policy') return m === 'GET' ? 'subscriptions.view' : 'subscriptions.manage_policy'
     if (u.includes('/pause')) return 'subscriptions.pause'
     if (u.includes('/resume')) return 'subscriptions.resume'
     if (u.includes('/cancel')) return 'subscriptions.cancel'
@@ -114,6 +115,7 @@ function routePermission(method, routeUrl) {
     if (m === 'POST' && u === '/subscriptions') return 'subscriptions.create'
     return 'subscriptions.edit'
   }
+  if (u === '/subscription-policy') return m === 'GET' ? 'subscriptions.view' : 'subscriptions.manage_policy'
   if (u.startsWith('/financials/expenses')) return m === 'GET' ? 'financials.view' : 'financials.manage_expenses'
   if (u.startsWith('/financials/reconciliations')) return m === 'GET' ? 'financials.view' : 'financials.reconcile_payments'
   if (u.startsWith('/financials')) return m === 'GET' ? 'financials.view' : 'financials.view'

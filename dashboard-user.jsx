@@ -621,12 +621,11 @@ function OrdersTab() {
 
 // ── SUBSCRIPTION TAB ──────────────────────────────────────────
 const PLAN_BLANK = { product_id: "", qty: 1, address: "", billing_day: 1 };
-const SUBSCRIPTION_CHANGE_CUTOFF_DAYS = 3;
-const SUBSCRIPTION_DISCOUNT_PCT = 5;
 
 function SubscriptionTab() {
   const { addresses, paymentMethods } = useContext(DashCtx);
   const [sub, setSub]           = useState(undefined);
+  const [policy, setPolicy]     = useState(null);
   const [products, setProducts] = useState([]);
   const [sheet, setSheet]       = useState(null);   // "plan" | "pause"
   const [form, setForm]         = useState(PLAN_BLANK);
@@ -637,7 +636,10 @@ function SubscriptionTab() {
 
   useEffect(() => {
     mpApi.fetch("/subscriptions")
-      .then(res => setSub(res?.data ?? null))
+      .then(res => {
+        setSub(res?.data ?? null);
+        if (res?.policy) setPolicy(res.policy);
+      })
       .catch(() => setSub(null));
     mpApi.fetch("/subscriptions/events")
       .then(res => setEvents(res?.data?.events || []))
@@ -648,9 +650,31 @@ function SubscriptionTab() {
   }, []);
 
   const sfx = n => ["st","nd","rd"][n-1] || "th";
-  const subUnitPrice = price => Math.round(Number(price || 0) * (100 - SUBSCRIPTION_DISCOUNT_PCT) / 100);
+  const discountValue = Number(policy?.discount_value ?? 5);
+  const lockDays = Number(policy?.delivery_lock_days ?? 3);
+  const requiredDeliveries = Number(policy?.minimum_commitment_deliveries ?? 2);
+  const discountText = policy?.discount_enabled
+    ? policy.discount_type === "flat" ? `৳${discountValue.toLocaleString()} off` : `Save ${discountValue}%`
+    : "Monthly reserved stock";
+  const subUnitPrice = price => {
+    const base = Number(price || 0);
+    if (!policy?.discount_enabled) return Math.round(base);
+    const rawDiscount = policy.discount_type === "flat" ? discountValue : base * discountValue / 100;
+    const capped = policy.max_discount_amount != null ? Math.min(rawDiscount, Number(policy.max_discount_amount)) : rawDiscount;
+    return Math.max(0, Math.round(base - capped));
+  };
 
   function apiError(res) {
+    if (res?.error?.code === "SUBSCRIPTION_COMMITMENT_LOCKED") {
+      Swal.fire({
+        title: "Minimum subscription period",
+        text: res.error.message || `To keep Subscribe & Save fair, cancellation is available after ${requiredDeliveries} successful monthly deliveries.`,
+        icon: "info",
+        confirmButtonText: "I understand",
+        confirmButtonColor: "#FF9100",
+      });
+      return;
+    }
     Swal.fire({
       title: "Something went wrong",
       text: res?.error?.message || "Please try again.",
@@ -664,10 +688,7 @@ function SubscriptionTab() {
     return a ? [a.line1, a.line2, a.district, a.city].filter(Boolean).join(", ") : "";
   }
   function defaultPaymentLabel() {
-    const p = paymentMethods?.find(x => x.is_default) || paymentMethods?.[0];
-    if (!p) return "Cash on delivery";
-    const labels = { bkash: "bKash", nagad: "Nagad", rocket: "Rocket", card: "Card", cod: "Cash on delivery" };
-    return `${labels[p.type] || p.type}${p.number ? ` · ${String(p.number).slice(-4)}` : ""}`;
+    return "Cash on delivery when your order arrives";
   }
 
   function openCreate() {
@@ -697,7 +718,7 @@ function SubscriptionTab() {
   function canChangeUpcomingDelivery(s) {
     if (!s || s.status === "cancelled") return false;
     const days = daysUntilDelivery(s);
-    return days == null || days > SUBSCRIPTION_CHANGE_CUTOFF_DAYS;
+    return days == null || days > lockDays;
   }
   async function reloadEvents() {
     const res = await mpApi.fetch("/subscriptions/events").catch(() => null);
@@ -707,7 +728,7 @@ function SubscriptionTab() {
   function showSubscriptionLockNotice() {
     Swal.fire({
       title: "Upcoming delivery is locked",
-      text: `Pause, cancel, skip, and plan changes must be made more than ${SUBSCRIPTION_CHANGE_CUTOFF_DAYS} days before delivery.`,
+      text: `Pause, cancel, skip, and plan changes must be made more than ${lockDays} days before delivery.`,
       icon: "info",
       confirmButtonColor: "#FF9100",
     });
@@ -942,9 +963,9 @@ function SubscriptionTab() {
           <div className="row-between text-sm"><span>Product</span><strong>{selectedProd?.name || (editing ? sub.product_name : "Midnight Blend")} × {form.qty}</strong></div>
           <div className="row-between text-sm"><span>Delivery</span><strong>Delivered monthly</strong></div>
           <div className="row-between text-sm"><span>Monthly price</span><strong>৳{formTotal.toLocaleString()}/month</strong></div>
-          <div className="row-between text-sm"><span>Subscription saving</span><strong className="text-green">{SUBSCRIPTION_DISCOUNT_PCT}% off subscribed refill</strong></div>
-          <div className="row-between text-sm"><span>Delivery fee</span><strong className="text-green">Free delivery included</strong></div>
-          <div className="row-between text-sm"><span>Payment method</span><strong>{defaultPaymentLabel()}</strong></div>
+          <div className="row-between text-sm"><span>Subscription saving</span><strong className="text-green">{discountText} on your subscribed product</strong></div>
+          <div className="row-between text-sm"><span>Delivery fee</span><strong className="text-green">{policy?.free_delivery_enabled ? "Free delivery included" : "Delivery fee follows your selected area"}</strong></div>
+          <div className="row-between text-sm"><span>Payment method</span><strong>Cash on delivery when your order arrives</strong></div>
           <div className="text-sm" style={{ marginTop: 8 }}><span className="text-muted">Delivery address</span><br /><strong>{form.address || "Add address"}</strong></div>
         </div>}
 
@@ -1017,15 +1038,17 @@ function SubscriptionTab() {
             <button className="btn btn-primary btn-full mt20" onClick={openCreate}>
               <i className="fa fa-calendar-check" /> Start Monthly Plan
             </button>
-            <div className="input-note" style={{ marginTop: 10 }}>No commitment. Manage everything from your Midnight account.</div>
+            <div className="input-note" style={{ marginTop: 10 }}>Save on your subscribed coffee, with monthly delivery and reserved stock. To keep Subscribe & Save fair, a minimum of {requiredDeliveries} monthly deliveries applies.</div>
           </div>
           <div className="sub-benefits">
-            <div className="sub-benefit-headline">Save {SUBSCRIPTION_DISCOUNT_PCT}% on your subscribed product only.</div>
+            <div className="sub-benefit-headline">{discountText} on your subscribed product only.</div>
             <div className="sub-benefit-intro">Benefit list:</div>
             {[
-              `${SUBSCRIPTION_DISCOUNT_PCT}% off your subscribed refill`,
+              `${discountText} on your subscribed refill`,
               "Monthly coffee reserved for you",
-              `Skip, pause, or cancel until ${SUBSCRIPTION_CHANGE_CUTOFF_DAYS} days before delivery`,
+              policy?.free_delivery_enabled ? "Free delivery included with your monthly plan" : "Delivery fee follows your selected area",
+              `Minimum ${requiredDeliveries} monthly deliver${requiredDeliveries === 1 ? "y" : "ies"} keeps Subscribe & Save fair`,
+              `Skip, pause, or cancel until ${lockDays} days before delivery after commitment`,
               "Early access to special offers",
             ].map((b, i) => (
               <div key={i} className="sub-benefit">
@@ -1048,7 +1071,11 @@ function SubscriptionTab() {
   const today      = new Date(); today.setHours(0, 0, 0, 0);
   const countdown  = Math.ceil((nextDate - today) / 86400000);
   const changeLocked = !canChangeUpcomingDelivery(sub);
-  const lockText = `This delivery is already being prepared. Plan changes, pause, skip, and cancellation are locked during the final ${SUBSCRIPTION_CHANGE_CUTOFF_DAYS} days before delivery.`;
+  const lockText = `This delivery is already being prepared. Plan changes, pause, skip, and cancellation are locked during the final ${lockDays} days before delivery.`;
+  const commitment = sub.commitment || {};
+  const fulfilledCount = Number(commitment.fulfilledCount ?? sub.fulfilled_subscription_order_count ?? 0);
+  const committedDeliveries = Number(commitment.requiredDeliveries ?? sub.committed_min_deliveries ?? requiredDeliveries);
+  const underCommitment = Boolean(commitment.isUnderCommitment);
 
   return (
     <div className="monthly-plan-active">
@@ -1081,6 +1108,11 @@ function SubscriptionTab() {
           ? <div className="text-sm text-orange">Paused — resumes {nextDate.toLocaleDateString("en-BD", { month: "short", year: "numeric" })}</div>
           : <div className="text-sm text-muted">In {countdown > 0 ? countdown : "< 1"} day{countdown !== 1 ? "s" : ""}</div>
         }
+        <div className="input-note mt8">
+          {underCommitment
+            ? `You're on delivery ${Math.min(fulfilledCount + 1, committedDeliveries)} of ${committedDeliveries}. After ${committedDeliveries} successful deliveries, you can cancel anytime before the delivery lock period.`
+            : "Minimum commitment completed. You can pause, skip, or cancel before the delivery lock period."}
+        </div>
         {changeLocked && (
           <div className="sub-lock-note mt12">
             <i className="fa fa-lock" style={{ fontSize: 12 }} />
@@ -1096,7 +1128,7 @@ function SubscriptionTab() {
           <div><div className="profile-label">Product</div><div className="profile-value">{sub.product_name}</div></div>
           <div><div className="profile-label">Quantity</div><div className="profile-value">{sub.qty} pack{sub.qty !== 1 ? "s" : ""}</div></div>
           <div><div className="profile-label">Estimated amount</div><div className="profile-value">{money(totalPrice)}</div></div>
-          <div><div className="profile-label">Payment</div><div className="profile-value">{defaultPaymentLabel()}</div></div>
+          <div><div className="profile-label">Payment</div><div className="profile-value">Cash on delivery when your order arrives</div></div>
         </div>
 
         <div className="plan-action-grid">

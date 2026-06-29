@@ -11,7 +11,7 @@ const { awardPointsForDeliveredOrder, reversePoints, adjustPoints } = require('.
 const { syncCommissionForDeliveredOrder, reverseCommissionForOrder, validateCoupon, recordCouponUsage, restoreCouponUsageForOrder } = require('../services/crew')
 const { toEndOfDayDhaka } = require('../services/dates')
 const { normalizeBdMobile } = require('../services/phone')
-const { generateOrderRef } = require('../services/orders')
+const { generateOrderRef, calculateCheckoutDeliveryCharge } = require('../services/orders')
 const { createOrder, formatRecipientAddress, mapSteadfastStatusToOrderStatus } = require('../services/steadfast')
 const { sendOrderOtp, verifyOrderOtp, getOrderOtpStatus } = require('../services/order-otp')
 const { checkAndIncrementDailyLimit, getDailyCount, resetDailyCount, getPhoneOverride, DEFAULT_DAILY_LIMIT } = require('../services/otp-daily-limit')
@@ -22,6 +22,15 @@ const {
   adminBanner,
   getCouponForPublish,
 } = require('../services/site-banners')
+const {
+  getSubscriptionPolicy,
+  validatePolicyPatch,
+  calculateSubscriptionUnitPrice,
+  getSubscriptionCommitmentStatus,
+  validateAdminOverride,
+  addSubscriptionEvent: addPolicySubscriptionEvent,
+  markSubscriptionOrderFulfilled,
+} = require('../services/subscription-policy')
 
 const PRODUCT_PRICE_RETURNING = `
   id, sku, name, description, category, badge, status, price,
@@ -366,6 +375,21 @@ module.exports = async function adminRoutes(app) {
        VALUES ($1, $2, $3, $4, $5::jsonb)`,
       [subscriptionId, req.admin.id, eventType, note || null, JSON.stringify(metadata || {})]
     )
+  }
+
+  async function recordAdminCommitmentOverride(client, req, subscriptionId, action, reason, metadata = {}) {
+    await addPolicySubscriptionEvent(client, subscriptionId, 'admin_commitment_override', reason || `Admin override for ${action}.`, {
+      action,
+      ...metadata,
+    }, req.admin.id)
+    await auditLog(client, req, {
+      action: `subscriptions.override.${action}`,
+      section: 'subscriptions',
+      entity_type: 'subscription',
+      entity_id: subscriptionId,
+      summary: `Commitment override for ${action}: ${reason}`,
+      metadata,
+    })
   }
 
   // GET /admin/orders
@@ -806,6 +830,7 @@ module.exports = async function adminRoutes(app) {
       if (newStatus === 'delivered' && order.status !== 'delivered') {
         const pointsResult = await awardPointsForDeliveredOrder(client, order.id)
         if (pointsResult.awarded > 0) updated[0].points_earned = pointsResult.awarded
+        await markSubscriptionOrderFulfilled(client, order.id, auditLog, req)
       }
       if (newStatus === 'delivered') {
         await syncCommissionForDeliveredOrder(client, orderId)
@@ -1687,6 +1712,55 @@ module.exports = async function adminRoutes(app) {
     }
   })
 
+  app.get('/subscription-policy', async () => {
+    const policy = await getSubscriptionPolicy({ query })
+    return { ok: true, data: { policy } }
+  })
+
+  app.patch('/subscription-policy', {
+    schema: {
+      body: {
+        type: 'object',
+        additionalProperties: true,
+      },
+    },
+  }, async (req) => {
+    const updated = await withTransaction(async (client) => {
+      const patch = validatePolicyPatch(req.body || {})
+      const cols = Object.keys(patch)
+      const sets = cols.map((col, i) => `${col} = $${i + 1}`)
+      const params = cols.map(col => patch[col])
+      const existing = await client.query(`SELECT id FROM subscription_policy_settings ORDER BY created_at ASC LIMIT 1 FOR UPDATE`)
+      if (!existing.rows.length) {
+        await client.query(`INSERT INTO subscription_policy_settings DEFAULT VALUES`)
+      }
+      const { rows } = await client.query(
+        `UPDATE subscription_policy_settings
+         SET ${sets.join(', ')},
+             updated_by_admin_id = $${params.length + 1},
+             updated_at = NOW()
+         WHERE id = (SELECT id FROM subscription_policy_settings ORDER BY created_at ASC LIMIT 1)
+         RETURNING *`,
+        [...params, req.admin.id]
+      )
+      const policy = rows[0]
+      const { rows: subs } = await client.query(`SELECT id FROM subscriptions WHERE status != 'cancelled' ORDER BY created_at DESC LIMIT 50`)
+      for (const sub of subs) {
+        await addPolicySubscriptionEvent(client, sub.id, 'admin_policy_updated', 'Subscription policy was updated by admin.', { fields: cols }, req.admin.id)
+      }
+      await auditLog(client, req, {
+        action: 'subscriptions.manage_policy',
+        section: 'subscriptions',
+        entity_type: 'subscription_policy',
+        entity_id: policy.id,
+        summary: 'Subscription policy updated.',
+        metadata: { fields: cols },
+      })
+      return policy
+    })
+    return { ok: true, data: { policy: updated } }
+  })
+
   // GET /admin/subscriptions?status=active|paused|cancelled&page=1&limit=20
   app.get('/subscriptions', {
     schema: {
@@ -1701,6 +1775,7 @@ module.exports = async function adminRoutes(app) {
     },
   }, async (req) => {
     const { status, page = 1, limit = 20 } = req.query
+    const policy = await getSubscriptionPolicy({ query })
     const offset = (page - 1) * limit
     const params = []
     let where = `WHERE s.status != 'cancelled'`
@@ -1726,6 +1801,9 @@ module.exports = async function adminRoutes(app) {
       `SELECT s.id, s.user_id, s.product_id, s.product_name, s.qty, s.unit_price, s.address,
               s.billing_day, s.status, s.pause_until, s.next_delivery_date, s.admin_note,
               s.payment_status, s.cancel_reason, s.cancelled_at,
+              s.commitment_started_at, s.committed_min_deliveries, s.committed_min_days,
+              s.initial_product_id, s.initial_product_name, s.initial_qty, s.initial_unit_price,
+              s.fulfilled_subscription_order_count, s.commitment_completed_at,
               s.created_at, s.updated_at,
               u.name AS user_name, u.phone AS user_phone, u.email AS user_email
        FROM   subscriptions s
@@ -1735,6 +1813,7 @@ module.exports = async function adminRoutes(app) {
        LIMIT  $${dataParams.length - 1} OFFSET $${dataParams.length}`,
       dataParams
     )
+    rows.forEach(row => { row.commitment = getSubscriptionCommitmentStatus(row, policy) })
     return { ok: true, data: { subscriptions: rows, total, page, limit } }
   })
 
@@ -1774,6 +1853,11 @@ module.exports = async function adminRoutes(app) {
     },
   }, async (req, reply) => {
     const created = await withTransaction(async (client) => {
+      const policy = await getSubscriptionPolicy(client)
+      if (!policy.subscription_enabled) throw { code: 'VALIDATION_ERROR', message: 'Subscriptions are currently disabled by policy.' }
+      if (req.body.qty < policy.min_qty || req.body.qty > policy.max_qty) {
+        throw { code: 'VALIDATION_ERROR', message: `Subscription quantity must be between ${policy.min_qty} and ${policy.max_qty}.` }
+      }
       let userId = req.body.user_id || null
       if (!userId && req.body.phone) {
         const user = await client.query(`SELECT id FROM users WHERE phone = $1 AND is_active = true LIMIT 1`, [req.body.phone])
@@ -1785,22 +1869,35 @@ module.exports = async function adminRoutes(app) {
       if (existing.rows.length) throw { code: 'SUBSCRIPTION_EXISTS', message: 'Customer already has an active or paused subscription.' }
 
       let productName = req.body.product_name || 'Midnight Blend — 95g Pouch'
-      let unitPrice = req.body.unit_price || subscriptionUnitPrice(699)
+      let unitPrice = req.body.unit_price || calculateSubscriptionUnitPrice(699, policy)
       if (req.body.product_id) {
-        const product = await client.query(`SELECT name, price FROM products WHERE id = $1`, [req.body.product_id])
+        const product = await client.query(`SELECT name, price, discount_enabled FROM products WHERE id = $1`, [req.body.product_id])
         if (!product.rows.length) throw { code: 'NOT_FOUND', message: 'Product not found.' }
         productName = product.rows[0].name
-        unitPrice = req.body.unit_price || subscriptionUnitPrice(product.rows[0].price)
+        unitPrice = req.body.unit_price || calculateSubscriptionUnitPrice(product.rows[0].price, policy, product.rows[0])
       }
       const deliveryDate = req.body.next_delivery_date || nextSubscriptionDeliveryDate(req.body.billing_day)
       const { rows } = await client.query(
         `INSERT INTO subscriptions
-           (user_id, product_id, product_name, qty, unit_price, address, billing_day, next_delivery_date, admin_note, updated_by_admin_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+           (user_id, product_id, product_name, qty, unit_price, address, billing_day, next_delivery_date,
+            admin_note, updated_by_admin_id, commitment_started_at, committed_min_deliveries, committed_min_days,
+            initial_product_id, initial_product_name, initial_qty, initial_unit_price, payment_type)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                 NOW(), $11, $12, $2, $3, $4, $5, 'cod')
          RETURNING *`,
-        [userId, req.body.product_id || null, productName, req.body.qty, unitPrice, req.body.address.trim(), req.body.billing_day, deliveryDate, req.body.admin_note || null, req.admin.id]
+        [userId, req.body.product_id || null, productName, req.body.qty, unitPrice, req.body.address.trim(), req.body.billing_day, deliveryDate,
+         req.body.admin_note || null, req.admin.id,
+         policy.minimum_commitment_enabled ? policy.minimum_commitment_deliveries : 0,
+         policy.commitment_basis === 'fulfilled_deliveries_and_days' ? policy.minimum_commitment_days : 0]
       )
       await addSubscriptionEvent(client, req, rows[0].id, 'created', req.body.admin_note || 'Subscription created by admin.')
+      await addPolicySubscriptionEvent(client, rows[0].id, 'policy_applied_on_create', 'Current subscription policy was applied at signup.', {
+        discount_type: policy.discount_type,
+        discount_value: policy.discount_value,
+        minimum_commitment_deliveries: rows[0].committed_min_deliveries,
+        minimum_commitment_days: rows[0].committed_min_days,
+        free_delivery_enabled: policy.free_delivery_enabled,
+      }, req.admin.id)
       await auditLog(client, req, { action: 'subscriptions.create', section: 'subscriptions', entity_type: 'subscription', entity_id: rows[0].id, summary: `Subscription created for ${productName}.` })
       return rows[0]
     })
@@ -1820,6 +1917,7 @@ module.exports = async function adminRoutes(app) {
           next_delivery_date: { type: 'string', maxLength: 20 },
           admin_note: { type: ['string', 'null'], maxLength: 1000 },
           payment_status: { type: 'string', enum: ['ok', 'payment_issue', 'failed', 'pending'] },
+          override_reason: { type: 'string', maxLength: 1000 },
         },
         additionalProperties: false,
         minProperties: 1,
@@ -1827,16 +1925,40 @@ module.exports = async function adminRoutes(app) {
     },
   }, async (req) => {
     const updated = await withTransaction(async (client) => {
+      const policy = await getSubscriptionPolicy(client)
       const cur = await client.query(`SELECT * FROM subscriptions WHERE id = $1 FOR UPDATE`, [req.params.id])
       if (!cur.rows.length) throw { code: 'NOT_FOUND', message: 'Subscription not found.' }
       const sub = cur.rows[0]
+      if (req.body.qty != null && (req.body.qty < policy.min_qty || req.body.qty > policy.max_qty)) {
+        throw { code: 'VALIDATION_ERROR', message: `Subscription quantity must be between ${policy.min_qty} and ${policy.max_qty}.` }
+      }
+      const commitment = getSubscriptionCommitmentStatus(sub, policy)
+      let overrideNeeded = false
+      let overrideAction = null
+      const nextQty = req.body.qty == null ? Number(sub.qty) : Number(req.body.qty)
+      if (commitment.isUnderCommitment && nextQty < Number(sub.qty) && nextQty < Number(sub.initial_qty || sub.qty) && !commitment.canDecreaseQty) {
+        overrideNeeded = true
+        overrideAction = 'quantity_decrease'
+      }
       let productName = sub.product_name
       let unitPrice = sub.unit_price
       if (req.body.product_id && req.body.product_id !== sub.product_id) {
-        const product = await client.query(`SELECT name, price FROM products WHERE id = $1`, [req.body.product_id])
+        if (!policy.allow_product_change || (commitment.isUnderCommitment && !policy.allow_product_change_during_commitment)) {
+          overrideNeeded = true
+          overrideAction = 'product_change'
+        }
+        const product = await client.query(`SELECT name, price, discount_enabled FROM products WHERE id = $1`, [req.body.product_id])
         if (!product.rows.length) throw { code: 'NOT_FOUND', message: 'Product not found.' }
         productName = product.rows[0].name
-        unitPrice = subscriptionUnitPrice(product.rows[0].price)
+        unitPrice = calculateSubscriptionUnitPrice(product.rows[0].price, policy, product.rows[0])
+        if (commitment.isUnderCommitment && unitPrice < Number(sub.initial_unit_price || sub.unit_price) && !commitment.canDowngradeProduct) {
+          overrideNeeded = true
+          overrideAction = 'product_downgrade'
+        }
+      }
+      if (overrideNeeded) {
+        validateAdminOverride(policy, req.body.override_reason)
+        await recordAdminCommitmentOverride(client, req, req.params.id, overrideAction || 'edit', req.body.override_reason, { fields: Object.keys(req.body) })
       }
       const billingDay = req.body.billing_day || sub.billing_day
       const nextDelivery = req.body.next_delivery_date || (req.body.billing_day ? nextSubscriptionDeliveryDate(billingDay) : sub.next_delivery_date)
@@ -1858,8 +1980,8 @@ module.exports = async function adminRoutes(app) {
         [req.params.id, req.body.product_id || null, productName, unitPrice, req.body.qty || null, req.body.address?.trim() || null,
          billingDay, nextDelivery, req.body.admin_note ?? null, req.body.payment_status || null, req.admin.id]
       )
-      await addSubscriptionEvent(client, req, req.params.id, 'updated', req.body.admin_note || 'Subscription updated.', { fields: Object.keys(req.body) })
-      await auditLog(client, req, { action: 'subscriptions.edit', section: 'subscriptions', entity_type: 'subscription', entity_id: req.params.id, summary: 'Subscription updated.', metadata: { fields: Object.keys(req.body) } })
+      await addSubscriptionEvent(client, req, req.params.id, 'updated', req.body.admin_note || 'Subscription updated.', { fields: Object.keys(req.body).filter(k => k !== 'override_reason') })
+      await auditLog(client, req, { action: 'subscriptions.edit', section: 'subscriptions', entity_type: 'subscription', entity_id: req.params.id, summary: 'Subscription updated.', metadata: { fields: Object.keys(req.body).filter(k => k !== 'override_reason') } })
       return rows[0]
     })
     return { ok: true, data: updated }
@@ -1874,14 +1996,21 @@ module.exports = async function adminRoutes(app) {
           months: { type: 'integer', minimum: 1, maximum: 6 },
           pause_until: { type: 'string', maxLength: 20 },
           note: { type: 'string', maxLength: 1000 },
+          override_reason: { type: 'string', maxLength: 1000 },
         },
         additionalProperties: false,
       },
     },
   }, async (req) => {
     const result = await withTransaction(async (client) => {
+      const policy = await getSubscriptionPolicy(client)
       const cur = await client.query(`SELECT * FROM subscriptions WHERE id = $1 AND status = 'active' FOR UPDATE`, [req.params.id])
       if (!cur.rows.length) throw { code: 'NOT_FOUND', message: 'No active subscription to pause.' }
+      const commitment = getSubscriptionCommitmentStatus(cur.rows[0], policy)
+      if (commitment.isUnderCommitment && !commitment.canPause) {
+        validateAdminOverride(policy, req.body.override_reason)
+        await recordAdminCommitmentOverride(client, req, req.params.id, 'pause', req.body.override_reason, { pause_rule: commitment.pauseRule })
+      }
       const pauseUntil = req.body.pause_until || addMonthsToDate(cur.rows[0].next_delivery_date, req.body.months || 1)
       const { rows } = await client.query(
         `UPDATE subscriptions
@@ -1936,10 +2065,21 @@ module.exports = async function adminRoutes(app) {
   app.post('/subscriptions/:id/cancel', {
     schema: {
       params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
-      body: { type: 'object', properties: { reason: { type: 'string', maxLength: 1000 } }, additionalProperties: false },
+      body: { type: 'object', properties: { reason: { type: 'string', maxLength: 1000 }, override_reason: { type: 'string', maxLength: 1000 } }, additionalProperties: false },
     },
   }, async (req) => {
     const result = await withTransaction(async (client) => {
+      const policy = await getSubscriptionPolicy(client)
+      const cur = await client.query(`SELECT * FROM subscriptions WHERE id = $1 AND status != 'cancelled' FOR UPDATE`, [req.params.id])
+      if (!cur.rows.length) throw { code: 'NOT_FOUND', message: 'Subscription not found or already cancelled.' }
+      const commitment = getSubscriptionCommitmentStatus(cur.rows[0], policy)
+      if (commitment.isUnderCommitment && !commitment.canCancel) {
+        validateAdminOverride(policy, req.body.override_reason || req.body.reason)
+        await recordAdminCommitmentOverride(client, req, req.params.id, 'cancel', req.body.override_reason || req.body.reason, {
+          fulfilled_count: commitment.fulfilledCount,
+          required_deliveries: commitment.requiredDeliveries,
+        })
+      }
       const { rows } = await client.query(
         `UPDATE subscriptions
          SET status = 'cancelled',
@@ -1963,12 +2103,18 @@ module.exports = async function adminRoutes(app) {
   app.post('/subscriptions/:id/skip-next', {
     schema: {
       params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
-      body: { type: 'object', properties: { note: { type: 'string', maxLength: 1000 } }, additionalProperties: false },
+      body: { type: 'object', properties: { note: { type: 'string', maxLength: 1000 }, override_reason: { type: 'string', maxLength: 1000 } }, additionalProperties: false },
     },
   }, async (req) => {
     const result = await withTransaction(async (client) => {
+      const policy = await getSubscriptionPolicy(client)
       const cur = await client.query(`SELECT * FROM subscriptions WHERE id = $1 AND status = 'active' FOR UPDATE`, [req.params.id])
       if (!cur.rows.length) throw { code: 'NOT_FOUND', message: 'Active subscription not found.' }
+      const commitment = getSubscriptionCommitmentStatus(cur.rows[0], policy)
+      if (commitment.isUnderCommitment && !commitment.canSkip) {
+        validateAdminOverride(policy, req.body.override_reason)
+        await recordAdminCommitmentOverride(client, req, req.params.id, 'skip_next', req.body.override_reason, { skip_rule: commitment.skipRule })
+      }
       const oldNext = cur.rows[0].next_delivery_date
       const newNext = addMonthsToDate(oldNext, 1)
       const { rows } = await client.query(
@@ -1998,6 +2144,7 @@ module.exports = async function adminRoutes(app) {
     },
   }, async (req, reply) => {
     const order = await withTransaction(async (client) => {
+      const policy = await getSubscriptionPolicy(client)
       const subRes = await client.query(
         `SELECT s.*, u.name AS user_name, u.phone AS user_phone
          FROM subscriptions s
@@ -2008,22 +2155,40 @@ module.exports = async function adminRoutes(app) {
       )
       if (!subRes.rows.length) throw { code: 'NOT_FOUND', message: 'Active subscription not found.' }
       const sub = subRes.rows[0]
+      if (policy.payment_issue_behavior === 'block_next_order_creation' && sub.payment_status && sub.payment_status !== 'ok') {
+        throw { code: 'VALIDATION_ERROR', message: 'Subscription order creation is blocked until the payment issue is resolved.' }
+      }
       const subtotal = Number(sub.qty) * Number(sub.unit_price)
+      let itemWeightGrams = 95
+      let productStockRows = []
+      if (sub.product_id) {
+        const stock = await client.query(`SELECT stock, qty AS product_weight_grams FROM products WHERE id = $1 FOR UPDATE`, [sub.product_id])
+        productStockRows = stock.rows
+        if (stock.rows.length && stock.rows[0].product_weight_grams) itemWeightGrams = Number(stock.rows[0].product_weight_grams) || 95
+      }
+      let deliveryFee = 0
+      if (policy.subscription_delivery_fee_type === 'fixed') {
+        deliveryFee = Number(policy.fixed_delivery_fee || 0)
+      } else if (policy.subscription_delivery_fee_type === 'normal_delivery_rules' || !policy.free_delivery_enabled) {
+        deliveryFee = calculateCheckoutDeliveryCharge(sub.address || 'Dhaka', itemWeightGrams * Number(sub.qty || 1), subtotal, true).totalDeliveryCharge
+      }
+      const total = Math.max(0, subtotal + deliveryFee)
+      const cycleNumber = Number(sub.fulfilled_subscription_order_count || 0) + 1
       const orderRef = await generateOrderRef(client)
       if (sub.product_id) {
-        const stock = await client.query(`SELECT stock FROM products WHERE id = $1 FOR UPDATE`, [sub.product_id])
-        if (stock.rows.length && Number(stock.rows[0].stock) < Number(sub.qty)) {
+        if (productStockRows.length && Number(productStockRows[0].stock) < Number(sub.qty)) {
           throw { code: 'INSUFFICIENT_STOCK', message: `Not enough stock for ${sub.product_name}.` }
         }
-        if (stock.rows.length) await client.query(`UPDATE products SET stock = stock - $2 WHERE id = $1`, [sub.product_id, sub.qty])
+        if (productStockRows.length) await client.query(`UPDATE products SET stock = stock - $2 WHERE id = $1`, [sub.product_id, sub.qty])
       }
       const { rows } = await client.query(
         `INSERT INTO orders
            (order_ref, user_id, customer_name, customer_phone, address_snapshot, payment_type, payment_number,
-            subtotal, delivery_fee, total, status, notes)
-         VALUES ($1, $2, $3, $4, $5::jsonb, 'cod', $4, $6, 0, $6, 'processing', $7)
+            subtotal, delivery_fee, total, status, notes, subscription_order, subscription_id, subscription_cycle_number)
+         VALUES ($1, $2, $3, $4, $5::jsonb, 'cod', $4, $6, $7, $8, 'processing', $9, true, $10, $11)
          RETURNING id, order_ref, status, total, created_at`,
-        [orderRef, sub.user_id, sub.user_name, sub.user_phone, JSON.stringify({ address: sub.address, line1: sub.address }), subtotal, req.body.note || `Created from subscription ${sub.id}`]
+        [orderRef, sub.user_id, sub.user_name, sub.user_phone, JSON.stringify({ address: sub.address, line1: sub.address }),
+         subtotal, deliveryFee, total, req.body.note || `Created from subscription ${sub.id}`, sub.id, cycleNumber]
       )
       await client.query(
         `INSERT INTO order_items (order_id, product_id, name_snapshot, qty, unit_price, subtotal)
@@ -2038,7 +2203,12 @@ module.exports = async function adminRoutes(app) {
          WHERE id = $1`,
         [req.params.id, req.admin.id]
       )
-      await addSubscriptionEvent(client, req, req.params.id, 'order_created', req.body.note || `Order ${orderRef} created.`, { order_id: rows[0].id, order_ref: orderRef })
+      await addSubscriptionEvent(client, req, req.params.id, 'order_created', req.body.note || `Order ${orderRef} created.`, {
+        order_id: rows[0].id,
+        order_ref: orderRef,
+        subscription_cycle_number: cycleNumber,
+        delivery_fee: deliveryFee,
+      })
       await auditLog(client, req, { action: 'subscriptions.create_order', section: 'subscriptions', entity_type: 'subscription', entity_id: req.params.id, summary: `Order ${orderRef} created from subscription.`, metadata: { order_id: rows[0].id } })
       return rows[0]
     })

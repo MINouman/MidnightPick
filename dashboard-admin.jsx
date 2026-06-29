@@ -1654,9 +1654,10 @@ function Customers() {
 // ── Section: Subscriptions ─────────────────────────────
 function Subscriptions() {
   const { user, adminProducts } = useContext(DashCtx);
-  const STATUS_TABS = ["active", "paused", "cancelled", "upcoming_7", "payment_issue", "delivery_due"];
+  const STATUS_TABS = ["active", "paused", "cancelled", "upcoming_7", "payment_issue", "delivery_due", "policy"];
   const [subTab, setSubTab]   = useState("active");
   const [subs, setSubs]       = useState([]);
+  const [policy, setPolicy]   = useState(null);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
   const [events, setEvents] = useState([]);
@@ -1674,12 +1675,86 @@ function Subscriptions() {
       .finally(() => setLoading(false));
   }
 
-  useEffect(() => { loadSubs(subTab); }, [subTab]);
+  async function loadPolicy() {
+    setLoading(true);
+    await window.mpApi.fetch("/admin/subscription-policy")
+      .then(res => setPolicy(res?.data?.policy || null))
+      .catch(() => setPolicy(null))
+      .finally(() => setLoading(false));
+  }
+
+  useEffect(() => { subTab === "policy" ? loadPolicy() : loadSubs(subTab); }, [subTab]);
+  useEffect(() => {
+    window.mpApi.fetch("/admin/subscription-policy")
+      .then(res => { if (res?.data?.policy) setPolicy(res.data.policy); })
+      .catch(() => null);
+  }, []);
 
   const sfx    = n => ['st','nd','rd'][n - 1] || 'th';
   const fmtDt  = iso => iso ? new Date(iso).toLocaleDateString('en-BD', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
   const fmtAmt = v  => `৳${Number(v).toLocaleString()}`;
-  const tabLabel = t => ({ upcoming_7: "Upcoming 7d", payment_issue: "Payment Issue", delivery_due: "Delivery Due" }[t] || fmtStatus(t));
+  const tabLabel = t => ({ upcoming_7: "Upcoming 7d", payment_issue: "Payment Issue", delivery_due: "Delivery Due", policy: "Policy" }[t] || fmtStatus(t));
+  const policySummary = p => {
+    if (!p) return "Policy loading…";
+    const discount = p.discount_enabled ? (p.discount_type === "flat" ? `৳${Number(p.discount_value || 0).toLocaleString()} off` : `${Number(p.discount_value || 0)}% off`) : "No discount";
+    const delivery = p.free_delivery_enabled && p.subscription_delivery_fee_type === "free" ? "Free delivery" : p.subscription_delivery_fee_type === "fixed" ? `৳${Number(p.fixed_delivery_fee || 0).toLocaleString()} delivery` : "Normal delivery rules";
+    const commitment = p.minimum_commitment_enabled ? `${p.minimum_commitment_deliveries} fulfilled deliveries` : "No minimum commitment";
+    return `${discount} · ${delivery} · ${commitment} · ${p.delivery_lock_days} day lock`;
+  };
+  const setPolicyField = (key, value) => setPolicy(p => ({ ...(p || {}), [key]: value }));
+  function showSubError(title, text) {
+    return Swal.fire({ title, text, icon: "error", confirmButtonColor: "#FF9100", background: "#fff" });
+  }
+  function showSubSuccess(title, text) {
+    return Swal.fire({ title, text, icon: "success", timer: text ? undefined : 1300, showConfirmButton: Boolean(text), confirmButtonColor: "#FF9100", background: "#fff" });
+  }
+  async function askSubText({ title, text, inputValue = "", placeholder = "", required = true, minLength = 0, confirmButtonText = "Continue" }) {
+    const result = await Swal.fire({
+      title,
+      text,
+      input: "textarea",
+      inputValue,
+      inputPlaceholder: placeholder,
+      showCancelButton: true,
+      confirmButtonText,
+      cancelButtonText: "Cancel",
+      confirmButtonColor: "#FF9100",
+      background: "#fff",
+      inputValidator: value => {
+        const trimmed = String(value || "").trim();
+        if (required && !trimmed) return "This field is required.";
+        if (minLength && trimmed.length < minLength) return `Please enter at least ${minLength} characters.`;
+        return null;
+      },
+    });
+    return result.isConfirmed ? String(result.value || "").trim() : null;
+  }
+  async function askSubNumber({ title, text, inputValue = 1, min = 1, max = 6, confirmButtonText = "Continue" }) {
+    const result = await Swal.fire({
+      title,
+      text,
+      input: "number",
+      inputValue,
+      inputAttributes: { min, max, step: 1 },
+      showCancelButton: true,
+      confirmButtonText,
+      cancelButtonText: "Cancel",
+      confirmButtonColor: "#FF9100",
+      background: "#fff",
+      inputValidator: value => {
+        const n = Number(value);
+        if (!Number.isInteger(n) || n < min || n > max) return `Enter a number from ${min} to ${max}.`;
+        return null;
+      },
+    });
+    return result.isConfirmed ? Number(result.value) : null;
+  }
+  async function savePolicy() {
+    const res = await window.mpApi.fetch("/admin/subscription-policy", { method: "PATCH", body: JSON.stringify(policy) }).catch(() => null);
+    if (!res?.ok) { showSubError("Could not save policy", res?.error?.message || "Could not save subscription policy."); return; }
+    setPolicy(res.data.policy);
+    showSubSuccess("Subscription policy saved");
+  }
 
   async function openSub(s) {
     setSelected(s);
@@ -1718,14 +1793,30 @@ function Subscriptions() {
       admin_note: form.admin_note || undefined,
     };
     const res = await window.mpApi.fetch('/admin/subscriptions', { method: 'POST', body: JSON.stringify(body) }).catch(() => null);
-    if (!res?.ok) { alert(res?.error?.message || "Could not create subscription."); return; }
+    if (!res?.ok) { showSubError("Could not create subscription", res?.error?.message || "Please check the subscription details."); return; }
     setCreateOpen(false);
     setForm(emptyForm);
     await loadSubs(subTab);
+    showSubSuccess("Subscription created");
   }
 
   async function saveSubscription() {
     if (!selected?.id) return;
+    let overrideReason;
+    const riskyCommitmentEdit = selected.commitment?.isUnderCommitment && (
+      Number(editForm.qty || 1) < Number(selected.initial_qty || selected.qty) ||
+      (editForm.product_id && editForm.product_id !== (selected.product_id || ""))
+    );
+    if (riskyCommitmentEdit) {
+      overrideReason = await askSubText({
+        title: "Override minimum commitment?",
+        text: "This edit may bypass the customer's current commitment rules. Enter the business reason.",
+        inputValue: actionNote || "",
+        minLength: Number(policy?.override_reason_min_length || 8),
+        confirmButtonText: "Apply Override",
+      });
+      if (overrideReason === null) return;
+    }
     const body = {
       product_id: editForm.product_id || null,
       qty: Number(editForm.qty || 1),
@@ -1734,22 +1825,24 @@ function Subscriptions() {
       next_delivery_date: editForm.next_delivery_date || undefined,
       admin_note: editForm.admin_note || undefined,
       payment_status: editForm.payment_status,
+      override_reason: overrideReason || undefined,
     };
     const res = await window.mpApi.fetch(`/admin/subscriptions/${selected.id}`, { method: 'PATCH', body: JSON.stringify(body) }).catch(() => null);
-    if (!res?.ok) { alert(res?.error?.message || "Could not update subscription."); return; }
+    if (!res?.ok) { showSubError("Could not update subscription", res?.error?.message || "Please check the subscription details."); return; }
     setSelected(res.data);
     await refreshSelected(selected.id);
+    showSubSuccess("Subscription updated");
   }
 
   async function subAction(action) {
     if (!selected?.id) return;
     let body = {};
     if (action === "pause") {
-      const months = Number(prompt("Pause for how many months? 1-6", "1") || 1);
+      const months = await askSubNumber({ title: "Pause subscription", text: "Pause for how many months?", inputValue: 1, min: 1, max: 6, confirmButtonText: "Pause" });
       if (!months) return;
       body = { months, note: actionNote || undefined };
     } else if (action === "cancel") {
-      const reason = prompt("Cancel reason", actionNote || "");
+      const reason = await askSubText({ title: "Cancel subscription", text: "Enter the cancellation reason.", inputValue: actionNote || "", placeholder: "Customer requested cancellation", confirmButtonText: "Cancel Subscription" });
       if (reason === null) return;
       body = { reason };
     } else if (action === "resume") {
@@ -1759,9 +1852,22 @@ function Subscriptions() {
     } else if (action === "create-order") {
       body = { note: actionNote || undefined };
     }
+    if (selected.commitment?.isUnderCommitment && ["pause", "cancel", "skip-next"].includes(action)) {
+      const reason = await askSubText({
+        title: "Minimum commitment is active",
+        text: "This action requires an admin override reason.",
+        inputValue: actionNote || "",
+        minLength: Number(policy?.override_reason_min_length || 8),
+        confirmButtonText: "Apply Override",
+      });
+      if (reason === null) return;
+      if (action === "cancel") body.reason = body.reason || reason;
+      body.override_reason = reason;
+    }
     const res = await window.mpApi.fetch(`/admin/subscriptions/${selected.id}/${action}`, { method: 'POST', body: JSON.stringify(body) }).catch(() => null);
-    if (!res?.ok) { alert(res?.error?.message || "Subscription action failed."); return; }
-    if (action === "create-order") alert(`Order ${res.data.order_ref} created.`);
+    if (!res?.ok) { showSubError("Subscription action failed", res?.error?.message || "Please try again."); return; }
+    if (action === "create-order") showSubSuccess("Order created", `Order ${res.data.order_ref} was created from this subscription.`);
+    else showSubSuccess("Subscription updated");
     await refreshSelected(selected.id);
   }
 
@@ -1782,7 +1888,79 @@ function Subscriptions() {
         ))}
       </div>
 
-      {loading ? (
+      {subTab === "policy" ? (
+        <div className="col-gap" style={{ gap: 12 }}>
+          <div className="card">
+            <div className="row-between mb12">
+              <div>
+                <div className="eyebrow">Current Policy</div>
+                <div className="text-sm text-muted">{policySummary(policy)}</div>
+              </div>
+              {can(user, "subscriptions.manage_policy") && <button className="btn btn-primary btn-sm" onClick={savePolicy}>Save Policy</button>}
+            </div>
+            {loading || !policy ? <div className="text-muted text-sm">Loading…</div> : (
+              <div className="col-gap" style={{ gap: 16 }}>
+                <div>
+                  <div className="eyebrow mb10">General</div>
+                  <div className="grid-2">
+                    <label className="input-group"><span className="input-label">Enabled</span><select className="select" value={policy.subscription_enabled ? "true" : "false"} onChange={e => setPolicyField("subscription_enabled", e.target.value === "true")}><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
+                    <label className="input-group"><span className="input-label">Title</span><input className="input" value={policy.subscription_title || ""} onChange={e => setPolicyField("subscription_title", e.target.value)} /></label>
+                    <label className="input-group" style={{ gridColumn: "1/-1" }}><span className="input-label">Customer Note</span><textarea className="input" rows={2} value={policy.customer_policy_note || ""} onChange={e => setPolicyField("customer_policy_note", e.target.value)} /></label>
+                  </div>
+                </div>
+                <div>
+                  <div className="eyebrow mb10">Discount</div>
+                  <div className="grid-2">
+                    <label className="input-group"><span className="input-label">Discount Enabled</span><select className="select" value={policy.discount_enabled ? "true" : "false"} onChange={e => setPolicyField("discount_enabled", e.target.value === "true")}><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
+                    <label className="input-group"><span className="input-label">Type</span><select className="select" value={policy.discount_type} onChange={e => setPolicyField("discount_type", e.target.value)}><option value="percent">Percent</option><option value="flat">Flat</option></select></label>
+                    <label className="input-group"><span className="input-label">Value</span><input className="input" type="number" value={policy.discount_value ?? 0} onChange={e => setPolicyField("discount_value", Number(e.target.value))} /></label>
+                    <label className="input-group"><span className="input-label">Max Discount</span><input className="input" type="number" value={policy.max_discount_amount ?? ""} onChange={e => setPolicyField("max_discount_amount", e.target.value === "" ? null : Number(e.target.value))} /></label>
+                    <label className="input-group"><span className="input-label">Applies To</span><select className="select" value={policy.discount_applies_to} onChange={e => setPolicyField("discount_applies_to", e.target.value)}><option value="subscribed_product_only">Subscribed product only</option><option value="entire_subscription_order">Entire subscription order</option></select></label>
+                    <label className="input-group"><span className="input-label">Exclude Discounted Products</span><select className="select" value={policy.exclude_discounted_products ? "true" : "false"} onChange={e => setPolicyField("exclude_discounted_products", e.target.value === "true")}><option value="false">No</option><option value="true">Yes</option></select></label>
+                  </div>
+                </div>
+                <div>
+                  <div className="eyebrow mb10">Delivery</div>
+                  <div className="grid-2">
+                    <label className="input-group"><span className="input-label">Free Delivery</span><select className="select" value={policy.free_delivery_enabled ? "true" : "false"} onChange={e => setPolicyField("free_delivery_enabled", e.target.value === "true")}><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
+                    <label className="input-group"><span className="input-label">Scope</span><select className="select" value={policy.free_delivery_scope} onChange={e => setPolicyField("free_delivery_scope", e.target.value)}><option value="all_zones">All zones</option><option value="inside_dhaka_only">Inside Dhaka only</option><option value="selected_zones">Selected zones</option><option value="none">None</option></select></label>
+                    <label className="input-group"><span className="input-label">Fee Type</span><select className="select" value={policy.subscription_delivery_fee_type} onChange={e => setPolicyField("subscription_delivery_fee_type", e.target.value)}><option value="free">Free</option><option value="fixed">Fixed</option><option value="normal_delivery_rules">Normal delivery rules</option></select></label>
+                    <label className="input-group"><span className="input-label">Fixed Fee</span><input className="input" type="number" value={policy.fixed_delivery_fee ?? ""} onChange={e => setPolicyField("fixed_delivery_fee", e.target.value === "" ? null : Number(e.target.value))} /></label>
+                  </div>
+                </div>
+                <div>
+                  <div className="eyebrow mb10">Commitment</div>
+                  <div className="grid-2">
+                    <label className="input-group"><span className="input-label">Minimum Commitment</span><select className="select" value={policy.minimum_commitment_enabled ? "true" : "false"} onChange={e => setPolicyField("minimum_commitment_enabled", e.target.value === "true")}><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
+                    <label className="input-group"><span className="input-label">Required Deliveries</span><input className="input" type="number" min="0" max="12" value={policy.minimum_commitment_deliveries ?? 2} onChange={e => setPolicyField("minimum_commitment_deliveries", Number(e.target.value))} /></label>
+                    <label className="input-group"><span className="input-label">Required Days</span><input className="input" type="number" value={policy.minimum_commitment_days ?? 0} onChange={e => setPolicyField("minimum_commitment_days", Number(e.target.value))} /></label>
+                    <label className="input-group"><span className="input-label">Basis</span><select className="select" value={policy.commitment_basis} onChange={e => setPolicyField("commitment_basis", e.target.value)}><option value="fulfilled_deliveries">Fulfilled deliveries</option><option value="fulfilled_deliveries_and_days">Fulfilled deliveries and days</option></select></label>
+                    {["pause_during_commitment","skip_during_commitment","quantity_decrease_during_commitment","product_downgrade_during_commitment"].map(k => <label key={k} className="input-group"><span className="input-label">{fmtStatus(k.replace(/_/g, " "))}</span><select className="select" value={policy[k]} onChange={e => setPolicyField(k, e.target.value)}><option value="blocked">Blocked</option><option value="admin_approval_only">Admin approval only</option><option value="allowed">Allowed</option></select></label>)}
+                  </div>
+                </div>
+                <div>
+                  <div className="eyebrow mb10">Lock Rules & Override</div>
+                  <div className="grid-2">
+                    <label className="input-group"><span className="input-label">Delivery Lock Days</span><input className="input" type="number" min="0" max="14" value={policy.delivery_lock_days ?? 3} onChange={e => setPolicyField("delivery_lock_days", Number(e.target.value))} /></label>
+                    <label className="input-group"><span className="input-label">Admin Override</span><select className="select" value={policy.allow_admin_commitment_override ? "true" : "false"} onChange={e => setPolicyField("allow_admin_commitment_override", e.target.value === "true")}><option value="true">Allowed</option><option value="false">Disabled</option></select></label>
+                    {["lock_cancel_before_delivery","lock_pause_before_delivery","lock_skip_before_delivery","lock_plan_edit_before_delivery","require_admin_override_reason"].map(k => <label key={k} className="input-group"><span className="input-label">{fmtStatus(k.replace(/_/g, " "))}</span><select className="select" value={policy[k] ? "true" : "false"} onChange={e => setPolicyField(k, e.target.value === "true")}><option value="true">Yes</option><option value="false">No</option></select></label>)}
+                    <label className="input-group"><span className="input-label">Reason Min Length</span><input className="input" type="number" value={policy.override_reason_min_length ?? 8} onChange={e => setPolicyField("override_reason_min_length", Number(e.target.value))} /></label>
+                  </div>
+                </div>
+                <div>
+                  <div className="eyebrow mb10">Payment & Product</div>
+                  <div className="grid-2">
+                    <label className="input-group"><span className="input-label">Subscription Order Payment</span><select className="select" value={policy.subscription_order_payment_type} onChange={e => setPolicyField("subscription_order_payment_type", e.target.value)}><option value="cod">COD</option><option value="saved_default">Saved default</option><option value="admin_select">Admin select</option></select><div className="input-note">This store currently uses COD for monthly subscription delivery.</div></label>
+                    <label className="input-group"><span className="input-label">Payment Issue Behavior</span><select className="select" value={policy.payment_issue_behavior} onChange={e => setPolicyField("payment_issue_behavior", e.target.value)}><option value="mark_issue_only">Mark issue only</option><option value="pause_until_resolved">Pause until resolved</option><option value="block_next_order_creation">Block next order creation</option></select></label>
+                    <label className="input-group"><span className="input-label">Min Qty</span><input className="input" type="number" min="1" max="20" value={policy.min_qty ?? 1} onChange={e => setPolicyField("min_qty", Number(e.target.value))} /></label>
+                    <label className="input-group"><span className="input-label">Max Qty</span><input className="input" type="number" min="1" max="20" value={policy.max_qty ?? 20} onChange={e => setPolicyField("max_qty", Number(e.target.value))} /></label>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : loading ? (
         <div style={{ textAlign: "center", padding: "40px 0", color: "rgba(87,31,41,.4)" }}>
           <i className="fa fa-spinner fa-spin" style={{ fontSize: 24 }} />
         </div>
@@ -1838,6 +2016,14 @@ function Subscriptions() {
                   <span className="badge badge-orange">{fmtStatus(s.payment_status.replace(/_/g, " "))}</span>
                 </div>
               )}
+              <div className="row-between text-sm mt4">
+                <span className="text-muted">Commitment</span>
+                <span className={`badge ${s.commitment?.isUnderCommitment ? "badge-orange" : "badge-green"}`}>
+                  {s.commitment?.isUnderCommitment
+                    ? `${s.commitment.fulfilledCount} of ${s.commitment.requiredDeliveries} fulfilled`
+                    : "Completed"}
+                </span>
+              </div>
             </div>
           ))}
         </div>
@@ -1848,6 +2034,7 @@ function Subscriptions() {
           title="Create Subscription"
           body={
             <div className="grid-2">
+              <div className="input-note" style={{ gridColumn: "1/-1" }}>{policySummary(policy)}</div>
               <div className="input-group"><label className="input-label">Customer Phone</label><input className="input" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} /></div>
               <div className="input-group"><label className="input-label">Product</label><select className="select" value={form.product_id} onChange={e => setForm(f => ({ ...f, product_id: e.target.value }))}><option value="">Default subscription product</option>{(adminProducts || []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
               <div className="input-group"><label className="input-label">Quantity</label><input className="input" type="number" min="1" max="20" value={form.qty} onChange={e => setForm(f => ({ ...f, qty: e.target.value }))} /></div>
@@ -1880,6 +2067,12 @@ function Subscriptions() {
             <div className="row-between mb8 text-sm"><span className="text-muted">Next Delivery</span><span>{fmtDt(selected.next_delivery_date)}</span></div>
             <div className="row-between mb8 text-sm"><span className="text-muted">Status</span><StatusBadge status={selected.status} /></div>
             <div className="row-between mb16 text-sm"><span className="text-muted">Payment</span><span className="badge badge-gray">{fmtStatus((selected.payment_status || "ok").replace(/_/g, " "))}</span></div>
+            <div className="row-between mb8 text-sm"><span className="text-muted">Commitment</span><span className={`badge ${selected.commitment?.isUnderCommitment ? "badge-orange" : "badge-green"}`}>{selected.commitment?.isUnderCommitment ? "Under commitment" : "Completed"}</span></div>
+            <div className="text-sm text-muted mb16">
+              {selected.commitment?.isUnderCommitment
+                ? `${selected.commitment.fulfilledCount} of ${selected.commitment.requiredDeliveries} fulfilled. ${selected.commitment.reason || ""}`
+                : "Minimum commitment completed. Standard subscription actions are available before delivery lock."}
+            </div>
             <div className="divider" />
 
             {can(user, "subscriptions.edit") && (
