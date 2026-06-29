@@ -20,6 +20,10 @@ npm install --omit=dev
 echo "[deploy] running database migrations"
 node src/db/migrate.js
 
+echo "[deploy] building frontend JSX"
+cd "$APP_DIR"
+node scripts/build-jsx.js
+
 echo "[deploy] syncing frontend files to $WEB_ROOT"
 sudo mkdir -p "$WEB_ROOT"
 sudo rsync -a --no-owner --no-group \

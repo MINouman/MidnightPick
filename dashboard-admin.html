@@ -53,7 +53,7 @@
   <script src="mp-api.js"></script>
   <script type="text/babel" src="loading-screen.jsx"></script>
   <script type="text/babel" src="markdown-editor.jsx"></script>
-  <script type="text/babel" src="dashboard-admin.jsx?v=20260622-product-discounts"></script>
+  <script type="text/babel" src="dashboard-admin.jsx?v=20260626-bkash-admin-actions"></script>
 
   <!-- ═══════════════════════════════════════════════════════
        MOBILE VIEW  (window.innerWidth < 768)
@@ -3986,7 +3986,7 @@ function Products() {
   const fileRef = useRef(null);
   const activeImgIdx = useRef(0);
 
-  const emptyProd = { name: "", description: "", price: "", stock: "", qty: "", unit: "g", status: "Active", images: [], category: "", badge: "", roast: "", origin: "" };
+  const emptyProd = { name: "", description: "", price: "", stock: "", qty: "", unit: "g", status: "Active", images: [], category: "", badge: "", roast: "", origin: "", discount_enabled: false, discount_type: "flat", discount_value: "", discount_max_qty: "", discount_max_orders: "", discount_label: "" };
   const [form, setForm] = useState(emptyProd);
   const [blendMode, setBlendMode]       = useState("single"); // "single" | "blend"
   const [singleVariety, setSingleVariety] = useState("Robusta");
@@ -4034,7 +4034,24 @@ function Products() {
   }
 
   function openEditProduct(p) {
-    setForm({ ...p, price: String(p.price), stock: String(p.stock), qty: p.qty ? String(p.qty) : "", unit: p.unit || "g", images: p.images || (p.image ? [p.image] : []), category: p.category || "", badge: p.badge || "", roast: p.roast || "", origin: p.origin || "" });
+    setForm({
+      ...p,
+      price: String(p.price),
+      stock: String(p.stock),
+      qty: p.qty ? String(p.qty) : "",
+      unit: p.unit || "g",
+      images: p.images || (p.image ? [p.image] : []),
+      category: p.category || "",
+      badge: p.badge || "",
+      roast: p.roast || "",
+      origin: p.origin || "",
+      discount_enabled: !!p.discount_enabled,
+      discount_type: p.discount_type || "flat",
+      discount_value: p.discount_value != null ? String(p.discount_value) : "",
+      discount_max_qty: p.discount_max_qty != null ? String(p.discount_max_qty) : "",
+      discount_max_orders: p.discount_max_orders != null ? String(p.discount_max_orders) : "",
+      discount_label: p.discount_label || "",
+    });
     const mode = p.blend && p.blend.includes("%") ? "blend" : "single";
     setBlendMode(mode);
     if (mode === "single") {
@@ -4050,12 +4067,20 @@ function Products() {
 
   async function saveProduct() {
     if (!form.name || !form.price || !(form.images?.length)) return;
+    const maxDiscountQty = Number.parseInt(form.discount_max_qty, 10);
+    const maxDiscountOrders = Number.parseInt(form.discount_max_orders, 10);
     const body = {
       name:   form.name,
       price:  parseFloat(form.price) || 0,
       stock:  parseInt(form.stock) || 0,
       status: form.status,
       images: form.images || [],
+      discount_enabled: !!form.discount_enabled,
+      discount_type: form.discount_type || "flat",
+      discount_value: parseFloat(form.discount_value) || 0,
+      discount_max_qty: maxDiscountQty > 0 ? maxDiscountQty : null,
+      discount_max_orders: maxDiscountOrders > 0 ? maxDiscountOrders : null,
+      discount_label: form.discount_label || null,
     };
     if (form.description) body.description = form.description;
     const qtyVal = parseInt(form.qty);
@@ -4274,6 +4299,42 @@ function Products() {
                   <label className="input-label">Stock Quantity</label>
                   <input className="input" type="number" min="0" placeholder="100" value={form.stock} onChange={e => setForm(f => ({ ...f, stock: e.target.value }))} />
                 </div>
+              </div>
+              <div className="input-group" style={{ padding: 12, borderRadius: 8, border: "1px solid rgba(255,160,0,.22)", background: "rgba(255,160,0,.06)" }}>
+                <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, cursor: "pointer" }}>
+                  <span>
+                    <span className="input-label" style={{ marginBottom: 3 }}>Product Discount</span>
+                    <span className="text-xs text-muted">Shown on product pages and applied at checkout.</span>
+                  </span>
+                  <input type="checkbox" checked={!!form.discount_enabled} onChange={e => setForm(f => ({ ...f, discount_enabled: e.target.checked }))} />
+                </label>
+                {form.discount_enabled && (
+                  <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <div>
+                      <label className="input-label">Discount Type</label>
+                      <select className="select" value={form.discount_type} onChange={e => setForm(f => ({ ...f, discount_type: e.target.value }))}>
+                        <option value="flat">Flat ৳ off</option>
+                        <option value="percent">Percent off</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="input-label">{form.discount_type === "percent" ? "Value (%)" : "Value (৳)"}</label>
+                      <input className="input" type="number" min="0" step="1" placeholder={form.discount_type === "percent" ? "15" : "100"} value={form.discount_value} onChange={e => setForm(f => ({ ...f, discount_value: e.target.value }))} />
+                    </div>
+                    <div>
+                      <label className="input-label">Max Discount Qty</label>
+                      <input className="input" type="number" min="1" step="1" placeholder="No cap" value={form.discount_max_qty} onChange={e => setForm(f => ({ ...f, discount_max_qty: e.target.value }))} />
+                    </div>
+                    <div>
+                      <label className="input-label">Max Discount Orders Per Phone</label>
+                      <input className="input" type="number" min="1" step="1" placeholder="No cap" value={form.discount_max_orders} onChange={e => setForm(f => ({ ...f, discount_max_orders: e.target.value }))} />
+                    </div>
+                    <div>
+                      <label className="input-label">Offer Label</label>
+                      <input className="input" placeholder="Limited offer" value={form.discount_label} onChange={e => setForm(f => ({ ...f, discount_label: e.target.value }))} />
+                    </div>
+                  </div>
+                )}
               </div>
               <div className="input-group">
                 <label className="input-label">Quantity (grams)</label>

@@ -435,7 +435,7 @@ function OrdersTab() {
               {(order.items || []).map((item, i) => (
                 <div key={i} className="order-item-row">
                   <span>{item.name} <span className="text-muted">×{item.qty}</span></span>
-                  <span style={{ fontWeight: 600 }}>৳{(item.unit_price * item.qty)?.toLocaleString()}</span>
+                  <span style={{ fontWeight: 600 }}>৳{Number(item.subtotal ?? item.unit_price * item.qty).toLocaleString()}</span>
                 </div>
               ))}
 

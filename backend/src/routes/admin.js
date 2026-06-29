@@ -3,15 +3,14 @@
 const crypto = require('crypto')
 const { redis } = require('../config/redis')
 const { query, withTransaction } = require('../config/db')
-const { sendOrderConfirmation, sendOrderShipped }  = require('../services/sms')
+const { sendOrderConfirmation }  = require('../services/sms')
 const { getRateLimitConfig } = require('../config/rate-limits')
 const { awardPointsForDeliveredOrder, reversePoints, adjustPoints } = require('../services/points')
 const { syncCommissionForDeliveredOrder, reverseCommissionForOrder, validateCoupon, recordCouponUsage, restoreCouponUsageForOrder } = require('../services/crew')
 const { toEndOfDayDhaka } = require('../services/dates')
 const { normalizeBdMobile } = require('../services/phone')
 const { generateOrderRef } = require('../services/orders')
-const { createOrder, mapSteadfastStatusToOrderStatus } = require('../services/steadfast')
-const { getWeightBasedFee } = require('../services/delivery')
+const { createOrder, formatRecipientAddress, mapSteadfastStatusToOrderStatus } = require('../services/steadfast')
 const { sendOrderOtp, verifyOrderOtp, getOrderOtpStatus } = require('../services/order-otp')
 const { checkAndIncrementDailyLimit, getDailyCount, resetDailyCount, getPhoneOverride, DEFAULT_DAILY_LIMIT } = require('../services/otp-daily-limit')
 const { getFinancialSummary } = require('../services/financials')
@@ -24,7 +23,7 @@ const {
 
 const PRODUCT_PRICE_RETURNING = `
   id, sku, name, description, category, badge, status, price,
-  discount_enabled, discount_type, discount_value, discount_max_qty, discount_label,
+  discount_enabled, discount_type, discount_value, discount_max_qty, discount_max_orders, discount_label,
   stock, qty, unit, roast, origin, blend, process, images, created_at
 `
 
@@ -69,7 +68,8 @@ module.exports = async function adminRoutes(app) {
     const dataParams = [...params, limit, offset]
     const { rows } = await query(
       `SELECT o.id, o.order_ref, o.status, o.total, o.subtotal,
-              o.discount_amount, o.coupon_code, o.payment_type,
+              o.discount_amount, o.delivery_fee, o.coupon_code, o.payment_type,
+              o.payment_number, o.bkash_txn_id, o.address_snapshot,
               o.points_earned, o.steadfast_consignment_id, o.created_at,
               COALESCE(o.customer_name, u.name)  AS customer_name,
               COALESCE(o.customer_phone, u.phone) AS customer_phone,
@@ -362,6 +362,50 @@ module.exports = async function adminRoutes(app) {
     return { ok: true, data: { sms_sent: true } }
   })
 
+  // POST /admin/orders/:id/send-bkash-confirmation-sms — manual confirmation for verified bKash payments
+  app.post('/orders/:id/send-bkash-confirmation-sms', {
+    schema: {
+      params: { type: 'object', properties: { id: { type: 'string', format: 'uuid' } }, required: ['id'] },
+    },
+  }, async (req) => {
+    const orderId = req.params.id
+    const { rows: [order] } = await query(
+      `SELECT id, order_ref, customer_phone, total, payment_type, bkash_txn_id
+       FROM orders WHERE id = $1`,
+      [orderId]
+    )
+    if (!order) throw { code: 'NOT_FOUND', message: 'Order not found.' }
+    if (order.payment_type !== 'bkash') throw { code: 'VALIDATION_ERROR', message: 'This action is only for bKash orders.' }
+    if (!order.customer_phone) throw { code: 'INCOMPLETE_ORDER', message: 'Order missing customer phone.' }
+
+    const { sendSms } = require('../services/sms')
+    const msg = `Your bKash payment for order ${order.order_ref} has been verified. Total: ৳${order.total}. Track your order with ID ${order.order_ref}. - Midnight Pick`
+    await sendSms(order.customer_phone, msg, 'bkash_payment_confirmed')
+    return { ok: true, data: { sms_sent: true } }
+  })
+
+  // POST /admin/orders/:id/send-bkash-issue-sms — manual issue notice for bKash payments needing correction
+  app.post('/orders/:id/send-bkash-issue-sms', {
+    schema: {
+      params: { type: 'object', properties: { id: { type: 'string', format: 'uuid' } }, required: ['id'] },
+    },
+  }, async (req) => {
+    const orderId = req.params.id
+    const { rows: [order] } = await query(
+      `SELECT id, order_ref, customer_phone, payment_type, bkash_txn_id
+       FROM orders WHERE id = $1`,
+      [orderId]
+    )
+    if (!order) throw { code: 'NOT_FOUND', message: 'Order not found.' }
+    if (order.payment_type !== 'bkash') throw { code: 'VALIDATION_ERROR', message: 'This action is only for bKash orders.' }
+    if (!order.customer_phone) throw { code: 'INCOMPLETE_ORDER', message: 'Order missing customer phone.' }
+
+    const { sendSms } = require('../services/sms')
+    const msg = `We could not verify the bKash payment for order ${order.order_ref}. Please check your transaction ID${order.bkash_txn_id ? ` (${order.bkash_txn_id})` : ''} or contact Midnight Pick support.`
+    await sendSms(order.customer_phone, msg, 'bkash_payment_issue')
+    return { ok: true, data: { sms_sent: true } }
+  })
+
   // POST /admin/orders/:id/handoff-to-steadfast — send order to delivery partner
   app.post('/orders/:id/handoff-to-steadfast', {
     schema: {
@@ -372,7 +416,7 @@ module.exports = async function adminRoutes(app) {
 
     const result = await withTransaction(async (client) => {
       const { rows: orderRows } = await client.query(
-        `SELECT id, order_ref, status, total,
+        `SELECT id, order_ref, status, total, delivery_fee, payment_type,
                 customer_name, customer_phone, address_snapshot, notes, user_id
          FROM orders
          WHERE id = $1
@@ -397,7 +441,7 @@ module.exports = async function adminRoutes(app) {
       const address = order.address_snapshot
         ? (typeof order.address_snapshot === 'string' ? JSON.parse(order.address_snapshot) : order.address_snapshot)
         : {}
-      const addressLine = [address.line1, address.line2, address.city, address.district].filter(Boolean).join(', ')
+      const addressLine = formatRecipientAddress(address)
 
       if (!order.customer_phone || !addressLine) {
         throw {
@@ -406,26 +450,7 @@ module.exports = async function adminRoutes(app) {
         }
       }
 
-      // Calculate delivery fee: weight-based (inside vs outside Dhaka)
-      const district = address.district || address.city || 'Dhaka'
-
-      // Total weight in grams from order items × product weight (p.qty in grams)
-      const { rows: weightRows } = await client.query(
-        `SELECT COALESCE(SUM(oi.qty * COALESCE(p.qty, 95)), 95) AS total_weight_grams
-         FROM order_items oi
-         LEFT JOIN products p ON p.id = oi.product_id
-         WHERE oi.order_id = $1`,
-        [orderId]
-      )
-      const weightGrams = Number(weightRows[0]?.total_weight_grams) || 95
-      const deliveryFee = getWeightBasedFee(district, weightGrams)
-      const codAmount   = Number(order.total) + deliveryFee
-
-      // Persist delivery fee on the order for accounting
-      await client.query(
-        `UPDATE orders SET delivery_fee = $1, total = $2 WHERE id = $3`,
-        [deliveryFee, codAmount, orderId]
-      )
+      const codAmount = order.payment_type === 'bkash' ? 0 : Number(order.total)
 
       // Call Steadfast API to create shipment
       let steadfastResponse
@@ -466,20 +491,6 @@ module.exports = async function adminRoutes(app) {
 
       return updated[0]
     })
-
-    // Send SMS notification after transaction completes
-    try {
-      const { rows } = await query(
-        `SELECT customer_phone FROM orders WHERE id = $1`,
-        [orderId]
-      )
-      if (rows[0]?.customer_phone) {
-        await sendOrderShipped(rows[0].customer_phone, result.order_ref)
-      }
-    } catch (err) {
-      console.error('[admin] Failed to send shipped SMS:', err.message)
-      // Don't fail the request if SMS fails
-    }
 
     return { ok: true, data: result }
   })
@@ -938,7 +949,7 @@ module.exports = async function adminRoutes(app) {
       return o
     })
 
-    if (customer_phone) {
+    if (customer_phone && paymentEnum === 'cod') {
       sendOrderConfirmation(customer_phone, order.order_ref, order.total).catch(err =>
         app.log.error({ err }, '[admin-order] SMS send failed')
       )
@@ -978,6 +989,7 @@ module.exports = async function adminRoutes(app) {
           discount_type:    { type: 'string', enum: ['flat', 'percent'] },
           discount_value:   { type: 'number', minimum: 0 },
           discount_max_qty: { type: ['integer', 'null'], minimum: 1 },
+          discount_max_orders: { type: ['integer', 'null'], minimum: 1 },
           discount_label:   { type: ['string', 'null'], maxLength: 100 },
           stock:       { type: 'integer', minimum: 0 },
           qty:         { type: 'integer', minimum: 1 },
@@ -997,17 +1009,19 @@ module.exports = async function adminRoutes(app) {
   }, async (req, reply) => {
     const { name, description, price, stock = 0, qty, unit, status = 'Active', images = [],
             category, badge, roast, origin, blend, process,
-            discount_enabled = false, discount_type = 'flat', discount_value = 0, discount_max_qty, discount_label } = req.body
+            discount_enabled = false, discount_type = 'flat', discount_value = 0, discount_max_qty, discount_max_orders, discount_label } = req.body
+    const safePrice = Math.round(Number(price))
+    const safeDiscountValue = Math.round(Number(discount_value || 0))
     const { rows } = await query(
       `INSERT INTO products (name, description, price, stock, qty, unit, status, images,
                              category, badge, roast, origin, blend, process,
-                             discount_enabled, discount_type, discount_value, discount_max_qty, discount_label)
+                             discount_enabled, discount_type, discount_value, discount_max_qty, discount_max_orders, discount_label)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, $13, $14,
-               $15, $16, $17, $18, $19)
+               $15, $16, $17, $18, $19, $20)
        RETURNING ${PRODUCT_PRICE_RETURNING}`,
-      [name, description || null, price, stock, qty || null, unit || null, status, JSON.stringify(images),
+      [name, description || null, safePrice, stock, qty || null, unit || null, status, JSON.stringify(images),
        category || null, badge || null, roast || null, origin || null, blend || null, process || null,
-       !!discount_enabled, discount_type || 'flat', discount_value || 0, discount_max_qty || null, discount_label || null]
+       !!discount_enabled, discount_type || 'flat', safeDiscountValue, discount_max_qty || null, discount_max_orders || null, discount_label || null]
     )
     return reply.code(201).send({ ok: true, data: rows[0] })
   })
@@ -1026,6 +1040,7 @@ module.exports = async function adminRoutes(app) {
           discount_type:    { type: 'string', enum: ['flat', 'percent'] },
           discount_value:   { type: 'number', minimum: 0 },
           discount_max_qty: { type: ['integer', 'null'], minimum: 1 },
+          discount_max_orders: { type: ['integer', 'null'], minimum: 1 },
           discount_label:   { type: ['string', 'null'], maxLength: 100 },
           stock:       { type: 'integer', minimum: 0 },
           qty:         { type: 'integer', minimum: 1 },
@@ -1046,7 +1061,7 @@ module.exports = async function adminRoutes(app) {
     const fields = req.body
     const allowed = ['name', 'description', 'price', 'stock', 'qty', 'unit', 'status', 'images',
                      'category', 'badge', 'roast', 'origin', 'blend', 'process',
-                     'discount_enabled', 'discount_type', 'discount_value', 'discount_max_qty', 'discount_label']
+                     'discount_enabled', 'discount_type', 'discount_value', 'discount_max_qty', 'discount_max_orders', 'discount_label']
     const sets = []
     const params = []
     for (const key of allowed) {
@@ -1054,6 +1069,12 @@ module.exports = async function adminRoutes(app) {
         if (key === 'images') {
           params.push(JSON.stringify(fields[key] || []))
           sets.push(`${key} = $${params.length}::jsonb`)
+        } else if (key === 'price') {
+          params.push(Math.round(Number(fields[key])))
+          sets.push(`${key} = $${params.length}`)
+        } else if (key === 'discount_value') {
+          params.push(Math.round(Number(fields[key] || 0)))
+          sets.push(`${key} = $${params.length}`)
         } else {
           params.push(fields[key])
           sets.push(`${key} = $${params.length}`)

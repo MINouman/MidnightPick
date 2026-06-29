@@ -7,9 +7,12 @@ const { reversePoints } = require('./points')
 const { applyPendingClaim } = require('./tiers')
 
 const crypto = require('crypto')
-const { calculateDeliveryFee, getFallbackDeliveryFee } = require('./delivery')
+const { getWeightBasedFee } = require('./delivery')
 
 // ── Internal helpers ────────────────────────────────────────────────────────
+
+const BKASH_TXN_ID_PATTERN = /^[A-Z0-9]{10}$/
+const BKASH_TXN_ID_PATTERN_MESSAGE = 'bKash transaction ID must be exactly 10 uppercase letters or numbers.'
 
 async function validateAndLockCoupon(client, code, subtotal, customerPhone = null, userId = null) {
   const res = await validateCoupon(client, { code, subtotal, customerPhone, userId, lock: true })
@@ -23,7 +26,7 @@ async function lookupVariants(client, items, lock = false) {
 
   const { rows } = await client.query(
     `SELECT pv.id, pv.price, pv.stock, pv.label,
-            p.name AS product_name, p.id AS product_id
+            p.name AS product_name, p.id AS product_id, p.qty AS product_weight_grams
      FROM   product_variants pv
      JOIN   products p ON p.id = pv.product_id
      WHERE  pv.id IN (${placeholders})
@@ -46,6 +49,55 @@ async function lookupVariants(client, items, lock = false) {
   }
 
   return map
+}
+
+function calculateCodFee(productPayable) {
+  return Math.round(Math.max(0, Number(productPayable || 0)) * 0.01)
+}
+
+function calculateCheckoutDeliveryCharge(location, weightGrams, productPayable, includeCodFee = true) {
+  const shippingCost = getWeightBasedFee(location || 'Dhaka', Math.max(1, Math.round(Number(weightGrams || 95))))
+  const codFee = includeCodFee ? calculateCodFee(productPayable) : 0
+  return {
+    shippingCost,
+    codFee,
+    totalDeliveryCharge: shippingCost + codFee,
+  }
+}
+
+function normalizeBkashTxnId(value) {
+  return String(value || '').trim().toUpperCase()
+}
+
+function resolveCheckoutPayment({ payment_method, payment_type, bkash_txn_id }) {
+  const paymentType = payment_type || payment_method || 'cod'
+  const bkashTxnId = paymentType === 'bkash' ? normalizeBkashTxnId(bkash_txn_id) : null
+
+  if (paymentType === 'bkash') {
+    if (!bkashTxnId) {
+      throw { code: 'VALIDATION_ERROR', message: 'bKash transaction ID is required.' }
+    }
+    if (!BKASH_TXN_ID_PATTERN.test(bkashTxnId)) {
+      throw { code: 'VALIDATION_ERROR', message: BKASH_TXN_ID_PATTERN_MESSAGE }
+    }
+  }
+
+  return {
+    paymentType,
+    paymentNumber: paymentType === 'bkash' ? bkashTxnId : null,
+    bkashTxnId,
+  }
+}
+
+async function ensureBkashTxnAvailable(client, bkashTxnId) {
+  if (!bkashTxnId) return
+  const { rows } = await client.query(
+    `SELECT id FROM orders WHERE LOWER(bkash_txn_id) = LOWER($1) LIMIT 1`,
+    [bkashTxnId]
+  )
+  if (rows.length) {
+    throw { code: 'DUPLICATE_BKASH_TXN', message: 'This bKash transaction ID has already been used. Please check and enter a unique transaction ID.' }
+  }
 }
 
 async function decrementStock(client, items) {
@@ -73,9 +125,12 @@ async function generateOrderRef(client) {
 // ── Place Order ─────────────────────────────────────────────────────────────
 
 async function placeOrder(userId, body) {
-  const { items, address_id, address, payment_type, payment_number, coupon_code, notes } = body
+  const { items, address_id, address, payment_type, payment_number, coupon_code, notes, bkash_txn_id } = body
 
   return withTransaction(async (client) => {
+    const payment = resolveCheckoutPayment({ payment_type, bkash_txn_id })
+    await ensureBkashTxnAvailable(client, payment.bkashTxnId)
+
     // 1. Resolve delivery address
     let addressSnapshot
     if (address_id) {
@@ -129,31 +184,18 @@ async function placeOrder(userId, body) {
       coupon         = c.coupon
     }
 
-    // Calculate delivery fee based on district
-    const district = addressSnapshot.district || 'Dhaka'
-    let deliveryFee = 0
-    let deliveryZoneId = null
-    try {
-      const feeInfo = await calculateDeliveryFee(district)
-      deliveryFee = feeInfo.total_fee
-      // Get zone ID for the district (simplified - using first match)
-      const zoneQuery = await client.query(
-        `SELECT z.id FROM delivery_zones z
-         JOIN delivery_districts d ON d.zone_id = z.id
-         WHERE LOWER(d.district_name) = LOWER($1)
-         LIMIT 1`,
-        [district]
-      )
-      if (zoneQuery.rows.length) {
-        deliveryZoneId = zoneQuery.rows[0].id
-      }
-    } catch (err) {
-      // Zone lookup failed — charge the fallback fee rather than shipping free.
-      console.warn('[orders] Zone lookup failed for district:', district, err.message)
-      deliveryFee = await getFallbackDeliveryFee()
+    const productPayable = subtotal - discountAmount
+    const deliveryLocation = {
+      city: addressSnapshot.city,
+      district: addressSnapshot.district,
     }
-
-    const total = subtotal - discountAmount + deliveryFee
+    const totalWeightGrams = items.reduce((sum, item) => {
+      const weight = Number(variantMap[item.variant_id].product_weight_grams || 95)
+      return sum + weight * item.qty
+    }, 0)
+    const deliveryCharges = calculateCheckoutDeliveryCharge(deliveryLocation, totalWeightGrams, productPayable, payment.paymentType === 'cod')
+    const deliveryFee = deliveryCharges.totalDeliveryCharge
+    const total = productPayable + deliveryFee
 
     // 5. Generate order reference
     const orderRef = await generateOrderRef(client)
@@ -162,16 +204,16 @@ async function placeOrder(userId, body) {
     const { rows: orderRows } = await client.query(
       `INSERT INTO orders
          (order_ref, user_id, address_snapshot, payment_type, payment_number,
-          coupon_code, discount_amount, subtotal, delivery_fee_paid, total, notes,
-          delivery_zone_id, estimated_delivery_at)
+          coupon_code, discount_amount, subtotal, delivery_fee, total, notes,
+          estimated_delivery_at, bkash_txn_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        RETURNING id, order_ref, status, created_at`,
       [orderRef, userId, JSON.stringify(addressSnapshot),
-       payment_type, payment_number,
+       payment.paymentType, payment.paymentNumber || payment_number,
        coupon ? coupon.code : null, discountAmount,
        subtotal, deliveryFee, total, notes ?? null,
-       deliveryZoneId,
-       new Date(Date.now() + 2 * 24 * 60 * 60 * 1000)] // Default 2-day delivery estimate
+       new Date(Date.now() + 2 * 24 * 60 * 60 * 1000),
+       payment.bkashTxnId] // Default 2-day delivery estimate
     )
     const order = orderRows[0]
 
@@ -484,34 +526,61 @@ const GUEST_PRODUCT_NAME = 'Midnight Blend — 95g Pouch'
 const GUEST_UNIT_PRICE   = 699
 
 function calculateProductSubtotal(product, qty) {
-  const basePrice = Number(product?.price || GUEST_UNIT_PRICE)
-  if (!product?.discount_enabled || Number(product.discount_value || 0) <= 0) {
+  const basePrice = Math.round(Number(product?.price || GUEST_UNIT_PRICE))
+  const discountMaxOrders = Number(product?.discount_max_orders || 0)
+  const discountOrdersUsed = Number(product?.discount_orders_used || 0)
+  const hasOrderCap = discountMaxOrders > 0
+  const orderCapReached = hasOrderCap && discountOrdersUsed >= discountMaxOrders
+
+  if (!product?.discount_enabled || Number(product.discount_value || 0) <= 0 || orderCapReached) {
     return { subtotal: basePrice * qty, unitPrice: basePrice, discountPerUnit: 0 }
   }
 
   const rawDiscount = product.discount_type === 'percent'
     ? Math.round((basePrice * Number(product.discount_value || 0)) / 100)
-    : Number(product.discount_value || 0)
+    : Math.round(Number(product.discount_value || 0))
   const discountPerUnit = Math.min(basePrice, Math.max(0, rawDiscount))
   const discountedQty = product.discount_max_qty
     ? Math.min(qty, Number(product.discount_max_qty))
     : qty
-  const subtotal = (basePrice - discountPerUnit) * discountedQty + basePrice * (qty - discountedQty)
+  const subtotal = Math.round((basePrice - discountPerUnit) * discountedQty + basePrice * (qty - discountedQty))
 
   return {
     subtotal,
-    unitPrice: subtotal / qty,
+    unitPrice: Math.round(subtotal / qty),
     discountPerUnit,
   }
+}
+
+async function getDiscountOrdersUsed(client, productId, customerPhone) {
+  const { rows } = await client.query(
+    `SELECT COUNT(DISTINCT oi.order_id)::int AS used
+     FROM order_items oi
+     JOIN orders o ON o.id = oi.order_id
+     WHERE oi.product_id = $1
+       AND o.status <> 'cancelled'
+       AND COALESCE(o.customer_phone, '') = COALESCE($2, '')`,
+    [productId, customerPhone]
+  )
+  return Number(rows[0]?.used || 0)
+}
+
+async function lockProductDiscountEligibility(client, productId, customerPhone) {
+  if (!productId || !customerPhone) return
+  await client.query(
+    `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`,
+    [`product-discount:${productId}`, customerPhone]
+  )
 }
 
 function hasActiveProductDiscount(product) {
   return !!product?.discount_enabled && Number(product.discount_value || 0) > 0
 }
 
-async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, otp, password, product_id }) {
+async function placeGuestOrder({ name, phone, address, city, district, qty, coupon_code, notes, otp, password, product_id, payment_method, bkash_txn_id }) {
   const normalizedPhone = normalizeBdMobile(phone)
   let verifiedUserId = null
+  const payment = resolveCheckoutPayment({ payment_method, bkash_txn_id })
 
   if (password) {
     const { loginPhoneUser } = require('./users')
@@ -525,6 +594,8 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
   }
 
   return withTransaction(async (client) => {
+    await ensureBkashTxnAvailable(client, payment.bkashTxnId)
+
     if (!verifiedUserId) {
       const { rows: userRows } = await client.query(
         `SELECT id FROM users WHERE phone = $1 AND is_active = true`,
@@ -538,10 +609,11 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
     let unitPrice   = GUEST_UNIT_PRICE
     let subtotal    = GUEST_UNIT_PRICE * qty
     let itemProductId = null
+    let itemWeightGrams = 95
     let productHasDiscount = false
     if (product_id) {
       const { rows: pRows } = await client.query(
-        `SELECT name, price, discount_enabled, discount_type, discount_value, discount_max_qty
+        `SELECT name, price, qty, discount_enabled, discount_type, discount_value, discount_max_qty, discount_max_orders
          FROM products WHERE id = $1 AND LOWER(status) = 'active'`,
         [product_id]
       )
@@ -549,10 +621,15 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
       // at its real price — not the hardcoded default.
       if (!pRows.length) throw { code: 'INVALID_ITEM', message: 'This product is not available right now.' }
       productName = pRows[0].name
-      const pricing = calculateProductSubtotal(pRows[0], qty)
+      if (hasActiveProductDiscount(pRows[0]) && Number(pRows[0].discount_max_orders || 0) > 0) {
+        await lockProductDiscountEligibility(client, product_id, normalizedPhone)
+      }
+      const discountOrdersUsed = await getDiscountOrdersUsed(client, product_id, normalizedPhone)
+      const pricing = calculateProductSubtotal({ ...pRows[0], discount_orders_used: discountOrdersUsed }, qty)
       unitPrice = pricing.unitPrice
       subtotal = pricing.subtotal
-      productHasDiscount = hasActiveProductDiscount(pRows[0])
+      productHasDiscount = pricing.discountPerUnit > 0
+      itemWeightGrams = Number(pRows[0].qty || 95)
       itemProductId = product_id
     }
 
@@ -577,32 +654,39 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
       coupon         = c.coupon
     }
 
-    // Delivery fee is calculated and added to COD amount at Steadfast dispatch time
-    const deliveryFee = 0
-
-    const total     = subtotal - discountAmount
+    const productPayable = subtotal - discountAmount
+    const deliveryCharges = calculateCheckoutDeliveryCharge({ city, district }, itemWeightGrams * qty, productPayable, payment.paymentType === 'cod')
+    const deliveryFee = deliveryCharges.totalDeliveryCharge
+    const total     = productPayable + deliveryFee
     const orderRef  = await generateOrderRef(client)
-    const addrSnap  = { label: 'Delivery', line1: address }
+    const addrSnap  = {
+      label: 'Delivery',
+      line1: address.trim(),
+      city: city.trim(),
+      district: district.trim(),
+    }
 
     const { rows: orderRows } = await client.query(
       `INSERT INTO orders
          (order_ref, user_id, customer_name, customer_phone,
           address_snapshot, payment_type, payment_number,
-          coupon_code, discount_amount, subtotal, delivery_fee, total, notes)
-       VALUES ($1, $2, $3, $4, $5, 'cod', $4, $6, $7, $8, $9, $10, $11)
+          coupon_code, discount_amount, subtotal, delivery_fee, total, notes, bkash_txn_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        RETURNING id, order_ref, status, created_at`,
       [orderRef, verifiedUserId, name.trim(), normalizedPhone,
        JSON.stringify(addrSnap),
+       payment.paymentType,
+       payment.paymentNumber || normalizedPhone,
        coupon ? coupon.code : null,
        discountAmount, subtotal, deliveryFee, total,
-       notes ?? null]
+       notes ?? null, payment.bkashTxnId]
     )
     const order = orderRows[0]
 
     await client.query(
       `INSERT INTO order_items (order_id, product_id, name_snapshot, qty, unit_price, subtotal)
        VALUES ($1, $2, $3, $4, $5, $6)`,
-      [order.id, itemProductId, productName, qty, unitPrice, subtotal]
+      [order.id, itemProductId, productName, qty, Math.round(unitPrice), Math.round(subtotal)]
     )
 
     if (coupon) {
@@ -630,14 +714,16 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
          order_count  = customers.order_count + 1,
          total_spent  = customers.total_spent + EXCLUDED.total_spent,
          last_seen    = NOW()`,
-      [normalizedPhone, name.trim(), address, total]
+      [normalizedPhone, name.trim(), [address, district, city].filter(Boolean).join(', '), total]
     )
 
-    try {
-      const { sendOrderConfirmation } = require('./sms')
-      await sendOrderConfirmation(normalizedPhone, orderRef, total)
-    } catch (err) {
-      console.error('[orders] SMS send failed:', err.message)
+    if (payment.paymentType === 'cod') {
+      try {
+        const { sendOrderConfirmation } = require('./sms')
+        await sendOrderConfirmation(normalizedPhone, orderRef, total)
+      } catch (err) {
+        console.error('[orders] SMS send failed:', err.message)
+      }
     }
 
     if (process.env.NODE_ENV !== 'production') {
@@ -658,6 +744,7 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
       status:          order.status,
       subtotal,
       discount_amount: discountAmount,
+      delivery_fee:    deliveryFee,
       total,
       created_at:      order.created_at,
     }
@@ -666,8 +753,12 @@ async function placeGuestOrder({ name, phone, address, qty, coupon_code, notes, 
 
 // ── Quick Order (authenticated, no OTP, no variant required) ───────────────
 
-async function placeQuickOrder(userId, { product_id, qty, address, coupon_code, notes }) {
+async function placeQuickOrder(userId, { product_id, qty, address, city, district, coupon_code, notes, payment_method, bkash_txn_id }) {
+  const payment = resolveCheckoutPayment({ payment_method, bkash_txn_id })
+
   return withTransaction(async (client) => {
+    await ensureBkashTxnAvailable(client, payment.bkashTxnId)
+
     // Resolve user name and phone
     const { rows: uRows } = await client.query(
       `SELECT name, phone FROM users WHERE id = $1`,
@@ -682,19 +773,25 @@ async function placeQuickOrder(userId, { product_id, qty, address, coupon_code, 
     let unitPrice   = GUEST_UNIT_PRICE
     let subtotal    = GUEST_UNIT_PRICE * qty
     let itemProductId = null
+    let itemWeightGrams = 95
     let productHasDiscount = false
     if (product_id) {
       const { rows: pRows } = await client.query(
-        `SELECT name, price, discount_enabled, discount_type, discount_value, discount_max_qty
+        `SELECT name, price, qty, discount_enabled, discount_type, discount_value, discount_max_qty, discount_max_orders
          FROM products WHERE id = $1 AND LOWER(status) = 'active'`,
         [product_id]
       )
       if (!pRows.length) throw { code: 'INVALID_ITEM', message: 'This product is not available right now.' }
       productName = pRows[0].name
-      const pricing = calculateProductSubtotal(pRows[0], qty)
+      if (hasActiveProductDiscount(pRows[0]) && Number(pRows[0].discount_max_orders || 0) > 0) {
+        await lockProductDiscountEligibility(client, product_id, phone)
+      }
+      const discountOrdersUsed = await getDiscountOrdersUsed(client, product_id, phone)
+      const pricing = calculateProductSubtotal({ ...pRows[0], discount_orders_used: discountOrdersUsed }, qty)
       unitPrice = pricing.unitPrice
       subtotal = pricing.subtotal
-      productHasDiscount = hasActiveProductDiscount(pRows[0])
+      productHasDiscount = pricing.discountPerUnit > 0
+      itemWeightGrams = Number(pRows[0].qty || 95)
       itemProductId = product_id
     }
 
@@ -717,32 +814,39 @@ async function placeQuickOrder(userId, { product_id, qty, address, coupon_code, 
       coupon         = c.coupon
     }
 
-    // Delivery fee is calculated and added to COD amount at Steadfast dispatch time
-    const deliveryFee = 0
-
-    const total    = subtotal - discountAmount
+    const productPayable = subtotal - discountAmount
+    const deliveryCharges = calculateCheckoutDeliveryCharge({ city, district }, itemWeightGrams * qty, productPayable, payment.paymentType === 'cod')
+    const deliveryFee = deliveryCharges.totalDeliveryCharge
+    const total    = productPayable + deliveryFee
     const orderRef = await generateOrderRef(client)
-    const addrSnap = { label: 'Delivery', line1: address }
+    const addrSnap = {
+      label: 'Delivery',
+      line1: address.trim(),
+      city: city.trim(),
+      district: district.trim(),
+    }
 
     const { rows: orderRows } = await client.query(
       `INSERT INTO orders
          (order_ref, user_id, customer_name, customer_phone,
           address_snapshot, payment_type, payment_number,
-          coupon_code, discount_amount, subtotal, delivery_fee, total, notes)
-       VALUES ($1, $2, $3, $4, $5, 'cod', $4, $6, $7, $8, $9, $10, $11)
+          coupon_code, discount_amount, subtotal, delivery_fee, total, notes, bkash_txn_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        RETURNING id, order_ref, status, created_at`,
       [orderRef, userId, name, phone,
        JSON.stringify(addrSnap),
+       payment.paymentType,
+       payment.paymentNumber || phone,
        coupon ? coupon.code : null,
        discountAmount, subtotal, deliveryFee, total,
-       notes ?? null]
+       notes ?? null, payment.bkashTxnId]
     )
     const order = orderRows[0]
 
     await client.query(
       `INSERT INTO order_items (order_id, product_id, name_snapshot, qty, unit_price, subtotal)
        VALUES ($1, $2, $3, $4, $5, $6)`,
-      [order.id, itemProductId, productName, qty, unitPrice, subtotal]
+      [order.id, itemProductId, productName, qty, Math.round(unitPrice), Math.round(subtotal)]
     )
 
     if (coupon) {
@@ -761,11 +865,13 @@ async function placeQuickOrder(userId, { product_id, qty, address, coupon_code, 
       [order.id]
     )
 
-    try {
-      const { sendOrderConfirmation } = require('./sms')
-      await sendOrderConfirmation(phone, orderRef, total)
-    } catch (err) {
-      console.error('[orders] SMS send failed:', err.message)
+    if (payment.paymentType === 'cod') {
+      try {
+        const { sendOrderConfirmation } = require('./sms')
+        await sendOrderConfirmation(phone, orderRef, total)
+      } catch (err) {
+        console.error('[orders] SMS send failed:', err.message)
+      }
     }
 
     return {
@@ -773,6 +879,7 @@ async function placeQuickOrder(userId, { product_id, qty, address, coupon_code, 
       status:          order.status,
       subtotal,
       discount_amount: discountAmount,
+      delivery_fee:    deliveryFee,
       total,
       points_earned:   0,
       created_at:      order.created_at,
@@ -780,4 +887,4 @@ async function placeQuickOrder(userId, { product_id, qty, address, coupon_code, 
   })
 }
 
-module.exports = { placeOrder, placeQuickOrder, placeGuestOrder, listOrders, getOrder, updateOrder, cancelOrder, trackOrder, generateOrderRef }
+module.exports = { placeOrder, placeQuickOrder, placeGuestOrder, listOrders, getOrder, updateOrder, cancelOrder, trackOrder, generateOrderRef, calculateProductSubtotal, calculateCheckoutDeliveryCharge, getDiscountOrdersUsed }

@@ -68,13 +68,13 @@ module.exports = async function userRoutes(app) {
   app.post('/addresses', {
     schema: {
       body: {
-        type: 'object', required: ['label', 'line1'],
+        type: 'object', required: ['label', 'line1', 'city', 'district'],
         properties: {
           label:      { type: 'string', minLength: 1, maxLength: 50 },
           line1:      { type: 'string', minLength: 1, maxLength: 255 },
           line2:      { type: 'string', maxLength: 255 },
-          city:       { type: 'string', maxLength: 100 },
-          district:   { type: 'string', maxLength: 100 },
+          city:       { type: 'string', minLength: 1, maxLength: 100 },
+          district:   { type: 'string', minLength: 1, maxLength: 100 },
           is_default: { type: 'boolean' },
         },
         additionalProperties: false,
@@ -94,8 +94,8 @@ module.exports = async function userRoutes(app) {
           label:      { type: 'string', minLength: 1, maxLength: 50 },
           line1:      { type: 'string', minLength: 1, maxLength: 255 },
           line2:      { type: 'string', maxLength: 255 },
-          city:       { type: 'string', maxLength: 100 },
-          district:   { type: 'string', maxLength: 100 },
+          city:       { type: 'string', minLength: 1, maxLength: 100 },
+          district:   { type: 'string', minLength: 1, maxLength: 100 },
           is_default: { type: 'boolean' },
         },
         additionalProperties: false,

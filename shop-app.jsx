@@ -54,10 +54,34 @@ function getMidnightApiBase() {
 const API_BASE = getMidnightApiBase();
 const THUMB_LABELS = ["Front", "Back"];
 const BD_MOBILE_PATTERN = /^01[3-9]\d{8}$/;
+const BKASH_TXN_ID_PATTERN = /^[A-Z0-9]{10}$/;
+const BKASH_TXN_ID_PATTERN_MESSAGE = "bKash transaction ID must be exactly 10 letters or numbers.";
+const BKASH_MERCHANT_NUMBER = "01XXXXXXXXX";
+const BKASH_QR_IMAGE_PATH   = "/bkash-qr.png";
+
+// TASK 2 — OrderModal mobile sheet
+let mpSheetStyleInjected = false;
+function injectMpSheetStyle() {
+  if (mpSheetStyleInjected) return;
+  const s = document.createElement("style");
+  s.textContent = `
+@keyframes mpSheetSlideUp {
+  from {
+    transform: translateY(100%);
+    opacity: 0.6;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}`;
+  document.head.appendChild(s);
+  mpSheetStyleInjected = true;
+}
 
 function calculateProductPricing(product, qty) {
-  const originalPrice = Number(product.originalPrice || product.price || 0);
-  const salePrice = Number(product.salePrice || product.price || 0);
+  const originalPrice = Math.round(Number(product.originalPrice || product.price || 0));
+  const salePrice = Math.round(Number(product.salePrice || product.price || 0));
   const discountPerUnit = Math.max(0, originalPrice - salePrice);
   const discountedQty = discountPerUnit > 0
     ? (product.discountMaxQty ? Math.min(qty, Number(product.discountMaxQty)) : qty)
@@ -72,6 +96,160 @@ function calculateProductPricing(product, qty) {
     productDiscountTotal,
     discountedQty,
   };
+}
+
+const DELIVERY_DHAKA_THANAS = new Set([
+  "adabor", "badda", "banani", "bangshal", "bhashantek", "bimanbandar", "cantonment",
+  "chalkbazar", "chawkbazar", "dakshinkhan", "dakshin khan", "darus-salam", "darus salam",
+  "demra", "dhanmondi", "gandaria", "gulshan", "hazaribag", "hazaribagh", "jatrabari",
+  "kafrul", "kalabagan", "kamrangirchar", "kadamtoli", "kadamtali", "khilgaon",
+  "khilkhet", "kotwali", "lalbagh", "mirpur", "mirpur model", "mohammadpur",
+  "motijheel", "mugda", "new market", "pallabi", "paltan", "ramna", "rampura",
+  "rupnagar", "sabujbag", "sabujbagh", "shah ali", "shahbagh", "shahjahanpur",
+  "sher-e-bangla nagar", "shyampur", "sutrapur", "tejgaon", "tejgaon industrial area",
+  "turag", "uttara east", "uttara west", "uttarkhan", "uttar khan", "vatara", "wari",
+  "dhaka",
+]);
+
+const DELIVERY_SUBURBAN_AREAS = new Set([
+  "savar", "ashulia", "keraniganj", "narayanganj", "narayanganj sadar", "fatullah",
+  "siddhirganj", "rupganj", "sonargaon", "gazipur", "gazipur sadar", "tongi",
+  "kaliakair", "kaliganj", "kapasia", "sreepur", "dhamrai", "dohar", "nawabganj",
+]);
+
+function parseWeightGrams(weight) {
+  const match = String(weight || "").match(/(\d+(?:\.\d+)?)/);
+  return match ? Math.max(1, Math.round(Number(match[1]))) : 95;
+}
+
+function normalizeDeliveryLocation(value) {
+  return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function collectDeliveryLocationParts(location) {
+  if (Array.isArray(location)) return location.map(normalizeDeliveryLocation).filter(Boolean);
+  if (location && typeof location === "object") {
+    return [location.area, location.district, location.city, location.location].map(normalizeDeliveryLocation).filter(Boolean);
+  }
+  return [normalizeDeliveryLocation(location)].filter(Boolean);
+}
+
+function matchesDeliveryArea(parts, areas) {
+  return parts.some(part => {
+    if (areas.has(part)) return true;
+    for (const area of areas) {
+      if (part.startsWith(`${area} `) || part.endsWith(` ${area}`)) return true;
+    }
+    return false;
+  });
+}
+
+function calculateShippingCost(location, weightGrams) {
+  const parts = collectDeliveryLocationParts(location);
+  const suburban = matchesDeliveryArea(parts, DELIVERY_SUBURBAN_AREAS);
+  const insideDhaka = !suburban && parts.some(part => DELIVERY_DHAKA_THANAS.has(part) || part === "dhaka" || part === "dhaka city");
+
+  if (insideDhaka) {
+    if (weightGrams <= 150) return 55;
+    if (weightGrams <= 500) return 65;
+    if (weightGrams <= 1000) return 75;
+    return 75 + Math.ceil((weightGrams - 1000) / 1000) * 20;
+  }
+
+  if (suburban) {
+    if (weightGrams <= 1000) return 105;
+    return 105 + Math.ceil((weightGrams - 1000) / 1000) * 20;
+  }
+
+  if (weightGrams <= 500) return 115;
+  if (weightGrams <= 1000) return 135;
+  return 135 + Math.ceil((weightGrams - 1000) / 1000) * 20;
+}
+
+function calculateCheckoutCharges(product, qty, location, productPayable) {
+  const locationParts = collectDeliveryLocationParts(location);
+  if (!locationParts.length) return { shippingCost: 0, codFee: 0, totalDeliveryCharge: 0, finalTotal: productPayable };
+  const weightGrams = parseWeightGrams(product?.weight) * qty;
+  const shippingCost = calculateShippingCost(location, weightGrams);
+  const codFee = Math.round(Math.max(0, Number(productPayable || 0)) * 0.01);
+  const totalDeliveryCharge = shippingCost + codFee;
+  return {
+    shippingCost,
+    codFee,
+    totalDeliveryCharge,
+    finalTotal: productPayable + totalDeliveryCharge,
+  };
+}
+
+function getDiscountCapMessage(product, qty) {
+  const cap = Number(product?.discountMaxQty || 0);
+  const orderCap = Number(product?.discountMaxOrders || 0);
+  const messages = [];
+
+  if (product?.discountBlocked) {
+    messages.push("This offer is no longer available for this phone number. Regular price applies.");
+    return messages.join(" ");
+  }
+
+  if (cap) {
+    const unit = cap === 1 ? "unit" : "units";
+    messages.push(
+      qty > cap
+        ? `Only the first ${cap} ${unit} get the offer. Extra quantity is full price.`
+        : `Offer applies to first ${cap} ${unit} per order.`
+    );
+  }
+
+  if (orderCap) {
+    const orderWord = orderCap === 1 ? "order" : "orders";
+    messages.push(`Offer applies to first ${orderCap} ${orderWord} per phone number.`);
+  }
+
+  return messages.join(" ");
+}
+
+function OfferExpiredAlert({ productName, price, isOfferExpired, currencySymbol = "৳", animationKey = "" }) {
+  const alertRef = useRef(null);
+  const formattedPrice = `${currencySymbol}${Number(price || 0).toLocaleString()}`;
+
+  useEffect(() => {
+    if (!isOfferExpired || !alertRef.current) return;
+    const el = alertRef.current;
+    el.classList.remove("shake-active");
+    // Force a reflow so re-adding the class restarts the CSS animation
+    // when the modal opens again without a full component unmount.
+    void el.offsetWidth;
+    el.classList.add("shake-active");
+  }, [isOfferExpired, animationKey, productName, price]);
+
+  if (!isOfferExpired) {
+    return (
+      <div className="offer-expired-plain-row">
+        <span className="offer-expired-product-name">{productName}</span>
+        <span className="offer-expired-price">{formattedPrice}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div ref={alertRef} className="offer-expired-wrapper">
+      <div className="offer-expired-product-row">
+        <span className="offer-expired-product-name">{productName}</span>
+        <span className="offer-expired-price">{formattedPrice}</span>
+      </div>
+      <div className="offer-expired-banner" role="alert" aria-live="assertive">
+        <span className="offer-expired-icon" aria-hidden="true">
+          <svg className="offer-expired-icon-svg" viewBox="0 0 24 24" focusable="false">
+            <path d="M12 3.75 2.85 19.5h18.3L12 3.75Z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+            <path d="M12 8.25v5.25M12 17.25h.01" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+          </svg>
+        </span>
+        <span className="offer-expired-message">
+          This offer is no longer available for this phone number. Regular price applies.
+        </span>
+      </div>
+    </div>
+  );
 }
 
 function hasProductDiscount(product) {
@@ -101,59 +279,330 @@ function isValidBdMobile(raw) {
 
 // ── Bangladesh city → area map ────────────────────────────────────────────────
 const BD_AREAS = {
+  "Dhaka City": [
+    "Adabor","Airport","Badda","Banani","Bangshal","Bhashantek","Cantonment",
+    "Chawkbazar","Dakshin Khan","Darus Salam","Demra","Dhanmondi","Gandaria",
+    "Gulshan","Hatirjheel","Hazaribagh","Jatrabari","Kadamtali","Kafrul",
+    "Kalabagan","Kamrangirchar","Khilgaon","Khilkhet","Kotwali","Lalbagh",
+    "Mirpur Model","Mohammadpur","Motijheel","Mugda","New Market","Pallabi",
+    "Paltan","Ramna","Rampura","Rupnagar","Sabujbagh","Shah Ali","Shahbagh",
+    "Shahjahanpur","Sher-e-Bangla Nagar","Shyampur","Sutrapur","Tejgaon",
+    "Tejgaon Industrial Area","Turag","Uttar Khan","Uttara East","Uttara West",
+    "Vatara","Wari"
+  ],
+
   "Dhaka": [
-    "Adabor","Airport","Azimpur","Badda","Banani","Bangshal","Baridhara","Bashundhara",
-    "Cantonment","Chawkbazar","Demra","Dhanmondi","Farmgate","Gulshan","Hatirjheel",
-    "Hazaribagh","Jatrabari","Kafrul","Kamrangirchar","Karwan Bazar","Khilgaon","Khilkhet",
-    "Kotwali","Lalbagh","Lalmatia","Malibagh","Mirpur","Mohammadpur","Motijheel","Mugda",
-    "Nakhalpara","Niketan","Old Dhaka","Pallabi","Paltan","Ramna","Rampura","Sabujbagh",
-    "Shahbagh","Shantinagar","Shiddheswari","Shyampur","Sutrapur","Tejgaon","Turag",
-    "Uttara","Wari",
+    "Dhamrai","Dohar","Keraniganj","Nawabganj","Savar"
   ],
+
+  "Chattogram City": [
+    "Akbar Shah","Bayazid Bostami","Bakalia","Bandar","Chandgaon","Chawkbazar",
+    "Double Mooring","EPZ","Halishahar","Karnaphuli","Kotwali","Khulshi",
+    "Pahartali","Panchlaish","Patenga","Sadarghat"
+  ],
+
   "Chattogram": [
-    "Agrabad","Anwara","Bayazid Bostami","Chandgaon","Double Mooring","GEC Circle",
-    "Halishahar","Khulshi","Kotwali","Nasirabad","Pahartali","Panchlaish","Patiya",
-    "Patenga","Sadarghat",
+    "Anwara","Banshkhali","Boalkhali","Chandanaish","Fatikchhari","Hathazari",
+    "Lohagara","Mirsharai","Patiya","Rangunia","Raozan","Sandwip","Satkania",
+    "Sitakunda","Karnaphuli"
   ],
-  "Gazipur": [
-    "Gazipur Sadar","Joydebpur","Kaliakair","Kapasia","Sreepur","Tongi",
+
+  "Bagerhat": [
+    "Bagerhat Sadar","Chitalmari","Fakirhat","Kachua","Mollahat","Mongla",
+    "Morrelganj","Rampal","Sarankhola"
   ],
-  "Narayanganj": [
-    "Araihazar","Fatullah","Narayanganj Sadar","Rupganj","Siddhirganj","Sonargaon",
+
+  "Bandarban": [
+    "Alikadam","Bandarban Sadar","Lama","Naikhongchhari","Rowangchhari",
+    "Ruma","Thanchi"
   ],
-  "Sylhet": [
-    "Ambarkhana","Bianibazar","Golapganj","Jalalabad","Kumargaon","Shibganj","Sylhet Sadar","Zindabazar",
+
+  "Barguna": [
+    "Amtali","Bamna","Barguna Sadar","Betagi","Patharghata","Taltali"
   ],
-  "Rajshahi": [
-    "Boalia","Motihar","Paba","Rajpara","Rajshahi Sadar","Shah Makhdum",
-  ],
-  "Khulna": [
-    "Daulatpur","Khan Jahan Ali","Khalishpur","Khulna Sadar","Rupsha","Sonadanga",
-  ],
-  "Cumilla": [
-    "Burichang","Chandina","Cumilla Sadar","Daudkandi","Kotwali","Laksam","Muradnagar",
-  ],
-  "Mymensingh": [
-    "Mymensingh Sadar","Muktagacha","Phulbaria","Trishal",
-  ],
-  "Bogura": [
-    "Bogura Sadar","Gabtali","Shahjahanpur","Shibganj","Sonatola",
-  ],
-  "Rangpur": [
-    "Badarganj","Gangachara","Kaunia","Mithapukur","Pirganj","Rangpur Sadar",
-  ],
+
   "Barishal": [
-    "Agailjhara","Barishal Sadar","Babuganj","Bakerganj","Gaurnadi","Mehendiganj",
+    "Agailjhara","Babuganj","Bakerganj","Banaripara","Barishal Sadar",
+    "Gaurnadi","Hizla","Mehendiganj","Muladi","Wazirpur"
   ],
-  "Jessore": [
-    "Abhaynagar","Chaugachha","Jessore Sadar","Jhikargachha","Keshabpur","Manirampur",
+
+  "Bhola": [
+    "Bhola Sadar","Borhanuddin","Char Fasson","Daulatkhan","Lalmohan",
+    "Manpura","Tazumuddin"
   ],
+
+  "Bogura": [
+    "Adamdighi","Bogura Sadar","Dhunat","Dupchanchia","Gabtali","Kahaloo",
+    "Nandigram","Sariakandi","Shahjahanpur","Sherpur","Shibganj","Sonatala"
+  ],
+
+  "Brahmanbaria": [
+    "Akhaura","Ashuganj","Bancharampur","Bijoynagar","Brahmanbaria Sadar",
+    "Kasba","Nabinagar","Nasirnagar","Sarail"
+  ],
+
+  "Chandpur": [
+    "Chandpur Sadar","Faridganj","Haimchar","Hajiganj","Kachua",
+    "Matlab Dakshin","Matlab Uttar","Shahrasti"
+  ],
+
+  "Chapainawabganj": [
+    "Bholahat","Chapainawabganj Sadar","Gomastapur","Nachole","Shibganj"
+  ],
+
+  "Chuadanga": [
+    "Alamdanga","Chuadanga Sadar","Damurhuda","Jibannagar"
+  ],
+
+  "Cox's Bazar": [
+    "Chakaria","Cox's Bazar Sadar","Eidgaon","Kutubdia","Maheshkhali",
+    "Pekua","Ramu","Teknaf","Ukhiya"
+  ],
+
+  "Cumilla": [
+    "Barura","Brahmanpara","Burichang","Chandina","Chauddagram",
+    "Cumilla Adarsha Sadar","Cumilla Sadar Dakshin","Daudkandi","Debidwar",
+    "Homna","Laksam","Lalmai","Meghna","Monoharganj","Muradnagar",
+    "Nangalkot","Titas"
+  ],
+
+  "Dinajpur": [
+    "Birampur","Birganj","Birol","Bochaganj","Chirirbandar","Dinajpur Sadar",
+    "Fulbari","Ghoraghat","Hakimpur","Kaharole","Khansama","Nawabganj",
+    "Parbatipur"
+  ],
+
   "Faridpur": [
-    "Faridpur Sadar","Alfadanga","Boalmari","Bhanga","Charbhadrasan","Madhukhali",
+    "Alfadanga","Bhanga","Boalmari","Charbhadrasan","Faridpur Sadar",
+    "Madhukhali","Nagarkanda","Sadarpur","Saltha"
   ],
+
+  "Feni": [
+    "Chhagalnaiya","Daganbhuiyan","Feni Sadar","Fulgazi","Parshuram","Sonagazi"
+  ],
+
+  "Gaibandha": [
+    "Fulchhari","Gaibandha Sadar","Gobindaganj","Palashbari","Sadullapur",
+    "Saghata","Sundarganj"
+  ],
+
+  "Gazipur": [
+    "Gazipur Sadar","Kaliakair","Kaliganj","Kapasia","Sreepur",
+    "Bason","Gacha","Kashimpur","Konabari","Pubail","Tongi East","Tongi West"
+  ],
+
+  "Gopalganj": [
+    "Gopalganj Sadar","Kashiani","Kotalipara","Muksudpur","Tungipara"
+  ],
+
+  "Habiganj": [
+    "Ajmiriganj","Bahubal","Baniachong","Chunarughat","Habiganj Sadar",
+    "Lakhai","Madhabpur","Nabiganj","Shayestaganj"
+  ],
+
+  "Jamalpur": [
+    "Bakshiganj","Dewanganj","Islampur","Jamalpur Sadar","Madarganj",
+    "Melandaha","Sarishabari"
+  ],
+
+  "Jashore": [
+    "Abhaynagar","Bagherpara","Chaugachha","Jashore Sadar","Jhikargachha",
+    "Keshabpur","Manirampur","Sharsha"
+  ],
+
+  "Jhalakathi": [
+    "Jhalakathi Sadar","Kathalia","Nalchity","Rajapur"
+  ],
+
+  "Jhenaidah": [
+    "Harinakundu","Jhenaidah Sadar","Kaliganj","Kotchandpur","Maheshpur",
+    "Shailkupa"
+  ],
+
+  "Joypurhat": [
+    "Akkelpur","Joypurhat Sadar","Kalai","Khetlal","Panchbibi"
+  ],
+
+  "Khagrachhari": [
+    "Dighinala","Guimara","Khagrachhari Sadar","Lakshmichhari","Mahalchhari",
+    "Manikchhari","Matiranga","Panchhari","Ramgarh"
+  ],
+
+  "Khulna": [
+    "Batiaghata","Dacope","Dighalia","Dumuria","Koyra","Paikgacha",
+    "Phultala","Rupsa","Terokhada","Khulna Sadar","Sonadanga",
+    "Khalishpur","Daulatpur","Khan Jahan Ali","Lobonchara"
+  ],
+
+  "Kishoreganj": [
+    "Austagram","Bajitpur","Bhairab","Hossainpur","Itna","Karimganj",
+    "Katiadi","Kishoreganj Sadar","Kuliarchar","Mithamain","Nikli",
+    "Pakundia","Tarail"
+  ],
+
+  "Kurigram": [
+    "Bhurungamari","Char Rajibpur","Chilmari","Fulbari","Kurigram Sadar",
+    "Nageshwari","Rajarhat","Roumari","Ulipur"
+  ],
+
+  "Kushtia": [
+    "Bheramara","Daulatpur","Khoksa","Kumarkhali","Kushtia Sadar","Mirpur"
+  ],
+
+  "Lakshmipur": [
+    "Kamalnagar","Lakshmipur Sadar","Raipur","Ramganj","Ramgati"
+  ],
+
+  "Lalmonirhat": [
+    "Aditmari","Hatibandha","Kaliganj","Lalmonirhat Sadar","Patgram"
+  ],
+
+  "Madaripur": [
+    "Dasar","Kalkini","Madaripur Sadar","Rajoir","Shibchar"
+  ],
+
+  "Magura": [
+    "Magura Sadar","Mohammadpur","Shalikha","Sreepur"
+  ],
+
+  "Manikganj": [
+    "Daulatpur","Ghior","Harirampur","Manikganj Sadar","Saturia",
+    "Shibalaya","Singair"
+  ],
+
+  "Meherpur": [
+    "Gangni","Meherpur Sadar","Mujibnagar"
+  ],
+
+  "Moulvibazar": [
+    "Barlekha","Juri","Kamalganj","Kulaura","Moulvibazar Sadar",
+    "Rajnagar","Sreemangal"
+  ],
+
+  "Munshiganj": [
+    "Gazaria","Louhajang","Munshiganj Sadar","Sirajdikhan","Sreenagar","Tongibari"
+  ],
+
+  "Mymensingh": [
+    "Bhaluka","Dhobaura","Fulbaria","Gafargaon","Gouripur","Haluaghat",
+    "Ishwarganj","Mymensingh Sadar","Muktagacha","Nandail","Phulpur",
+    "Tarakanda","Trishal"
+  ],
+
+  "Naogaon": [
+    "Atrai","Badalgachhi","Dhamoirhat","Manda","Mahadebpur","Naogaon Sadar",
+    "Niamatpur","Patnitala","Porsha","Raninagar","Sapahar"
+  ],
+
+  "Narail": [
+    "Kalia","Lohagara","Narail Sadar"
+  ],
+
+  "Narayanganj": [
+    "Araihazar","Bandar","Fatullah","Narayanganj Sadar","Rupganj",
+    "Siddhirganj","Sonargaon"
+  ],
+
+  "Narsingdi": [
+    "Belabo","Monohardi","Narsingdi Sadar","Palash","Raipura","Shibpur"
+  ],
+
+  "Natore": [
+    "Bagatipara","Baraigram","Gurudaspur","Lalpur","Naldanga",
+    "Natore Sadar","Singra"
+  ],
+
+  "Netrokona": [
+    "Atpara","Barhatta","Durgapur","Khaliajuri","Kalmakanda","Kendua",
+    "Madan","Mohanganj","Netrokona Sadar","Purbadhala"
+  ],
+
+  "Nilphamari": [
+    "Dimla","Domar","Jaldhaka","Kishoreganj","Nilphamari Sadar","Saidpur"
+  ],
+
+  "Noakhali": [
+    "Begumganj","Chatkhil","Companiganj","Hatiya","Kabirhat","Noakhali Sadar",
+    "Senbagh","Sonaimuri","Subarnachar"
+  ],
+
+  "Pabna": [
+    "Atgharia","Bera","Bhangura","Chatmohar","Faridpur","Ishwardi",
+    "Pabna Sadar","Santhia","Sujanagar"
+  ],
+
+  "Panchagarh": [
+    "Atwari","Boda","Debiganj","Panchagarh Sadar","Tetulia"
+  ],
+
+  "Patuakhali": [
+    "Bauphal","Dashmina","Dumki","Galachipa","Kalapara","Mirzaganj",
+    "Patuakhali Sadar","Rangabali"
+  ],
+
+  "Pirojpur": [
+    "Bhandaria","Kawkhali","Mathbaria","Nazirpur","Nesarabad",
+    "Pirojpur Sadar","Zianagar"
+  ],
+
+  "Rajbari": [
+    "Baliakandi","Goalanda","Kalukhali","Pangsha","Rajbari Sadar"
+  ],
+
+  "Rajshahi": [
+    "Bagha","Bagmara","Charghat","Durgapur","Godagari","Mohanpur",
+    "Paba","Puthia","Tanore","Boalia","Motihar","Rajpara","Shah Makhdum"
+  ],
+
+  "Rangamati": [
+    "Baghaichhari","Barkal","Belaichhari","Juraichhari","Kaptai","Kawkhali",
+    "Langadu","Naniarchar","Rajasthali","Rangamati Sadar"
+  ],
+
+  "Rangpur": [
+    "Badarganj","Gangachara","Kaunia","Mithapukur","Pirgachha","Pirganj",
+    "Rangpur Sadar","Taraganj"
+  ],
+
+  "Satkhira": [
+    "Assasuni","Debhata","Kalaroa","Kaliganj","Satkhira Sadar",
+    "Shyamnagar","Tala"
+  ],
+
+  "Shariatpur": [
+    "Bhedarganj","Damudya","Gosairhat","Naria","Shariatpur Sadar","Zajira"
+  ],
+
+  "Sherpur": [
+    "Jhenaigati","Nakla","Nalitabari","Sherpur Sadar","Sreebardi"
+  ],
+
+  "Sirajganj": [
+    "Belkuchi","Chauhali","Kamarkhand","Kazipur","Raiganj","Shahjadpur",
+    "Sirajganj Sadar","Tarash","Ullapara"
+  ],
+
+  "Sunamganj": [
+    "Bishwamvarpur","Chhatak","Derai","Dharmapasha","Dowarabazar",
+    "Jagannathpur","Jamalganj","Madhyanagar","Shalla","Shantiganj",
+    "Sunamganj Sadar","Tahirpur"
+  ],
+
+  "Sylhet": [
+    "Balaganj","Beanibazar","Bishwanath","Companiganj","Dakshin Surma",
+    "Fenchuganj","Golapganj","Gowainghat","Jaintiapur","Kanaighat",
+    "Osmani Nagar","Sylhet Sadar","Zakiganj","Kotwali","Jalalabad",
+    "Airport","Moglabazar","Shah Poran"
+  ],
+
   "Tangail": [
-    "Tangail Sadar","Basail","Bhuapur","Delduar","Ghatail","Gopalpur","Kalihati","Madhupur",
+    "Basail","Bhuapur","Delduar","Dhanbari","Ghatail","Gopalpur",
+    "Kalihati","Madhupur","Mirzapur","Nagarpur","Sakhipur","Tangail Sadar"
   ],
+
+  "Thakurgaon": [
+    "Baliadangi","Haripur","Pirganj","Ranisankail","Thakurgaon Sadar"
+  ]
 };
 
 // ── minimal header ────────────────────────────────────────────────────────────
@@ -250,7 +699,7 @@ function ShopToastStack({ toasts }) {
 }
 
 // ── Order Modal ───────────────────────────────────────────────────────────────
-function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser, onCreateAccount }) {
+function OrderModal({ open, onClose, product, qty, discount, setDiscount, coupon, setCoupon, couponStatus, setCouponStatus, couponError, setCouponError, loggedUser, onCreateAccount }) {
   const [step, setStep]           = useState("form"); // form | otp | details | loading | success | error
   const [name, setName]           = useState("");
   const [phone, setPhone]         = useState("");
@@ -259,6 +708,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
   const [checkoutVerificationTicket, setCheckoutVerificationTicket] = useState("");
   const [phoneStatus, setPhoneStatus] = useState(null);
   const [phoneChecking, setPhoneChecking] = useState(false);
+  const [priceNotice, setPriceNotice] = useState("");
   const [city, setCity]           = useState("");
   const [area, setArea]           = useState("");
   const [street, setStreet]       = useState("");
@@ -279,12 +729,37 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
   const [newAddressLine1, setNewAddressLine1] = useState("");
   const [newAddressCity, setNewAddressCity] = useState("");
   const [newAddressDistrict, setNewAddressDistrict] = useState("");
+  // PAYMENT — new state
+  const [paymentMethod, setPaymentMethod] = useState("cod");
+  const [bkashTxnId, setBkashTxnId] = useState("");
+  const [bkashTxnError, setBkashTxnError] = useState("");
+  const [showBkashQr, setShowBkashQr] = useState(false);
+  const [bkashTxnChecking, setBkashTxnChecking] = useState(false);
   const otpRefs  = useRef([]);
   const timerRef = useRef(null);
+  const isMobile = useIsMobile();
+  injectMpSheetStyle();
 
-  const pricing = calculateProductPricing(product, qty);
-  const totalPrice = Math.max(0, pricing.productSubtotal - discount);
   const activeUser = checkoutUser;
+  const pricingOverride = phoneStatus?.phone === normalizeBdMobile(phone) && phoneStatus?.pricing ? phoneStatus.pricing : null;
+  const effectiveProduct = pricingOverride
+    ? {
+        ...product,
+        originalPrice: pricingOverride.original_price ?? product.originalPrice,
+        salePrice: pricingOverride.sale_price ?? product.salePrice,
+        discountAmount: pricingOverride.discount_amount ?? product.discountAmount,
+        discountMaxQty: pricingOverride.discount_max_qty ?? product.discountMaxQty,
+        discountMaxOrders: pricingOverride.discount_orders_limit ?? product.discountMaxOrders,
+        discountBlocked: !!pricingOverride.discount_blocked,
+      }
+    : product;
+  const pricing = calculateProductPricing(effectiveProduct, qty);
+  const totalPrice = Math.max(0, pricing.productSubtotal - discount);
+  const checkoutCharges = calculateCheckoutCharges(effectiveProduct, qty, { city, area }, totalPrice);
+  // PAYMENT — fee override
+  const effectiveCodFee = paymentMethod === "bkash" ? 0 : checkoutCharges.codFee;
+  const effectiveFinalTotal = checkoutCharges.shippingCost + effectiveCodFee + totalPrice;
+  const discountCapMessage = getDiscountCapMessage(effectiveProduct, qty);
 
   useEffect(() => {
     document.body.style.overflow = open ? "hidden" : "";
@@ -335,11 +810,16 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
       setOtpPurpose("phone");
       setIsBusy(false); setTimerKey(0);
       setCheckoutUser(null); setTrustedDeviceCheckout(false); setCheckoutVerificationTicket("");
-      setPhoneStatus(null); setPhoneChecking(false);
+      setPhoneStatus(null); setPhoneChecking(false); setPriceNotice("");
       setCity(""); setArea(""); setStreet("");
       setShowAddAddressForm(false);
       setAddressSaveStatus(null);
       setNewAddressLabel(""); setNewAddressLine1(""); setNewAddressCity(""); setNewAddressDistrict("");
+      setPaymentMethod("cod");
+      setBkashTxnId("");
+      setBkashTxnError("");
+      setShowBkashQr(false);
+      setBkashTxnChecking(false);
       setName("");
       setPhone("");
     }
@@ -349,13 +829,82 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
     const res = await fetch(`${API_BASE}/orders/device-status`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ phone: p }),
+      body: JSON.stringify({ phone: p, ...(product?.id ? { product_id: product.id } : {}) }),
       credentials: "include",
       signal,
     });
     const json = await res.json();
     if (!res.ok || !json.ok) throw new Error(json?.error?.message || "Couldn't check this device.");
     return { ...json.data, phone: p };
+  };
+
+  const productWithPricingOverride = (baseProduct, pricingOverride) => pricingOverride
+    ? {
+        ...baseProduct,
+        originalPrice: pricingOverride.original_price ?? baseProduct.originalPrice,
+        salePrice: pricingOverride.sale_price ?? baseProduct.salePrice,
+        discountAmount: pricingOverride.discount_amount ?? baseProduct.discountAmount,
+        discountMaxQty: pricingOverride.discount_max_qty ?? baseProduct.discountMaxQty,
+        discountMaxOrders: pricingOverride.discount_orders_limit ?? baseProduct.discountMaxOrders,
+        discountBlocked: !!pricingOverride.discount_blocked,
+      }
+    : baseProduct;
+
+  const showPriceNoticeAlert = (message) => {
+    if (!message) return;
+    if (window.Swal?.fire) {
+      window.Swal.fire({
+        icon: "info",
+        title: "Regular price applies",
+        text: message,
+        background: "#FFF3DC",
+        color: "#571F29",
+        confirmButtonColor: "#571F29",
+        confirmButtonText: "Got it",
+      });
+      return;
+    }
+    window.alert(message);
+  };
+
+  const verifyCheckoutCoupon = async () => {
+    if (!coupon.trim() || !setDiscount || !setCouponStatus || !setCouponError) return;
+    if (hasProductDiscount(effectiveProduct)) {
+      setDiscount(0);
+      setCouponStatus("err");
+      setCouponError("Coupon codes cannot be used on discounted products.");
+      return;
+    }
+
+    setCouponStatus("loading");
+    setCouponError("");
+    try {
+      const res = await fetch(`${API_BASE}/coupons/validate`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code: coupon.trim(),
+          subtotal: pricing.productSubtotal,
+          customer_phone: normalizedPhone,
+          ...(product?.id ? { product_id: product.id } : {}),
+        }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.ok) {
+        setDiscount(0);
+        setCouponStatus("err");
+        setCouponError(json?.error?.message || "This coupon can't be used for this order.");
+        return;
+      }
+      setDiscount(json.data.discount);
+      setCouponStatus("ok");
+      window.mpDismissBannerForCoupon?.(coupon.trim());
+    } catch {
+      setDiscount(0);
+      setCouponStatus("err");
+      setCouponError("Could not verify coupon. Please try again.");
+    }
   };
 
   const applyTrustedCheckout = (status) => {
@@ -386,6 +935,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
     setTrustedDeviceCheckout(false);
     setCheckoutVerificationTicket("");
     setPhoneStatus(null);
+    setPriceNotice("");
     setSavedAddresses([]);
     setSelectedAddressId("");
     setCity(""); setArea(""); setStreet("");
@@ -413,6 +963,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
       try {
         const status = await fetchDeviceStatus(p, controller.signal);
         setPhoneStatus(status);
+        setPriceNotice(status?.pricing?.message || "");
         if (status.trusted) {
           setPhone(p);
           applyTrustedCheckout(status);
@@ -446,13 +997,46 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [step, timerKey]);
 
+  useEffect(() => {
+    if (!open || paymentMethod !== "bkash") {
+      setBkashTxnChecking(false);
+      return;
+    }
+
+    const txnId = bkashTxnId.trim().toUpperCase();
+    if (!BKASH_TXN_ID_PATTERN.test(txnId)) {
+      setBkashTxnChecking(false);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setBkashTxnChecking(true);
+      try {
+        const res = await fetch(`${API_BASE}/orders/bkash-txn/check?txn_id=${encodeURIComponent(txnId)}`);
+        const json = await res.json().catch(() => null);
+        if (cancelled) return;
+        if (json?.ok && json.data?.exists) {
+          setBkashTxnError("This bKash transaction ID has already been used. Please check and enter a unique transaction ID.");
+        }
+      } catch {
+        /* Duplicate check is advisory; submit still has server-side protection. */
+      } finally {
+        if (!cancelled) setBkashTxnChecking(false);
+      }
+    }, 400);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [open, paymentMethod, bkashTxnId]);
+
   const fmtTime = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 
   if (!open) return null;
 
-  const composedAddress = selectedAddressId
-    ? savedAddresses.find(a => a.id === selectedAddressId)?.line1 || [street.trim(), area, city].filter(Boolean).join(", ")
-    : [street.trim(), area, city].filter(Boolean).join(", ");
+  const composedAddress = street.trim();
   const normalizedPhone = normalizeBdMobile(phone);
   const phoneStatusReady = phoneStatus?.phone === normalizedPhone;
   const guestTrustedDevice = !loggedUser?.phone && phoneStatusReady && phoneStatus.trusted;
@@ -466,43 +1050,102 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
         : "Cash on delivery";
 
   // ── Shared styles ──────────────────────────────────────────────────────────
-  const overlay = { position: "fixed", inset: 0, background: "rgba(0,0,0,.52)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" };
+  const overlay = isMobile
+    ? { position: "fixed", inset: 0, background: "rgba(0,0,0,0.52)", zIndex: 1100, display: "flex", alignItems: "flex-end", justifyContent: "center", padding: 0 }
+    : { position: "fixed", inset: 0, background: "rgba(0,0,0,0.52)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" };
   // maxHeight + scroll: on short viewports (landscape phones, keyboard open)
   // the form must stay reachable instead of clipping behind overflow:hidden.
-  const panel   = { background: "#FFFDF7", borderRadius: 16, width: "100%", maxWidth: 440, boxShadow: "0 20px 60px rgba(0,0,0,.28)", maxHeight: "92dvh", overflowY: "auto", overflowX: "hidden" };
-  const field   = { width: "100%", padding: "11px 14px", fontFamily: "var(--font-body)", fontSize: 14, border: "1.5px solid rgba(87,31,41,.18)", borderRadius: 8, background: "#fff", color: "#1A0A0D", outline: "none", boxSizing: "border-box" };
+  const panel   = isMobile
+    ? { background: "#F7E3C9", borderRadius: "20px 20px 0 0", width: "100%", maxWidth: "100%", maxHeight: "92dvh", overflowY: "auto", overflowX: "hidden", boxShadow: "0 -8px 40px rgba(0,0,0,0.22)", animation: "mpSheetSlideUp 0.32s cubic-bezier(0.32,0.72,0,1) both" }
+    : { background: "#FFFDF7", borderRadius: 16, width: "100%", maxWidth: 440, boxShadow: "0 20px 60px rgba(0,0,0,0.28)", maxHeight: "92dvh", overflowY: "auto", overflowX: "hidden" };
+  const sheetHandle = isMobile ? (
+    <div style={{
+      width: 36, height: 4, borderRadius: 2,
+      background: "rgba(87,31,41,0.2)",
+      margin: "10px auto 4px", flexShrink: 0
+    }} aria-hidden="true" />
+  ) : null;
+  const field   = { width: "100%", padding: "9px 12px", fontFamily: "var(--font-body)", fontSize: 13, border: "1px solid #e0e0e0", borderRadius: 8, background: "#fff", color: "#333", outline: "none", boxSizing: "border-box" };
   const lbl     = { display: "block", fontSize: 12, fontWeight: 600, color: "rgba(87,31,41,.65)", marginBottom: 5, fontFamily: "var(--font-display)", textTransform: "uppercase", letterSpacing: ".04em" };
-  const hdr     = { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "18px 22px 14px", borderBottom: "1px solid rgba(87,31,41,.1)" };
-  const summary = { padding: "13px 22px", background: "rgba(87,31,41,.04)", borderBottom: "1px solid rgba(87,31,41,.08)", display: "flex", justifyContent: "space-between", alignItems: "center" };
-  const primBtn = (busy) => ({ width: "100%", padding: "14px 0", background: busy ? "rgba(87,31,41,.35)" : "#571F29", color: "#F7E3C9", borderRadius: 8, fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 15, border: "none", cursor: busy ? "not-allowed" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, transition: "background .2s" });
+  const hdr     = { display: "flex", alignItems: "center", justifyContent: "space-between", padding: isMobile ? "14px 22px 14px" : "18px 22px 14px", borderBottom: "1px solid rgba(87,31,41,.1)" };
+  const primBtn = (busy) => ({ width: "100%", padding: 14, background: busy ? "rgba(87,31,41,.35)" : "#571F29", color: "#fff", borderRadius: 10, fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, border: "none", cursor: busy ? "not-allowed" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, transition: "background .2s" });
 
   // ── Order summary strip ────────────────────────────────────────────────────
-  const SummaryStrip = () => (
-    <div style={summary}>
-      <div>
-        <div style={{ fontFamily: "var(--font-display)", fontWeight: 600, fontSize: 13, color: "#571F29" }}>
-          {product.name} -  {product.weight} × {qty}
+  const SummaryStrip = () => {
+    const productLabel = `${effectiveProduct.name} - ${effectiveProduct.weight} × ${qty}`;
+    const offerActive = !effectiveProduct.discountBlocked && pricing.productDiscountTotal > 0;
+    const displayedProductTotal = totalPrice;
+
+    return (
+      <div className="checkout-summary-card">
+        <div className="checkout-summary-product">
+          <span className="checkout-summary-name">{productLabel}</span>
+          <span className="checkout-summary-price">
+            {offerActive ? (
+              <>
+                <span className="checkout-summary-original">৳{pricing.originalSubtotal.toLocaleString()}</span>
+                <strong>৳{displayedProductTotal.toLocaleString()}</strong>
+              </>
+            ) : (
+              <strong>৳{displayedProductTotal.toLocaleString()}</strong>
+            )}
+          </span>
         </div>
-        {pricing.productDiscountTotal > 0 && <div style={{ fontSize: 11, color: "rgba(87,31,41,.5)", marginTop: 2 }}>{product.discountLabel || "Product offer"} - ৳{pricing.productDiscountTotal.toLocaleString()} off</div>}
-        {discount > 0 && <div style={{ fontSize: 11, color: "rgba(87,31,41,.5)", marginTop: 2 }}>Coupon applied - ৳{discount.toLocaleString()} off</div>}
+        {offerActive && (
+          <div className="checkout-summary-offer">
+            <span className="checkout-summary-badge" aria-label={`Discount: ৳${pricing.productDiscountTotal.toLocaleString()} off`}>
+              ৳{pricing.productDiscountTotal.toLocaleString()} OFF
+            </span>
+            <span>{effectiveProduct.discountLabel || "Product offer"}{discountCapMessage ? ` · ${discountCapMessage}` : ""}</span>
+          </div>
+        )}
+        <div className="checkout-summary-divider" />
+        {/* PAYMENT — SummaryStrip update */}
+        <div className="checkout-summary-breakdown">
+          <div><span>Delivery</span><strong>৳{checkoutCharges.shippingCost.toLocaleString()}</strong></div>
+          {paymentMethod === "cod" && (
+            <div><span>COD charge (1%)</span><strong>৳{effectiveCodFee.toLocaleString()}</strong></div>
+          )}
+          {paymentMethod === "bkash" && (
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <span style={{ color: "#1a9a50", fontWeight: 600 }}>bKash — no COD charge</span>
+              <strong style={{ color: "#1a9a50" }}>৳0</strong>
+            </div>
+          )}
+        </div>
+        {discount > 0 && (
+          <div className="checkout-summary-coupon">
+            <span>Coupon</span><strong>-৳{discount.toLocaleString()}</strong>
+          </div>
+        )}
+        <div className="checkout-summary-total"><span>Total</span><strong>৳{effectiveFinalTotal.toLocaleString()}</strong></div>
       </div>
-      <span style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 17, color: "#FF9100" }}>৳{totalPrice.toLocaleString()}</span>
-    </div>
-  );
+    );
+  };
 
   // ── Success ────────────────────────────────────────────────────────────────
   if (step === "success") return (
     <div style={overlay} onClick={e => e.target === e.currentTarget && onClose()}>
-      <div style={{ ...panel, maxHeight: "90dvh", overflowY: "auto" }}>
+      <div style={{ ...panel, maxHeight: isMobile ? "92dvh" : "90dvh", overflowY: "auto" }}>
+        {sheetHandle}
         <div style={{ padding: "28px 24px", textAlign: "center" }}>
           <div style={{ width: 54, height: 54, borderRadius: "50%", background: "rgba(46,94,31,.1)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
             <i className="fa-solid fa-circle-check" style={{ fontSize: 26, color: "#2E5E1F" }} aria-hidden="true" />
           </div>
           <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 22, color: "#571F29", margin: "0 0 6px" }}>Order Placed!</h2>
           <p style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 18, color: "#FF9100", margin: "0 0 10px" }}>#{orderRef}</p>
-          <p style={{ fontFamily: "var(--font-body)", fontSize: 13.5, color: "rgba(87,31,41,.65)", margin: "0 0 18px", lineHeight: 1.5 }}>
-            A confirmation SMS has been sent to <strong>{phone}</strong>.
-          </p>
+          {/* PAYMENT — success screen */}
+          {paymentMethod === "bkash" ? (
+            <p style={{ fontFamily: "var(--font-body)", fontSize: 13.5, color: "rgba(87,31,41,.65)", margin: "0 0 18px", lineHeight: 1.5 }}>
+              Your order <strong>#{orderRef}</strong> is under review.
+              Our team is verifying your bKash transaction (<strong>{bkashTxnId}</strong>).
+              You will receive an SMS confirmation at <strong>{phone}</strong> within 30 minutes.
+            </p>
+          ) : (
+            <p style={{ fontFamily: "var(--font-body)", fontSize: 13.5, color: "rgba(87,31,41,.65)", margin: "0 0 18px", lineHeight: 1.5 }}>
+              A confirmation SMS has been sent to <strong>{phone}</strong>.
+            </p>
+          )}
           {typeof MPFeedbackCard === "function" && <MPFeedbackCard orderRef={orderRef} />}
           {!activeUser && (
             <div className="shop-post-order-member">
@@ -522,6 +1165,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
   if (step === "error") return (
     <div style={overlay} onClick={e => e.target === e.currentTarget && onClose()}>
       <div style={panel}>
+        {sheetHandle}
         <div style={{ padding: "36px 28px", textAlign: "center" }}>
           <div style={{ width: 60, height: 60, borderRadius: "50%", background: "rgba(200,40,40,.1)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px" }}>
             <i className="fa-solid fa-circle-xmark" style={{ fontSize: 28, color: "#C82828" }} aria-hidden="true" />
@@ -619,7 +1263,21 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
         setCheckoutUser(user);
         setTrustedDeviceCheckout(false);
         setCheckoutVerificationTicket(json.data.verification_ticket || "");
-        setPhoneStatus({ phone: normalizedPhone, trusted: true, user, addresses: savedAddresses });
+        const nextPhoneStatus = phoneStatus?.phone === normalizedPhone
+          ? { ...phoneStatus, trusted: true, user, addresses: savedAddresses }
+          : { phone: normalizedPhone, trusted: true, user, addresses: savedAddresses };
+        setPhoneStatus(nextPhoneStatus);
+        setPriceNotice(nextPhoneStatus?.pricing?.message || "");
+        try {
+          const refreshedStatus = await fetchDeviceStatus(normalizedPhone);
+          setPhoneStatus(refreshedStatus);
+          if (Array.isArray(refreshedStatus.addresses)) setSavedAddresses(refreshedStatus.addresses);
+          const refreshedMessage = refreshedStatus?.pricing?.message || "";
+          setPriceNotice(refreshedMessage);
+          showPriceNoticeAlert(refreshedMessage);
+        } catch {
+          showPriceNoticeAlert(nextPhoneStatus?.pricing?.message || "");
+        }
         if (user?.name) setName(user.name);
         setStep("details");
       } catch (err) {
@@ -644,6 +1302,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
     return (
       <div style={overlay} onClick={e => e.target === e.currentTarget && onClose()}>
         <div style={panel}>
+          {sheetHandle}
           {/* Header */}
           <div style={hdr}>
             <button onClick={() => setStep(otpPurpose === "address" ? "details" : "form")} aria-label="Back" style={{ background: "none", border: "none", cursor: "pointer", color: "#571F29", fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", gap: 5 }}>
@@ -730,17 +1389,22 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
         setPhoneChecking(true);
         status = await fetchDeviceStatus(normalizedPhone);
         setPhoneStatus(status);
+        setPriceNotice(status?.pricing?.message || "");
         setPhoneChecking(false);
       }
+      setPriceNotice(status?.pricing?.message || "");
+      const statusProduct = productWithPricingOverride(product, status?.pricing);
+      const statusPricing = calculateProductPricing(statusProduct, qty);
 
       if (status.trusted) {
         applyTrustedCheckout(status);
         setStep("details");
+        setPriceNotice(status?.pricing?.message || "");
         return;
       }
 
       if (coupon) {
-        if (hasProductDiscount(product)) {
+        if (hasProductDiscount(statusProduct)) {
           setErrorMsg("Coupon codes cannot be used on discounted products.");
           setStep("error");
           return;
@@ -748,7 +1412,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
         const vres = await fetch(`${API_BASE}/coupons/validate`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ code: coupon, subtotal: pricing.productSubtotal, customer_phone: normalizedPhone, ...(product?.id ? { product_id: product.id } : {}) }),
+          body: JSON.stringify({ code: coupon, subtotal: statusPricing.productSubtotal, customer_phone: normalizedPhone, ...(product?.id ? { product_id: product.id } : {}) }),
         });
         const vjson = await vres.json().catch(() => null);
         if (!vres.ok) {
@@ -779,9 +1443,17 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
   };
 
   const placeQuickOrder = async (verificationTicket = null) => {
-    const trustedCheckout = trustedDeviceCheckout && !!checkoutUser?.phone && !loggedUser?.phone;
-    const ticketCheckout = !!checkoutVerificationTicket && !trustedCheckout && !loggedUser?.phone;
-    const res = await fetch(ticketCheckout ? `${API_BASE}/orders/guest` : `${API_BASE}/orders/${trustedCheckout ? "trusted" : "quick"}`, {
+    const trustedCheckout = trustedDeviceCheckout && !!checkoutUser?.phone;
+    const ticketCheckout = !!checkoutVerificationTicket && !trustedCheckout;
+    const quickCheckout = !trustedCheckout && !ticketCheckout && !!loggedUser?.id;
+    const endpoint = ticketCheckout
+      ? `${API_BASE}/orders/guest`
+      : trustedCheckout
+        ? `${API_BASE}/orders/trusted`
+        : quickCheckout
+          ? `${API_BASE}/orders/quick`
+          : `${API_BASE}/orders/guest`;
+    const res = await fetch(endpoint, {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
@@ -791,8 +1463,15 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
         ...(verificationTicket ? { verification_ticket: verificationTicket } : {}),
         qty,
         address: composedAddress,
+        city,
+        district: area,
         ...(coupon ? { coupon_code: coupon } : {}),
         ...(product?.id ? { product_id: product.id } : {}),
+        // PAYMENT — API payload
+        payment_method: paymentMethod,
+        ...(paymentMethod === "bkash" && bkashTxnId.trim()
+          ? { bkash_txn_id: bkashTxnId.trim().toUpperCase() }
+          : {}),
       }),
     });
     const json = await res.json();
@@ -806,11 +1485,29 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
 
   const handleDetailsSubmit = async (e) => {
     e.preventDefault();
-    const hasAddress = selectedAddressId ? true : (city && street.trim());
+    const hasAddress = Boolean(city && area && street.trim());
     if (!name.trim() || !hasAddress || isBusy) return;
 
     setIsBusy(true); setErrorMsg("");
     try {
+      // PAYMENT — validation
+      if (paymentMethod === "bkash") {
+        if (!bkashTxnId.trim()) {
+          setBkashTxnError("Please enter your bKash transaction ID.");
+          setIsBusy(false);
+          return;
+        }
+        if (!BKASH_TXN_ID_PATTERN.test(bkashTxnId.trim().toUpperCase())) {
+          setBkashTxnError(BKASH_TXN_ID_PATTERN_MESSAGE);
+          setIsBusy(false);
+          return;
+        }
+        if (bkashTxnError) {
+          setIsBusy(false);
+          return;
+        }
+      }
+
       if (trustedDeviceCheckout && !selectedAddressId) {
         const res = await fetch(`${API_BASE}/orders/request-otp`, {
           method: "POST",
@@ -826,7 +1523,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
         return;
       }
 
-      if (!checkoutVerificationTicket && (!activeUser?.name || activeUser.name !== name.trim())) {
+      if (loggedUser?.id && !checkoutVerificationTicket && (!activeUser?.name || activeUser.name !== name.trim())) {
         const profileRes = await fetch(`${API_BASE}/me`, {
           method: "PATCH",
           credentials: "include",
@@ -840,7 +1537,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
         setCheckoutUser(updatedUser);
       }
 
-      if (!checkoutVerificationTicket && !selectedAddressId) {
+      if (loggedUser?.id && !checkoutVerificationTicket && !selectedAddressId) {
         await fetch(`${API_BASE}/me/addresses`, {
           method: "POST",
           credentials: "include",
@@ -859,6 +1556,19 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
       setOrderRef(order.order_ref);
       setStep("success");
     } catch (err) {
+      if (err.code === "DUPLICATE_BKASH_TXN") {
+        setBkashTxnError(err.message || "This bKash transaction ID has already been used. Please check and enter a unique transaction ID.");
+        return;
+      }
+      if (err.code === "UNAUTHORIZED") {
+        setCheckoutUser(null);
+        setTrustedDeviceCheckout(false);
+        setCheckoutVerificationTicket("");
+        setPhoneStatus(null);
+        setErrorMsg("Please verify your phone number to continue checkout.");
+        setStep("form");
+        return;
+      }
       setErrorMsg(err.message);
       setStep("error");
     } finally {
@@ -866,26 +1576,44 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
     }
   };
 
-  const hasAddress = selectedAddressId ? true : (city && street.trim());
+  const hasAddress = Boolean(city && area && street.trim());
   const needsNameEntry = !activeUser?.name;
   const canSubmitPhone = isValidBdMobile(phone) && !isBusy && !phoneChecking;
-  const canSubmitDetails = (!needsNameEntry || name.trim()) && hasAddress && !isBusy;
+  const bkashValid = paymentMethod !== "bkash" || (BKASH_TXN_ID_PATTERN.test(bkashTxnId.trim().toUpperCase()) && !bkashTxnError && !bkashTxnChecking);
+  const canSubmitDetails = (!needsNameEntry || name.trim()) && hasAddress && !isBusy && bkashValid;
 
   return (
     <div style={overlay} onClick={e => e.target === e.currentTarget && onClose()}>
-      <div style={panel}>
+      <div style={panel} role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        {sheetHandle}
         <div style={hdr}>
-          <span style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 16, color: "#571F29" }}>Place Order</span>
+          <span id="modal-title" style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 16, color: "#571F29" }}>Place Order</span>
           <button onClick={onClose} aria-label="Close" style={{ background: "none", border: "none", cursor: "pointer", color: "#571F29", fontSize: 20, lineHeight: 1 }}>×</button>
         </div>
 
-        <SummaryStrip />
-
-        <form onSubmit={step === "details" ? handleDetailsSubmit : handlePhoneSubmit} style={{ padding: "20px 22px 22px" }}>
+        <form onSubmit={step === "details" ? handleDetailsSubmit : handlePhoneSubmit} className="checkout-modal-body">
+          <SummaryStrip />
           {activeUser?.phone && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, padding: "8px 12px", background: "rgba(46,168,107,.08)", borderRadius: 8, border: "1px solid rgba(46,168,107,.2)" }}>
-              <i className="fa-solid fa-circle-check" style={{ color: "#2ea86b", fontSize: 14 }} aria-hidden="true" />
-              <span style={{ fontFamily: "var(--font-body)", fontSize: 13, color: "#2ea86b", fontWeight: 600 }}>Phone confirmed</span>
+            <div className="checkout-identity-card">
+              <div className="checkout-identity-phone">
+                <span className="checkout-identity-check" aria-hidden="true">✓</span>
+                <span className="checkout-identity-phone-text">
+                  <span>Phone confirmed</span>
+                  <strong aria-label={`Confirmed phone: ${phone}`}>{phone}</strong>
+                </span>
+                <button type="button" onClick={resetTrustedCheckout} aria-label="Use a different phone number">Change</button>
+              </div>
+              {!needsNameEntry && (
+                <div className="checkout-identity-user">
+                  <span className="checkout-identity-avatar" aria-hidden="true">
+                    {String(name || "MP").trim().split(/\s+/).slice(0, 2).map(part => part[0]).join("").toUpperCase()}
+                  </span>
+                  <span>
+                    <strong>{name}</strong>
+                    <small>Ordering for this account</small>
+                  </span>
+                </div>
+              )}
             </div>
           )}
 
@@ -908,6 +1636,12 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
                     {phoneStatusHint}
                   </div>
                 )}
+                {priceNotice && (
+                  <div style={{ marginTop: 8, padding: "9px 11px", borderRadius: 8, background: "rgba(255,145,0,.08)", border: "1px solid rgba(255,145,0,.22)", color: "#B36200", fontFamily: "var(--font-body)", fontSize: 12, lineHeight: 1.45 }}>
+                    <i className="fa-solid fa-circle-info" aria-hidden="true" style={{ marginRight: 6 }} />
+                    {priceNotice}
+                  </div>
+                )}
               </div>
 
             </>
@@ -921,33 +1655,472 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
                   <input style={field} type="text" placeholder="Your full name" value={name}
                     onChange={e => setName(e.target.value)} required disabled={isBusy} autoFocus={!name} autoComplete="name" />
                 </div>
-              ) : (
-                <div style={{ marginBottom: 14, padding: "8px 12px", background: "rgba(87,31,41,.04)", borderRadius: 8, border: "1px solid rgba(87,31,41,.08)" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <i className="fa-solid fa-user-check" style={{ color: "#571F29", fontSize: 14 }} aria-hidden="true" />
-                    <span style={{ fontFamily: "var(--font-body)", fontSize: 13, color: "rgba(87,31,41,.72)", fontWeight: 600 }}>Ordering as {name}</span>
+              ) : null}
+
+              {effectiveProduct.discountBlocked && (
+                <div style={{ marginBottom: 14 }}>
+                  <label style={lbl}>Coupon Code</label>
+                  <div className="shop-coupon-row" style={{ margin: 0 }}>
+                    <div className="shop-coupon-wrap" style={{ flexDirection: "row", borderRadius: 8 }}>
+                      <input
+                        className={"shop-coupon-input" + (couponStatus === "ok" ? " coupon-ok" : couponStatus === "err" ? " coupon-err" : "")}
+                        type="text"
+                        placeholder="Enter coupon code"
+                        value={coupon}
+                        onChange={e => {
+                          setCoupon?.(e.target.value.toUpperCase());
+                          setCouponStatus?.("idle");
+                          setCouponError?.("");
+                          setDiscount?.(0);
+                        }}
+                        onKeyDown={e => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            verifyCheckoutCoupon();
+                          }
+                        }}
+                        aria-label="Coupon code"
+                        disabled={isBusy}
+                      />
+                      <button
+                        type="button"
+                        className="shop-coupon-btn"
+                        onClick={verifyCheckoutCoupon}
+                        disabled={isBusy || couponStatus === "loading" || !coupon.trim()}
+                        style={{ borderRadius: 0, padding: "0 18px" }}
+                      >
+                        {couponStatus === "loading" ? <i className="fa-solid fa-spinner fa-spin" aria-hidden="true" /> : "Apply"}
+                      </button>
+                    </div>
+                    {couponStatus === "ok" && (
+                      <span className="shop-coupon-msg shop-coupon-msg--ok">
+                        <i className="fa-solid fa-circle-check" aria-hidden="true" /> Coupon applied - ৳{discount} off
+                      </span>
+                    )}
+                    {couponStatus === "err" && (
+                      <span className="shop-coupon-msg shop-coupon-msg--err">
+                        <i className="fa-solid fa-circle-xmark" aria-hidden="true" /> {couponError}
+                      </span>
+                    )}
                   </div>
-                  {trustedDeviceCheckout && (
+                </div>
+              )}
+
+              {/* PAYMENT — selector UI */}
+              <div style={{
+                fontSize: 10, fontWeight: 700, letterSpacing: "0.08em",
+                textTransform: "uppercase", color: "#999",
+                marginBottom: 8, fontFamily: "var(--font-display)"
+              }}>
+                Payment Method
+              </div>
+              <div style={{
+                display: "grid", gridTemplateColumns: "1fr 1fr",
+                gap: 10, marginBottom: 16
+              }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPaymentMethod("cod");
+                    setBkashTxnId("");
+                    setBkashTxnError("");
+                    setShowBkashQr(false);
+                    setBkashTxnChecking(false);
+                  }}
+                  style={{
+                    padding: "12px 10px",
+                    minHeight: 164,
+                    height: 164,
+                    borderRadius: 12,
+                    border: paymentMethod === "cod"
+                      ? "2px solid #571F29"
+                      : "1.5px solid #e0e0e0",
+                    background: paymentMethod === "cod"
+                      ? "rgba(87,31,41,0.06)"
+                      : "#fff",
+                    cursor: "pointer",
+                    display: "flex", flexDirection: "column",
+                    alignItems: "center", gap: 6,
+                    justifyContent: "center",
+                    transition: "all 0.15s",
+                    boxSizing: "border-box",
+                  }}
+                  aria-pressed={paymentMethod === "cod"}
+                >
+                  <div style={{
+                    width: 36, height: 36, borderRadius: "50%",
+                    background: paymentMethod === "cod"
+                      ? "rgba(87,31,41,0.1)" : "rgba(0,0,0,0.04)",
+                    display: "flex", alignItems: "center",
+                    justifyContent: "center"
+                  }}>
+                    <i className="fa-solid fa-money-bill-wave"
+                       aria-hidden="true"
+                       style={{
+                         fontSize: 16,
+                         color: paymentMethod === "cod" ? "#571F29" : "#aaa"
+                       }} />
+                  </div>
+                  <span style={{
+                    fontFamily: "var(--font-display)",
+                    fontWeight: 800, fontSize: 13,
+                    color: paymentMethod === "cod" ? "#571F29" : "#999"
+                  }}>
+                    Cash on Delivery
+                  </span>
+                  <span style={{
+                    fontFamily: "var(--font-body)",
+                    fontSize: 10.5, color: "#aaa", lineHeight: 1.35,
+                    textAlign: "center"
+                  }}>
+                    Pay when you receive
+                  </span>
+                  {paymentMethod === "cod" && (
+                    <div style={{
+                      width: 18, height: 18, borderRadius: "50%",
+                      background: "#571F29",
+                      display: "flex", alignItems: "center",
+                      justifyContent: "center", marginTop: 2
+                    }}>
+                      <i className="fa-solid fa-check"
+                         aria-hidden="true"
+                       style={{ fontSize: 9, color: "#fff" }} />
+                    </div>
+                  )}
+                  {paymentMethod !== "cod" && (
+                    <div style={{ width: 18, height: 18, marginTop: 2 }} aria-hidden="true" />
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPaymentMethod("bkash");
+                    setBkashTxnId("");
+                    setBkashTxnError("");
+                    setShowBkashQr(false);
+                    setBkashTxnChecking(false);
+                  }}
+                  style={{
+                    padding: "12px 10px",
+                    minHeight: 164,
+                    height: 164,
+                    borderRadius: 12,
+                    border: paymentMethod === "bkash"
+                      ? "2px solid #E2136E"
+                      : "1.5px solid #e0e0e0",
+                    background: paymentMethod === "bkash"
+                      ? "#FDE8F2" : "#fff",
+                    cursor: "pointer",
+                    display: "flex", flexDirection: "column",
+                    alignItems: "center", gap: 6,
+                    justifyContent: "center",
+                    transition: "all 0.15s",
+                    boxSizing: "border-box",
+                  }}
+                  aria-pressed={paymentMethod === "bkash"}
+                >
+                  <div style={{
+                    width: 36, height: 36, borderRadius: "50%",
+                    background: paymentMethod === "bkash"
+                      ? "rgba(226,19,110,0.12)" : "rgba(0,0,0,0.04)",
+                    display: "flex", alignItems: "center",
+                    justifyContent: "center"
+                  }}>
+                    <i className="fa-solid fa-mobile-screen-button"
+                       aria-hidden="true"
+                       style={{
+                         fontSize: 16,
+                         color: paymentMethod === "bkash" ? "#E2136E" : "#aaa"
+                       }} />
+                  </div>
+                  <span style={{
+                    fontFamily: "var(--font-display)",
+                    fontWeight: 800, fontSize: 13,
+                    color: paymentMethod === "bkash" ? "#E2136E" : "#999"
+                  }}>
+                    bKash
+                  </span>
+                  <span style={{
+                    fontFamily: "var(--font-body)",
+                    fontSize: 10.5, color: "#aaa", lineHeight: 1.35,
+                    textAlign: "center"
+                  }}>
+                    No extra charge
+                  </span>
+                  {paymentMethod === "bkash" && (
+                    <div style={{
+                      width: 18, height: 18, borderRadius: "50%",
+                      background: "#E2136E",
+                      display: "flex", alignItems: "center",
+                      justifyContent: "center", marginTop: 2
+                    }}>
+                      <i className="fa-solid fa-check"
+                         aria-hidden="true"
+                       style={{ fontSize: 9, color: "#fff" }} />
+                    </div>
+                  )}
+                  {paymentMethod !== "bkash" && (
+                    <div style={{ width: 18, height: 18, marginTop: 2 }} aria-hidden="true" />
+                  )}
+                </button>
+              </div>
+
+              {/* PAYMENT — bKash panel */}
+              {paymentMethod === "bkash" && (
+                <div style={{
+                  background: "#FDE8F2",
+                  border: "1.5px solid rgba(226,19,110,0.25)",
+                  borderRadius: 14,
+                  padding: "16px 16px 14px",
+                  marginBottom: 16,
+                  display: "flex", flexDirection: "column", gap: 14
+                }}>
+                  <div style={{
+                    display: "flex", alignItems: "flex-start", gap: 10
+                  }}>
+                    <div style={{
+                      width: 36, height: 36, borderRadius: "50%",
+                      background: "rgba(226,19,110,0.12)", flexShrink: 0,
+                      display: "flex", alignItems: "center",
+                      justifyContent: "center"
+                    }}>
+                      <i className="fa-solid fa-circle-info"
+                         aria-hidden="true"
+                         style={{ color: "#E2136E", fontSize: 16 }} />
+                    </div>
+                    <p style={{
+                      fontFamily: "var(--font-body)", fontSize: 12.5,
+                      color: "#8B0040", lineHeight: 1.55, margin: 0
+                    }}>
+                      Send <strong>৳{effectiveFinalTotal.toLocaleString()}</strong> to
+                      our bKash merchant number below.
+                      Then enter your transaction ID to complete the order.
+                    </p>
+                  </div>
+
+                  <div style={{
+                    display: "flex", flexDirection: "column", gap: 10
+                  }}>
+                    <div style={{
+                      width: "100%",
+                      background: "#fff",
+                      border: "1px solid rgba(226,19,110,0.2)",
+                      borderRadius: 10, padding: "10px 14px",
+                      boxSizing: "border-box"
+                    }}>
+                      <div style={{
+                        fontFamily: "var(--font-body)", fontSize: 10.5,
+                        fontWeight: 700, color: "#E2136E",
+                        textTransform: "uppercase", letterSpacing: "0.05em",
+                        marginBottom: 4
+                      }}>
+                        bKash Merchant Number
+                      </div>
+                      <div style={{
+                        fontFamily: "var(--font-display)", fontWeight: 900,
+                        fontSize: 20, color: "#571F29",
+                        letterSpacing: "0.03em", fontVariantNumeric: "tabular-nums"
+                      }}>
+                        {BKASH_MERCHANT_NUMBER}
+                      </div>
+                      <div style={{
+                        fontFamily: "var(--font-body)", fontSize: 11,
+                        color: "rgba(139,0,64,0.6)", marginTop: 3
+                      }}>
+                        (Merchant account)
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard?.writeText(BKASH_MERCHANT_NUMBER);
+                        }}
+                        style={{
+                          marginTop: 8, padding: "5px 12px",
+                          background: "rgba(226,19,110,0.1)",
+                          border: "1px solid rgba(226,19,110,0.22)",
+                          borderRadius: 6, cursor: "pointer",
+                          fontFamily: "var(--font-display)",
+                          fontSize: 11, fontWeight: 700, color: "#E2136E",
+                          display: "flex", alignItems: "center", gap: 5
+                        }}
+                      >
+                        <i className="fa-solid fa-copy"
+                           aria-hidden="true" style={{ fontSize: 10 }} />
+                        Copy number
+                      </button>
+                    </div>
+
                     <button
                       type="button"
-                      onClick={resetTrustedCheckout}
-                      style={{ marginTop: 7, background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 12, color: "#FF9100", textDecoration: "underline", textUnderlineOffset: 2 }}
+                      onClick={() => setShowBkashQr(v => !v)}
+                      aria-expanded={showBkashQr}
+                      style={{
+                        alignSelf: "flex-start",
+                        padding: "7px 12px",
+                        background: "rgba(226,19,110,0.08)",
+                        border: "1px solid rgba(226,19,110,0.2)",
+                        borderRadius: 8,
+                        color: "#E2136E",
+                        cursor: "pointer",
+                        fontFamily: "var(--font-display)",
+                        fontSize: 12,
+                        fontWeight: 800,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6
+                      }}
                     >
-                      Not you? Use a different number
+                      <i className="fa-solid fa-qrcode" aria-hidden="true" style={{ fontSize: 11 }} />
+                      {showBkashQr ? "Hide QR code" : "Show QR code"}
                     </button>
-                  )}
+
+                    {showBkashQr && (
+                      <div style={{
+                        width: "100%",
+                        background: "#fff",
+                        border: "1px solid rgba(226,19,110,0.2)",
+                        borderRadius: 12,
+                        padding: 12,
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: 8,
+                        boxSizing: "border-box"
+                      }}>
+                        <img
+                          src={BKASH_QR_IMAGE_PATH}
+                          alt="bKash QR code for payment"
+                          style={{
+                            width: "min(100%, 220px)",
+                            height: "auto",
+                            maxHeight: 220,
+                            borderRadius: 8,
+                            objectFit: "contain"
+                          }}
+                          onError={e => {
+                            e.currentTarget.style.display = "none";
+                            e.currentTarget.nextElementSibling.style.display = "flex";
+                          }}
+                        />
+                        <div style={{
+                          display: "none", flexDirection: "column",
+                          alignItems: "center", justifyContent: "center",
+                          width: "100%", minHeight: 120, gap: 6
+                        }}>
+                          <i className="fa-solid fa-qrcode"
+                             aria-hidden="true"
+                             style={{ fontSize: 38, color: "#E2136E" }} />
+                          <span style={{
+                            fontSize: 11, color: "#E2136E",
+                            fontFamily: "var(--font-display)",
+                            fontWeight: 800, textAlign: "center"
+                          }}>
+                            QR Code
+                          </span>
+                        </div>
+                        <span style={{
+                          fontFamily: "var(--font-body)", fontSize: 10.5,
+                          color: "rgba(139,0,64,0.6)", textAlign: "center"
+                        }}>
+                          Scan to pay
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div>
+                    <label style={{
+                      display: "block", fontSize: 10, fontWeight: 700,
+                      letterSpacing: "0.08em", textTransform: "uppercase",
+                      color: "#8B0040", marginBottom: 6,
+                      fontFamily: "var(--font-display)"
+                    }}>
+                      bKash Transaction ID *
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. ABC1234567"
+                      value={bkashTxnId}
+                      onChange={e => {
+                        setBkashTxnId(e.target.value.trim().toUpperCase());
+                        setBkashTxnError("");
+                      }}
+                      maxLength={10}
+                      disabled={isBusy}
+                      aria-label="bKash transaction ID"
+                      style={{
+                        width: "100%", padding: "10px 12px",
+                        fontSize: 14, fontFamily: "var(--font-body)",
+                        fontWeight: 600, letterSpacing: "0.04em",
+                        border: bkashTxnError
+                          ? "1.5px solid #C82828"
+                          : bkashTxnId
+                            ? "1.5px solid #E2136E"
+                            : "1.5px solid rgba(226,19,110,0.3)",
+                        borderRadius: 8, background: "#fff",
+                        color: "#1a0a0d", outline: "none",
+                        boxSizing: "border-box",
+                        transition: "border-color 0.15s"
+                      }}
+                    />
+                    {bkashTxnError && (
+                      <div style={{
+                        fontFamily: "var(--font-body)", fontSize: 12,
+                        color: "#C82828", marginTop: 5, display: "flex",
+                        alignItems: "center", gap: 5
+                      }}>
+                        <i className="fa-solid fa-circle-xmark"
+                           aria-hidden="true" />
+                        {bkashTxnError}
+                      </div>
+                    )}
+                    {bkashTxnChecking && !bkashTxnError && (
+                      <div style={{
+                        fontFamily: "var(--font-body)", fontSize: 12,
+                        color: "#8B0040", marginTop: 5, display: "flex",
+                        alignItems: "center", gap: 5
+                      }}>
+                        <i className="fa-solid fa-spinner fa-spin"
+                           aria-hidden="true" />
+                        Checking transaction ID...
+                      </div>
+                    )}
+                  </div>
+
+                  <div style={{
+                    background: "rgba(226,19,110,0.06)",
+                    border: "1px solid rgba(226,19,110,0.15)",
+                    borderRadius: 8, padding: "9px 12px",
+                    display: "flex", alignItems: "flex-start", gap: 8
+                  }}>
+                    <i className="fa-solid fa-clock"
+                       aria-hidden="true"
+                       style={{
+                         color: "#E2136E", fontSize: 13,
+                         marginTop: 1, flexShrink: 0
+                       }} />
+                    <p style={{
+                      fontFamily: "var(--font-body)", fontSize: 12,
+                      color: "#8B0040", lineHeight: 1.5, margin: 0
+                    }}>
+                      After placing your order, our team will verify your bKash
+                      transaction and confirm your order within <strong>30 minutes</strong>.
+                      You will receive an SMS confirmation once verified.
+                    </p>
+                  </div>
                 </div>
               )}
 
           {/* ── Delivery Address ── */}
-          <div style={{ marginBottom: 14 }}>
-            <label style={lbl}>Delivery Address</label>
+          <div className="checkout-address-section">
+            <label className="checkout-section-label">Delivery address</label>
 
             {/* Saved addresses section (logged in users) */}
             {activeUser?.id && savedAddresses.length > 0 && (
               <>
                 <div style={{ marginBottom: 10 }}>
-                  <label style={{ ...lbl, fontSize: 11, marginBottom: 6 }}>Select Saved Address</label>
                   <div style={{ position: "relative" }}>
                     <select
                       style={{ ...field, appearance: "none", WebkitAppearance: "none", paddingRight: 30, cursor: "pointer", color: selectedAddressId ? "#1A0A0D" : "rgba(26,10,13,.38)" }}
@@ -984,10 +2157,10 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
                     setAddressSaveStatus(null);
                     setShowAddAddressForm(v => !v);
                   }}
-                  style={{ fontSize: 12, color: "#FF9100", background: "none", border: "none", cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 2, fontWeight: 600, marginBottom: 12 }}
+                  className="checkout-add-address-btn"
                 >
                   <i className="fa-solid fa-plus" aria-hidden="true" style={{ marginRight: 4 }} />
-                  {showAddAddressForm ? "Use Manual Address" : "Add New Address"}
+                  {showAddAddressForm ? "Use manual address" : "Add new address"}
                 </button>
               </>
             )}
@@ -1002,10 +2175,10 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
                 <button
                   type="button"
                   onClick={() => { setAddressSaveStatus(null); setShowAddAddressForm(true); }}
-                  style={{ fontSize: 12, color: "#FF9100", background: "none", border: "none", cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 2, fontWeight: 600 }}
+                  className="checkout-add-address-btn"
                 >
                   <i className="fa-solid fa-plus" aria-hidden="true" style={{ marginRight: 4 }} />
-                  Add Address
+                  Add new address
                 </button>
               </div>
             )}
@@ -1037,13 +2210,14 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
                   />
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+                <div className="checkout-address-grid">
                   <div style={{ position: "relative" }}>
-                    <label style={{ ...lbl, fontSize: 11, marginBottom: 4, display: "block" }}>City</label>
+                    <label style={{ ...lbl, fontSize: 11, marginBottom: 4, display: "block" }}>City *</label>
                     <select
                       style={{ ...field, appearance: "none", WebkitAppearance: "none", paddingRight: 30, cursor: "pointer", color: newAddressCity ? "#1A0A0D" : "rgba(26,10,13,.38)" }}
                       value={newAddressCity}
                       onChange={e => { setNewAddressCity(e.target.value); setNewAddressDistrict(""); setAddressSaveStatus(null); }}
+                      required
                       disabled={isBusy}
                     >
                       <option value="">City</option>
@@ -1055,11 +2229,12 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
                   </div>
 
                   <div style={{ position: "relative" }}>
-                    <label style={{ ...lbl, fontSize: 11, marginBottom: 4, display: "block" }}>District/Area</label>
+                    <label style={{ ...lbl, fontSize: 11, marginBottom: 4, display: "block" }}>District/Area *</label>
                     <select
                       style={{ ...field, appearance: "none", WebkitAppearance: "none", paddingRight: 30, cursor: newAddressCity ? "pointer" : "not-allowed", color: newAddressDistrict ? "#1A0A0D" : "rgba(26,10,13,.38)", opacity: newAddressCity ? 1 : 0.55 }}
                       value={newAddressDistrict}
                       onChange={e => { setNewAddressDistrict(e.target.value); setAddressSaveStatus(null); }}
+                      required
                       disabled={!newAddressCity || isBusy}
                     >
                       <option value="">{newAddressCity ? "Select area" : "Area"}</option>
@@ -1075,8 +2250,8 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
                   <button
                     type="button"
                     onClick={async () => {
-                      if (!newAddressLine1.trim() || !newAddressCity) {
-                        setAddressSaveStatus({ type: "err", message: "Please fill in street address and city." });
+                      if (!newAddressLine1.trim() || !newAddressCity || !newAddressDistrict) {
+                        setAddressSaveStatus({ type: "err", message: "Please fill in street address, city, and district/area." });
                         return;
                       }
                       setIsBusy(true);
@@ -1121,8 +2296,8 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
                         setIsBusy(false);
                       }
                     }}
-                    disabled={isBusy || !newAddressLine1.trim() || !newAddressCity}
-                    style={{ flex: 1, padding: "8px 12px", background: "#571F29", color: "#F7E3C9", borderRadius: 6, fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 12, border: "none", cursor: isBusy || !newAddressLine1.trim() || !newAddressCity ? "not-allowed" : "pointer", opacity: isBusy || !newAddressLine1.trim() || !newAddressCity ? 0.55 : 1 }}
+                    disabled={isBusy || !newAddressLine1.trim() || !newAddressCity || !newAddressDistrict}
+                    style={{ flex: 1, padding: "8px 12px", background: "#571F29", color: "#F7E3C9", borderRadius: 6, fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 12, border: "none", cursor: isBusy || !newAddressLine1.trim() || !newAddressCity || !newAddressDistrict ? "not-allowed" : "pointer", opacity: isBusy || !newAddressLine1.trim() || !newAddressCity || !newAddressDistrict ? 0.55 : 1 }}
                   >
                     <i className="fa-solid fa-check" aria-hidden="true" style={{ marginRight: 4 }} />
                     Save Address
@@ -1156,7 +2331,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
             {/* Manual address entry (for guests or if not using saved addresses) */}
             {(!showAddAddressForm && (!activeUser?.id || selectedAddressId === "")) && (
               <>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                <div className="checkout-address-grid">
                   <div style={{ position: "relative" }}>
                     <select
                       style={{ ...field, appearance: "none", WebkitAppearance: "none", paddingRight: 30, cursor: "pointer", color: city ? "#1A0A0D" : "rgba(26,10,13,.38)" }}
@@ -1165,7 +2340,7 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
                       required={!activeUser?.id || selectedAddressId === ""}
                       disabled={isBusy}
                     >
-                      <option value="" disabled>City</option>
+                      <option value="" disabled>City *</option>
                       {Object.keys(BD_AREAS).sort().map(c => (
                         <option key={c} value={c}>{c}</option>
                       ))}
@@ -1178,9 +2353,10 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
                       style={{ ...field, appearance: "none", WebkitAppearance: "none", paddingRight: 30, cursor: city ? "pointer" : "not-allowed", color: area ? "#1A0A0D" : "rgba(26,10,13,.38)", opacity: city ? 1 : 0.55 }}
                       value={area}
                       onChange={e => setArea(e.target.value)}
+                      required={!activeUser?.id || selectedAddressId === ""}
                       disabled={!city || isBusy}
                     >
-                      <option value="">{city ? "Select area" : "Area"}</option>
+                      <option value="">{city ? "Select area *" : "District/Area *"}</option>
                       {(BD_AREAS[city] || []).map(a => (
                         <option key={a} value={a}>{a}</option>
                       ))}
@@ -1204,11 +2380,25 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
             </>
           )}
 
-          <button type="submit" disabled={step === "details" ? !canSubmitDetails : !canSubmitPhone} style={primBtn(step === "details" ? !canSubmitDetails : !canSubmitPhone)}>
+          <button
+            type="submit"
+            disabled={step === "details" ? !canSubmitDetails : !canSubmitPhone}
+            style={primBtn(step === "details" ? !canSubmitDetails : !canSubmitPhone)}
+            aria-label={step === "details" ? `${paymentMethod === "bkash" ? "Confirm bKash order" : "Place order"} for ৳${effectiveFinalTotal.toLocaleString()}` : undefined}
+          >
             {isBusy
               ? <><i className="fa-solid fa-spinner fa-spin" aria-hidden="true" /> {step === "details" ? "Placing Order…" : "Checking…"}</>
               : step === "details"
-                ? <><i className="fa-solid fa-check" aria-hidden="true" /> Place Order — ৳{totalPrice.toLocaleString()}</>
+                ? <>
+                    <svg width="15" height="15" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                      <path d="M16.5 5.5 8.1 13.9 3.8 9.6" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                    {/* PAYMENT — validation */}
+                    {paymentMethod === "bkash"
+                      ? `Confirm bKash Order — ৳${effectiveFinalTotal.toLocaleString()}`
+                      : `Place Order — ৳${effectiveFinalTotal.toLocaleString()}`
+                    }
+                  </>
                 : guestTrustedDevice
                   ? <><i className="fa-solid fa-arrow-right-long" aria-hidden="true" /> Continue</>
                   : phoneChecking
@@ -1218,9 +2408,11 @@ function OrderModal({ open, onClose, product, qty, discount, coupon, loggedUser,
                       : <><i className="fa-solid fa-arrow-right-long" aria-hidden="true" /> Continue</>
             }
           </button>
-          <p style={{ margin: "10px 0 0", fontSize: 11, color: "rgba(87,31,41,.4)", fontFamily: "var(--font-body)", textAlign: "center" }}>
+          <p style={{ margin: "0", fontSize: 11.5, color: "#999", fontFamily: "var(--font-body)", textAlign: "center" }}>
             {step === "details"
-              ? "Cash on delivery · Your order will be confirmed immediately"
+              ? paymentMethod === "bkash"
+                ? "bKash payment · No COD charge · Order confirmed after verification"
+                : "Cash on delivery · Delivery and 1% COD charge included"
               : phoneChecking
                 ? "Cash on delivery · Checking this phone number"
                 : guestNeedsOtp
@@ -1239,6 +2431,7 @@ function BuySheet({ open, onClose, qty, setQty, coupon, setCoupon, couponStatus,
   const totalPrice = Math.max(0, pricing.productSubtotal - discount);
   const showOldPrice = pricing.productDiscountTotal > 0 || discount > 0;
   const productDiscounted = hasProductDiscount(product);
+  const discountCapMessage = getDiscountCapMessage(product, qty);
 
   useEffect(() => {
     document.body.style.overflow = open ? "hidden" : "";
@@ -1252,29 +2445,105 @@ function BuySheet({ open, onClose, qty, setQty, coupon, setCoupon, couponStatus,
       <div className="buy-sheet">
         <div className="buy-sheet-handle" />
 
+        {/* TASK 1 — BuySheet redesign */}
         <div className="buy-sheet-header">
           <div>
-            <div className="buy-sheet-product-name">{product.name} -  {product.weight}</div>
-            <div className="buy-sheet-price">
-              ৳{totalPrice.toLocaleString()}
+            <div className="buy-sheet-product-name" style={{
+              fontSize: 17,
+              fontWeight: 800,
+              fontFamily: "var(--font-display)",
+              color: "#571F29",
+              marginBottom: 4,
+            }}>{product.name} -  {product.weight}</div>
+            <div className="buy-sheet-price" style={{
+              display: "flex",
+              alignItems: "baseline",
+              gap: 8,
+              fontSize: 26,
+              fontWeight: 900,
+              fontFamily: "var(--font-display)",
+              color: "#C97C00",
+            }}>
+              <span>৳{totalPrice.toLocaleString()}</span>
               {showOldPrice && (
-                <span style={{ fontSize: 13, fontWeight: 500, color: "rgba(87,31,41,0.5)", textDecoration: "line-through", marginLeft: 8 }}>
+                <span style={{ fontSize: 14, color: "rgba(87,31,41,0.4)", textDecoration: "line-through" }}>
                   ৳{pricing.originalSubtotal.toLocaleString()}
                 </span>
               )}
             </div>
-            {pricing.productDiscountTotal > 0 && (
-              <div className="shop-product-offer-note">{product.discountLabel || `Save ৳${pricing.productDiscountTotal.toLocaleString()}`}</div>
-            )}
           </div>
-          <button className="buy-sheet-close" onClick={onClose} aria-label="Close">×</button>
+          <button className="buy-sheet-close" onClick={onClose} aria-label="Close" style={{
+            width: 32,
+            height: 32,
+            borderRadius: 10,
+            background: "rgba(87,31,41,0.08)",
+            fontSize: 18,
+            color: "#571F29",
+            border: "none",
+            cursor: "pointer",
+            padding: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+          }}>×</button>
         </div>
+
+        {discountCapMessage && (
+          <div style={{
+            background: "rgba(255,145,0,0.08)",
+            border: "1px solid rgba(255,145,0,0.28)",
+            borderRadius: 10,
+            padding: "10px 12px",
+            marginBottom: 14,
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 10,
+          }}>
+            <span style={{
+              background: "#FF9100",
+              color: "#fff",
+              fontSize: 11,
+              fontWeight: 800,
+              padding: "3px 9px",
+              borderRadius: 20,
+              whiteSpace: "nowrap",
+              flexShrink: 0,
+              marginTop: 1,
+            }}>{product.discountLabel || `৳${pricing.productDiscountTotal.toLocaleString()} OFF`}</span>
+            <span style={{
+              fontSize: 12.5,
+              color: "#7A4800",
+              lineHeight: 1.45,
+              fontFamily: "var(--font-body)",
+            }}>{discountCapMessage}</span>
+          </div>
+        )}
 
         {/* coupon -  force row layout even on mobile */}
         {productDiscounted ? (
-          <div className="shop-coupon-disabled">
-            <i className="fa-solid fa-tag" aria-hidden="true" />
-            Coupon codes cannot be used on discounted products.
+          <div className="shop-coupon-disabled" style={{
+            background: "rgba(87,31,41,0.05)",
+            border: "1px solid rgba(87,31,41,0.12)",
+            borderRadius: 10,
+            padding: "10px 14px",
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 10,
+            marginBottom: 14,
+          }}>
+            <i className="fa-solid fa-circle-info" aria-hidden="true" style={{
+              color: "rgba(87,31,41,0.4)",
+              fontSize: 15,
+              flexShrink: 0,
+              marginTop: 1,
+            }} />
+            <span style={{
+              fontSize: 12.5,
+              color: "rgba(87,31,41,0.65)",
+              lineHeight: 1.45,
+              fontFamily: "var(--font-body)",
+            }}>Enter your phone number first. If this offer is not available for your number, you can apply a coupon at checkout.</span>
           </div>
         ) : (
           <div className="shop-coupon-row">
@@ -1304,18 +2573,108 @@ function BuySheet({ open, onClose, qty, setQty, coupon, setCoupon, couponStatus,
         )}
 
         {/* qty + proceed */}
-        <div className="shop-qty-row" style={{ marginBottom: 14 }}>
-          <div className="shop-qty">
-            <button className="shop-qty-btn" onClick={() => setQty(q => Math.max(1, q - 1))} aria-label="Decrease quantity">−</button>
-            <span className="shop-qty-val">{qty}</span>
-            <button className="shop-qty-btn" onClick={() => setQty(q => q + 1)} aria-label="Increase quantity">+</button>
+        <div className="shop-qty-row" style={{ marginBottom: 14, display: "flex", alignItems: "center", flexWrap: "nowrap", gap: 0 }}>
+          <div className="shop-qty" style={{ display: "flex", alignItems: "center", gap: 8, border: "none", borderRadius: 0, overflow: "visible", background: "transparent" }}>
+            <button className="shop-qty-btn" onClick={() => setQty(q => Math.max(1, q - 1))} aria-label="Decrease quantity" style={{
+              width: 40,
+              height: 40,
+              borderRadius: 10,
+              background: "rgba(87,31,41,0.08)",
+              color: "#571F29",
+              fontSize: 20,
+              border: "none",
+              cursor: "pointer",
+            }}>−</button>
+            <span className="shop-qty-val" style={{
+              minWidth: 36,
+              width: "auto",
+              textAlign: "center",
+              fontSize: 17,
+              fontWeight: 800,
+              fontFamily: "var(--font-display)",
+              color: "#571F29",
+              lineHeight: 1,
+              borderLeft: "none",
+              borderRight: "none",
+            }}>{qty}</span>
+            <button className="shop-qty-btn" onClick={() => setQty(q => q + 1)} aria-label="Increase quantity" style={{
+              width: 40,
+              height: 40,
+              borderRadius: 10,
+              background: "rgba(87,31,41,0.08)",
+              color: "#571F29",
+              fontSize: 20,
+              border: "none",
+              cursor: "pointer",
+            }}>+</button>
           </div>
-          <button className="shop-add-btn" onClick={onBuyNow}>Order Now</button>
+          <button className="shop-add-btn" onClick={onBuyNow} style={{
+            flex: 1,
+            width: "auto",
+            marginLeft: 12,
+            height: 48,
+            background: "#571F29",
+            color: "#F7E3C9",
+            borderRadius: 12,
+            border: "none",
+            cursor: "pointer",
+            fontSize: 15,
+            fontWeight: 800,
+            fontFamily: "var(--font-display)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+          }}><i className="fa-solid fa-bag-shopping" aria-hidden="true" style={{ fontSize: 14 }} />Order Now</button>
         </div>
-        <div className="shop-member-note shop-member-note--sheet">
-          <i className="fa-solid fa-star" aria-hidden="true" />
-          <span>Create an account and earn points from this order. Save your address, track your pouch, and reorder faster next time.</span>
-          <button className="shop-member-note-cta" onClick={() => { onClose(); onCreateAccount?.(); }}>
+        <div className="shop-member-note shop-member-note--sheet" style={{
+          background: "rgba(255,145,0,0.06)",
+          border: "1px solid rgba(255,145,0,0.2)",
+          borderRadius: 12,
+          padding: "12px 14px",
+          display: "block",
+          marginTop: 0,
+          gap: 0,
+        }}>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 8, minWidth: 0 }}>
+            <i className="fa-solid fa-star" aria-hidden="true" style={{ color: "#FF9100", fontSize: 13, flexShrink: 0, marginTop: 2 }} />
+            <span style={{
+              fontSize: 13,
+              fontWeight: 700,
+              color: "#571F29",
+              fontFamily: "var(--font-display)",
+              flex: 1,
+              minWidth: 0,
+              whiteSpace: "normal",
+              overflowWrap: "anywhere",
+              lineHeight: 1.35,
+            }}>Save your address. Track your order. Earn points.</span>
+          </div>
+          <span style={{
+            display: "block",
+            fontFamily: "var(--font-body)",
+            fontSize: 12,
+            color: "rgba(87,31,41,0.6)",
+            lineHeight: 1.45,
+            marginTop: 5,
+            flex: "none",
+          }}>Create an account and earn points from this order. Save your address, track your pouch, and reorder faster next time.</span>
+          <button className="shop-member-note-cta" onClick={() => { onClose(); onCreateAccount?.(); }} style={{
+            marginTop: 10,
+            width: "100%",
+            padding: 10,
+            background: "transparent",
+            border: "1.5px solid rgba(87,31,41,0.25)",
+            borderRadius: 10,
+            fontSize: 13,
+            fontWeight: 800,
+            fontFamily: "var(--font-display)",
+            color: "#571F29",
+            cursor: "pointer",
+            marginLeft: 0,
+            flexBasis: "auto",
+            boxSizing: "border-box",
+          }}>
             Join the Midnight Circle
           </button>
         </div>
@@ -1663,11 +3022,13 @@ function ShopPage() {
         setProduct({
           id:       p.id,
           name:     p.name || "",
-          price:    Number(p.sale_price || p.price || 0),
-          originalPrice: Number(p.price || 0),
-          salePrice: Number(p.sale_price || p.price || 0),
-          discountAmount: Number(p.discount_amount || 0),
+          price:    Math.round(Number(p.sale_price || p.price || 0)),
+          originalPrice: Math.round(Number(p.price || 0)),
+          salePrice: Math.round(Number(p.sale_price || p.price || 0)),
+          discountAmount: Math.round(Number(p.discount_amount || 0)),
           discountMaxQty: p.discount_max_qty || null,
+          discountMaxOrders: p.discount_max_orders || null,
+          discountBlocked: !!p.discount_blocked,
           discountLabel: p.discount_label || "",
           desc:     p.description || "",
           weight:   p.qty ? `${p.qty}${p.unit || 'g'}` : "",
@@ -1692,6 +3053,7 @@ function ShopPage() {
 
   const pricing = calculateProductPricing(product, qty);
   const productDiscounted = hasProductDiscount(product);
+  const discountCapMessage = getDiscountCapMessage(product, qty);
   const totalPrice = Math.max(0, pricing.productSubtotal - discount);
 
   useEffect(() => {
@@ -1721,7 +3083,7 @@ function ShopPage() {
     try {
       const subtotal = pricing.productSubtotal;
       const res  = await fetch(
-        `${API_BASE}/coupons/verify?code=${encodeURIComponent(coupon.trim())}&subtotal=${subtotal}${product.id ? `&product_id=${encodeURIComponent(product.id)}` : ""}`,
+        `${API_BASE}/coupons/verify?code=${encodeURIComponent(coupon.trim())}&subtotal=${subtotal}${product.id && !product.discountBlocked ? `&product_id=${encodeURIComponent(product.id)}` : ""}`,
         { credentials: "include" }  // send auth cookie so specific coupons can check login
       );
       const json = await res.json();
@@ -1861,8 +3223,10 @@ function ShopPage() {
               </>
             )}
           </div>
-          {pricing.productDiscountTotal > 0 && product.discountMaxQty && (
-            <div className="shop-product-offer-note">Offer applies to first {product.discountMaxQty} {Number(product.discountMaxQty) === 1 ? "unit" : "units"} per order.</div>
+          {pricing.productDiscountTotal > 0 && discountCapMessage && (
+            <div className="shop-product-offer-note" style={{ color: qty > Number(product.discountMaxQty || 0) ? "#B36A00" : undefined }}>
+              {getDiscountCapMessage(product, qty)}
+            </div>
           )}
 
           <p className="shop-desc">{product.desc}</p>
@@ -1913,8 +3277,8 @@ function ShopPage() {
 
           {productDiscounted ? (
             <div className="shop-coupon-disabled">
-              <i className="fa-solid fa-tag" aria-hidden="true" />
-              Coupon codes cannot be used on discounted products.
+              <i className="fa-solid fa-mobile-screen-button" aria-hidden="true" />
+              Enter your phone number first. If this offer is not available for your number, you can apply a coupon at checkout.
             </div>
           ) : (
             <>
@@ -2023,7 +3387,13 @@ function ShopPage() {
         product={product}
         qty={qty}
         discount={discount}
+        setDiscount={setDiscount}
         coupon={coupon}
+        setCoupon={setCoupon}
+        couponStatus={couponStatus}
+        setCouponStatus={setCouponStatus}
+        couponError={couponError}
+        setCouponError={setCouponError}
         loggedUser={shopAuth.user}
         onCreateAccount={() => setAuthOpen(true)}
       />

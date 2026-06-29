@@ -2,14 +2,21 @@
 
 const ordersSvc = require('../services/orders')
 
+const bkashTxnIdSchema = {
+  type: 'string',
+  minLength: 10,
+  maxLength: 10,
+  pattern: '^[A-Z0-9]{10}$',
+}
+
 const addressSchema = {
-  type: 'object', required: ['label', 'line1'],
+  type: 'object', required: ['label', 'line1', 'city', 'district'],
   properties: {
     label:    { type: 'string', minLength: 1, maxLength: 50 },
     line1:    { type: 'string', minLength: 1, maxLength: 255 },
     line2:    { type: 'string', maxLength: 255 },
-    city:     { type: 'string', maxLength: 100 },
-    district: { type: 'string', maxLength: 100 },
+    city:     { type: 'string', minLength: 1, maxLength: 100 },
+    district: { type: 'string', minLength: 1, maxLength: 100 },
   },
   additionalProperties: false,
 }
@@ -37,6 +44,7 @@ module.exports = async function orderRoutes(app) {
           address:        addressSchema,
           payment_type:   { type: 'string', enum: ['bkash', 'nagad', 'rocket', 'card', 'cod'] },
           payment_number: { type: 'string', minLength: 1, maxLength: 25 },
+          bkash_txn_id:   bkashTxnIdSchema,
           coupon_code:    { type: 'string', maxLength: 20 },
           notes:          { type: 'string', maxLength: 500 },
         },
@@ -110,12 +118,16 @@ module.exports = async function orderRoutes(app) {
     schema: {
       body: {
         type: 'object',
-        required: ['qty', 'address'],
+        required: ['qty', 'address', 'city', 'district'],
         properties: {
           qty:         { type: 'integer', minimum: 1, maximum: 50 },
           address:     { type: 'string', minLength: 5, maxLength: 500 },
+          city:        { type: 'string', minLength: 1, maxLength: 100 },
+          district:    { type: 'string', minLength: 1, maxLength: 100 },
           product_id:  { type: 'string', format: 'uuid' },
           coupon_code: { type: 'string', maxLength: 20 },
+          payment_method: { type: 'string', enum: ['cod', 'bkash'] },
+          bkash_txn_id:   bkashTxnIdSchema,
           notes:       { type: 'string', maxLength: 500 },
         },
         additionalProperties: false,

@@ -184,6 +184,18 @@ function Orders() {
 
   useEffect(() => { setOrders(ctxOrders || []); }, [ctxOrders]);
 
+  const parseAddressSnapshot = (value) => {
+    if (!value) return {};
+    if (typeof value !== "string") return value;
+    try { return JSON.parse(value); } catch { return { line1: value }; }
+  };
+  const panelAddress = parseAddressSnapshot(panel?.address_snapshot);
+  const formatAddress = (addr) => [addr?.line1, addr?.line2, addr?.district, addr?.city].filter(Boolean).join(", ") || "—";
+  const panelSubtotal = Number(panel?.subtotal || 0);
+  const panelDiscount = Number(panel?.discount_amount || 0);
+  const panelDelivery = Number(panel?.delivery_fee || 0);
+  const panelTotal = Number(panel?.total || 0);
+
   async function previewCoupon() {
     const code = newOrder.coupon.trim();
     if (!code) { setCouponPreview(null); return; }
@@ -272,6 +284,36 @@ function Orders() {
       alert(`Done! ${res.data.pts_awarded} points awarded.`);
     } catch (e) {
       alert(e?.message || 'Failed to award points.');
+    }
+  }
+
+  async function sendBkashSms(kind) {
+    if (!panel?.id) return;
+    const endpoint = kind === "confirm" ? "send-bkash-confirmation-sms" : "send-bkash-issue-sms";
+    const label = kind === "confirm" ? "bKash confirmation" : "bKash issue";
+    const showNotice = (title, text, icon) => {
+      if (window.Swal?.fire) {
+        window.Swal.fire({
+          title,
+          text,
+          icon,
+          confirmButtonColor: "#FF9100",
+          background: "#FFFDF7",
+          color: "#571F29",
+        });
+      } else {
+        window.alert(text || title);
+      }
+    };
+    try {
+      const res = await window.mpApi.fetch(`/admin/orders/${panel.id}/${endpoint}`, { method: "POST" });
+      if (!res?.ok) {
+        showNotice("SMS not sent", res?.error?.message || `Failed to send ${label} SMS.`, "error");
+        return;
+      }
+      showNotice("SMS sent", `${label} SMS sent.`, "success");
+    } catch (e) {
+      showNotice("SMS not sent", e?.message || `Failed to send ${label} SMS.`, "error");
     }
   }
 
@@ -426,7 +468,7 @@ function Orders() {
       // Step 3: Order created - send confirmation SMS
       const createdOrder = createRes.data;
 
-      if (createdOrder.customer_phone) {
+      if (createdOrder.customer_phone && pendingOrder.payment_type === "Cash") {
         await window.mpApi.fetch(`/admin/orders/${createdOrder.id}/send-confirmation-sms`, {
           method: 'POST',
         }).catch(() => {
@@ -628,14 +670,43 @@ function Orders() {
             <>
                 <div className="eyebrow mb10">Order Details</div>
                 <div className="row-between mb8 text-sm"><span className="text-muted">Items</span><span style={{ maxWidth: 200, textAlign: "right" }}>{orderSummary(panel.items)}</span></div>
-                <div className="row-between mb8 text-sm"><span className="text-muted">Total</span><span style={{ color: "var(--orange)", fontWeight: 700 }}>৳{panel.total}</span></div>
                 <div className="row-between mb8 text-sm"><span className="text-muted">Phone</span><span>{panel.customer_phone || '—'}</span></div>
                 <div className="row-between mb8 text-sm"><span className="text-muted">Payment</span><span>{panel.payment_type || '—'}</span></div>
+                {panel.payment_type === "bkash" && (
+                  <div className="row-between mb8 text-sm"><span className="text-muted">bKash Txn ID</span><span className="mono" style={{ color: "var(--orange)" }}>{panel.bkash_txn_id || panel.payment_number || '—'}</span></div>
+                )}
                 {panel.coupon_code && <div className="row-between mb8 text-sm"><span className="text-muted">Coupon</span><span className="mono" style={{ color: "var(--blue)" }}>{panel.coupon_code}</span></div>}
                 <div className="row-between mb8 text-sm"><span className="text-muted">Date</span><span>{fmtDate(panel.created_at)}</span></div>
                 <div className="row-between mb16 text-sm"><span className="text-muted">Status</span><StatusBadge status={panel.status} /></div>
                 {panel.steadfast_consignment_id && <div className="row-between mb8 text-sm"><span className="text-muted">Steadfast ID</span><span className="mono text-xs" style={{ color: "var(--orange)" }}>{panel.steadfast_consignment_id}</span></div>}
                 <div className="divider" />
+
+                <div className="eyebrow mb10">Bill Breakdown</div>
+                <div className="row-between mb8 text-sm"><span className="text-muted">Subtotal</span><span>৳{panelSubtotal.toLocaleString()}</span></div>
+                {panelDiscount > 0 && (
+                  <div className="row-between mb8 text-sm"><span className="text-muted">Discount</span><span style={{ color: "#1a9a50" }}>-৳{panelDiscount.toLocaleString()}</span></div>
+                )}
+                <div className="row-between mb8 text-sm"><span className="text-muted">Delivery / COD charge</span><span>৳{panelDelivery.toLocaleString()}</span></div>
+                <div className="row-between mb16 text-sm"><span className="text-muted">Total</span><span style={{ color: "var(--orange)", fontWeight: 800 }}>৳{panelTotal.toLocaleString()}</span></div>
+                <div className="divider" />
+
+                <div className="eyebrow mb10">Delivery Address</div>
+                <div className="text-sm mb16" style={{ lineHeight: 1.5 }}>{formatAddress(panelAddress)}</div>
+                <div className="divider" />
+
+                {panel.payment_type === "bkash" && (
+                  <div style={{ marginTop: 12, marginBottom: 12 }}>
+                    <div className="eyebrow mb10">bKash Payment SMS</div>
+                    <div className="col-gap" style={{ gap: 8 }}>
+                      <button className="btn btn-primary btn-sm" onClick={() => sendBkashSms("confirm")}>
+                        <i className="fa fa-check-circle" style={{ fontSize: 11 }} /> Send Payment Confirmed SMS
+                      </button>
+                      <button className="btn btn-ghost btn-sm" style={{ color: "var(--red)", border: "1px solid rgba(217,64,64,.35)" }} onClick={() => sendBkashSms("issue")}>
+                        <i className="fa fa-exclamation-circle" style={{ fontSize: 11 }} /> Send Payment Issue SMS
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {panel.customer_phone && !otpStatus?.otp_verified && (
                   <div style={{ marginTop: 12, marginBottom: 12 }}>
@@ -3316,7 +3387,7 @@ function Products() {
   const fileRef = useRef(null);
   const activeImgIdx = useRef(0);
 
-  const emptyProd = { name: "", description: "", price: "", stock: "", qty: "", unit: "g", status: "Active", images: [], category: "", badge: "", roast: "", origin: "", discount_enabled: false, discount_type: "flat", discount_value: "", discount_max_qty: "", discount_label: "" };
+  const emptyProd = { name: "", description: "", price: "", stock: "", qty: "", unit: "g", status: "Active", images: [], category: "", badge: "", roast: "", origin: "", discount_enabled: false, discount_type: "flat", discount_value: "", discount_max_qty: "", discount_max_orders: "", discount_label: "" };
   const [form, setForm] = useState(emptyProd);
   const [blendMode, setBlendMode]       = useState("single"); // "single" | "blend"
   const [singleVariety, setSingleVariety] = useState("Robusta");
@@ -3364,7 +3435,24 @@ function Products() {
   }
 
   function openEditProduct(p) {
-    setForm({ ...p, price: String(p.price), stock: String(p.stock), qty: p.qty ? String(p.qty) : "", unit: p.unit || "g", images: p.images || (p.image ? [p.image] : []), category: p.category || "", badge: p.badge || "", roast: p.roast || "", origin: p.origin || "", discount_enabled: !!p.discount_enabled, discount_type: p.discount_type || "flat", discount_value: p.discount_value ? String(p.discount_value) : "", discount_max_qty: p.discount_max_qty ? String(p.discount_max_qty) : "", discount_label: p.discount_label || "" });
+    setForm({
+      ...p,
+      price: String(p.price),
+      stock: String(p.stock),
+      qty: p.qty ? String(p.qty) : "",
+      unit: p.unit || "g",
+      images: p.images || (p.image ? [p.image] : []),
+      category: p.category || "",
+      badge: p.badge || "",
+      roast: p.roast || "",
+      origin: p.origin || "",
+      discount_enabled: !!p.discount_enabled,
+      discount_type: p.discount_type || "flat",
+      discount_value: p.discount_value != null ? String(p.discount_value) : "",
+      discount_max_qty: p.discount_max_qty != null ? String(p.discount_max_qty) : "",
+      discount_max_orders: p.discount_max_orders != null ? String(p.discount_max_orders) : "",
+      discount_label: p.discount_label || "",
+    });
     const mode = p.blend && p.blend.includes("%") ? "blend" : "single";
     setBlendMode(mode);
     if (mode === "single") {
@@ -3380,7 +3468,7 @@ function Products() {
 
   async function saveProduct() {
     if (!form.name || !form.price || !(form.images?.length)) return;
-    const maxDiscountQty = parseInt(form.discount_max_qty);
+    const maxDiscountQty = Number.parseInt(form.discount_max_qty, 10);
     const body = {
       name:   form.name,
       price:  parseFloat(form.price) || 0,
@@ -3391,6 +3479,7 @@ function Products() {
       discount_type: form.discount_type || "flat",
       discount_value: parseFloat(form.discount_value) || 0,
       discount_max_qty: maxDiscountQty > 0 ? maxDiscountQty : null,
+      discount_max_orders: Number.parseInt(form.discount_max_orders, 10) > 0 ? Number.parseInt(form.discount_max_orders, 10) : null,
       discount_label: form.discount_label || null,
     };
     if (form.description) body.description = form.description;
@@ -3648,6 +3737,10 @@ function Products() {
                     <div>
                       <label className="input-label">Max Discount Qty</label>
                       <input className="input" type="number" min="1" step="1" placeholder="No cap" value={form.discount_max_qty} onChange={e => setForm(f => ({ ...f, discount_max_qty: e.target.value }))} />
+                    </div>
+                    <div>
+                      <label className="input-label">Max Discount Orders Per Phone</label>
+                      <input className="input" type="number" min="1" step="1" placeholder="No cap" value={form.discount_max_orders} onChange={e => setForm(f => ({ ...f, discount_max_orders: e.target.value }))} />
                     </div>
                     <div>
                       <label className="input-label">Offer Label</label>

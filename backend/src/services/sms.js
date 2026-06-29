@@ -13,6 +13,15 @@ async function sendSms(phone, message, smsType = 'general', deviceFingerprint = 
     throw err
   }
 
+  if (!env.SMS_ENABLED) {
+    console.log(`\n[SMS disabled] → ${phone} (${smsType}): ${message}\n`)
+    await logSms(phone, message, smsType, 'sent', {
+      simulated: true,
+      reason: 'SMS_ENABLED=false',
+    })
+    return { ok: true, simulated: true }
+  }
+
   // Get config from database
   const config = await getConfig()
   if (!config || !config.api_url) {

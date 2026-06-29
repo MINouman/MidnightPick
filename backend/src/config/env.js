@@ -23,6 +23,7 @@ const env = {
   OTP_RATE_LIMIT_MAX:     parseInt(process.env.OTP_RATE_LIMIT_MAX    || '3',   10),
   OTP_RATE_LIMIT_DAILY_MAX: parseInt(process.env.OTP_RATE_LIMIT_DAILY_MAX || '8', 10),
   GOOGLE_CLIENT_ID:       process.env.GOOGLE_CLIENT_ID || '',
+  SMS_ENABLED:            process.env.SMS_ENABLED !== 'false',
   SMS_API_URL:            process.env.SMS_API_URL    || '',
   SMS_API_KEY:            process.env.SMS_API_KEY    || '',
   SMS_SENDER_ID:          process.env.SMS_SENDER_ID  || 'MidnightPick',

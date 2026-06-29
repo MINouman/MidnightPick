@@ -161,6 +161,21 @@ async function createOrder({
   }
 }
 
+function formatRecipientAddress(address = {}) {
+  const street = [address.line1 || address.address, address.line2]
+    .map(part => String(part || '').trim())
+    .filter(Boolean)
+    .join(', ')
+  const policeStation = String(address.district || '').trim()
+  const city = String(address.city || '').trim()
+
+  return [
+    street,
+    policeStation ? `Police Station: ${policeStation}` : '',
+    city ? `District: ${city}` : '',
+  ].filter(Boolean).join(', ')
+}
+
 // ── Get Order Status from Steadfast ─────────────────────────────────────────
 
 async function getStatus(consignmentId) {
@@ -316,6 +331,7 @@ async function healthCheck() {
 
 module.exports = {
   createOrder,
+  formatRecipientAddress,
   getStatus,
   getTracking,
   getMultipleTracking,

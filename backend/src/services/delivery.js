@@ -125,14 +125,134 @@ async function getFallbackDeliveryFee() {
 }
 
 // ── Weight-based delivery fee (used at Steadfast dispatch time) ──────────
-// Inside Dhaka: ≤150g→55, ≤500g→65
-// Outside Dhaka (all other districts): ≤150g→110, ≤500g→130
+// Keep this aligned with the customer-facing delivery calculator:
+// - Inside Dhaka: thana match
+// - Suburban: area/district match
+// - Other districts: fallback
 
-function getWeightBasedFee(district, weightGrams) {
-  const insideDhaka = (district || '').trim().toLowerCase() === 'dhaka'
-  if (weightGrams <= 150) return insideDhaka ? 55 : 110
-  if (weightGrams <= 500) return insideDhaka ? 65 : 130
-  return insideDhaka ? 80 : 150  // >500g fallback
+const DHAKA_THANAS = new Set([
+  'adabor',
+  'badda',
+  'banani',
+  'bangshal',
+  'bhashantek',
+  'bimanbandar',
+  'cantonment',
+  'chalkbazar',
+  'dakshinkhan',
+  'darus-salam',
+  'demra',
+  'dhanmondi',
+  'gandaria',
+  'gulshan',
+  'hazaribag',
+  'jatrabari',
+  'kafrul',
+  'kalabagan',
+  'kamrangirchar',
+  'kadamtoli',
+  'khilgaon',
+  'khilkhet',
+  'kotwali',
+  'lalbagh',
+  'mirpur',
+  'mohammadpur',
+  'motijheel',
+  'mugda',
+  'new market',
+  'pallabi',
+  'paltan',
+  'ramna',
+  'rampura',
+  'rupnagar',
+  'sabujbag',
+  'shah ali',
+  'shahbagh',
+  'shahjahanpur',
+  'shyampur',
+  'sher-e-bangla nagar',
+  'sutrapur',
+  'tejgaon',
+  'tejgaon industrial area',
+  'turag',
+  'uttara east',
+  'uttara west',
+  'uttarkhan',
+  'vatara',
+  'wari',
+])
+
+const SUBURBAN_AREAS = new Set([
+  'savar',
+  'ashulia',
+  'keraniganj',
+  'narayanganj',
+  'narayanganj sadar',
+  'fatullah',
+  'siddhirganj',
+  'rupganj',
+  'sonargaon',
+  'gazipur',
+  'gazipur sadar',
+  'tongi',
+  'kaliakair',
+  'kaliganj',
+  'kapasia',
+  'sreepur',
+  'dhamrai',
+  'dohar',
+  'nawabganj',
+])
+
+function normalizeLocation(value) {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function collectLocationParts(location) {
+  if (Array.isArray(location)) {
+    return location.map(normalizeLocation).filter(Boolean)
+  }
+  if (location && typeof location === 'object') {
+    return [
+      location.area,
+      location.district,
+      location.city,
+      location.location,
+    ].map(normalizeLocation).filter(Boolean)
+  }
+  return [normalizeLocation(location)].filter(Boolean)
+}
+
+function matchesArea(parts, areas) {
+  return parts.some(part => {
+    if (areas.has(part)) return true
+    for (const area of areas) {
+      if (part.startsWith(`${area} `) || part.endsWith(` ${area}`)) return true
+    }
+    return false
+  })
+}
+
+function getWeightBasedFee(location, weightGrams) {
+  const parts = collectLocationParts(location)
+  const suburban = matchesArea(parts, SUBURBAN_AREAS)
+  const insideDhaka = !suburban && parts.some(part => DHAKA_THANAS.has(part) || part === 'dhaka' || part === 'dhaka city')
+
+  if (insideDhaka) {
+    if (weightGrams <= 150) return 55
+    if (weightGrams <= 500) return 65
+    if (weightGrams <= 1000) return 75
+    return 75 + Math.ceil((weightGrams - 1000) / 1000) * 20
+  }
+
+  if (suburban) {
+    if (weightGrams <= 1000) return 105
+    return 105 + Math.ceil((weightGrams - 1000) / 1000) * 20
+  }
+
+  if (weightGrams <= 500) return 115
+  if (weightGrams <= 1000) return 135
+  return 135 + Math.ceil((weightGrams - 1000) / 1000) * 20
 }
 
 // ── List supported districts ────────────────────────────────────────────

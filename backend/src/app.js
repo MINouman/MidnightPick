@@ -167,6 +167,7 @@ async function build() {
     INVALID_SMS_TYPE:             400,
     INVALID_STATUS:               409,
     INCOMPLETE_ORDER:             400,
+    DUPLICATE_BKASH_TXN:          409,
     STEADFAST_HANDOFF_FAILED:     502,
     STEADFAST_ERROR:              502,
     STEADFAST_TIMEOUT:            504,
@@ -194,6 +195,16 @@ async function build() {
     // @fastify/jwt 401s
     if (err.statusCode === 401) {
       return reply.code(401).send({ ok: false, error: { code: 'UNAUTHORIZED', message: 'Authentication required.' } })
+    }
+
+    if (err.code === '23505' && String(err.constraint || '').includes('bkash_txn_id')) {
+      return reply.code(409).send({
+        ok: false,
+        error: {
+          code: 'DUPLICATE_BKASH_TXN',
+          message: 'This bKash transaction ID has already been used. Please check and enter a unique transaction ID.',
+        },
+      })
     }
 
     // Unexpected — log and hide internals from the client

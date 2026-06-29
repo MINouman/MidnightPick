@@ -28,6 +28,12 @@ const LIMITS = {
   order_delivery_failed: {
     global: { max: 20, window: 3600 }, // 20 per hour (per phone)
   },
+  bkash_payment_confirmed: {
+    global: { max: 20, window: 3600 }, // 20 per hour (per phone)
+  },
+  bkash_payment_issue: {
+    global: { max: 20, window: 3600 }, // 20 per hour (per phone)
+  },
 }
 
 function getRedisKey(type, identifier, scope) {

@@ -30,8 +30,26 @@ server {
     root /var/www/midnightpick;   # copy the repo root here (excluding backend/)
     index index.html;
 
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_types
+        text/plain
+        text/css
+        text/javascript
+        application/javascript
+        application/json
+        application/ld+json
+        image/svg+xml
+        font/woff2;
+
     # Cache vendor assets aggressively — they're versioned in file names
     location /vendor/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+
+    location /build/ {
         expires 1y;
         add_header Cache-Control "public, immutable";
     }
